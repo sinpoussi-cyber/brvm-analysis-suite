@@ -1,0 +1,12 @@
+gspread
+google-auth-oauthlib
+google-auth-httplib2
+pdfplumber
+beautifulsoup4
+requests
+selenium-wire
+python-docx
+google-generativeai
+pandas
+numpy
+openpyxl
