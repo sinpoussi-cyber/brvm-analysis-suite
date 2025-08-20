@@ -86,14 +86,29 @@ def prepare_worksheets_metadata(spreadsheet):
                     return i
         return None
 
-    for title, ws in title_to_ws.items():
-        time.sleep(1.1)
+    logging.info(f"Préparation des métadonnées pour {len(title_to_ws)} feuilles. Ce processus peut prendre plusieurs minutes en raison des limitations de l'API.")
+    
+    for title, ws in list(title_to_ws.items()):
+        # AMÉLIORATION : Pause plus longue (2.1s) pour garantir de rester sous la limite de 60 requêtes/minute.
+        # (2 appels par feuille => ~28 feuilles par minute, ce qui est sûr)
+        time.sleep(2.1) 
+        
+        header = []
         try:
             header = ws.row_values(1)
+        except gspread.exceptions.APIError as e:
+            if 'quota' in str(e).lower():
+                logging.warning(f"Quota API dépassé pour lire l'en-tête de '{title}'. Pause de 61 secondes avant de réessayer.")
+                time.sleep(61)
+                try:
+                    header = ws.row_values(1)
+                except Exception as retry_e:
+                    logging.error(f"Impossible de lire l'en-tête pour '{title}' après la nouvelle tentative: {retry_e}")
+            else:
+                logging.warning(f"Erreur API lors de la lecture de l'en-tête pour '{title}': {e}")
         except Exception as e:
-            logging.warning(f"Impossible de lire l'en-tête pour '{title}': {e}")
-            header = []
-        
+            logging.error(f"Erreur inattendue lors de la lecture de l'en-tête pour '{title}': {e}")
+
         header_norms = [normalize_text(h) for h in header]
         
         indices = {
@@ -113,13 +128,19 @@ def prepare_worksheets_metadata(spreadsheet):
             col_no = indices["date"] + 1
             col_vals = ws.col_values(col_no)
             existing_dates = set(v for v in col_vals if re.fullmatch(r'\d{2}/\d{2}/\d{4}', v))
+        except gspread.exceptions.APIError as e:
+            if 'quota' in str(e).lower():
+                logging.warning(f"Quota API dépassé pour lire les dates de '{title}'. L'ajout de doublons est possible pour cette feuille.")
+            else:
+                logging.warning(f"Erreur API lors de la lecture des dates pour '{title}': {e}")
         except Exception as e:
-            logging.warning(f"Impossible de lire les dates existantes pour '{title}': {e}")
+            logging.warning(f"Erreur inattendue lors de la lecture des dates pour '{title}': {e}")
 
         ws_meta[title] = {"ws": ws, "header": header, "indices": indices, "existing_dates": existing_dates}
     
     logging.info(f"Métadonnées initialisées pour {len(ws_meta)} feuilles.")
     return ws_meta, title_to_ws
+
 
 def get_boc_links():
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
@@ -216,7 +237,7 @@ def run_data_collection():
             
             if ws_title:
                 meta = ws_meta.get(ws_title)
-                if formatted_date in meta['existing_dates']:
+                if meta and formatted_date in meta['existing_dates']:
                     continue
                 
                 inds = meta['indices']
@@ -230,7 +251,8 @@ def run_data_collection():
                 row[inds['valeurs']] = rec.get('Valeurs échangées (F CFA)', '')
                 
                 pending_appends[ws_title].append(row)
-                meta['existing_dates'].add(formatted_date)
+                if meta:
+                    meta['existing_dates'].add(formatted_date)
             else:
                 unmatched.append([formatted_date, raw_sym, rec.get('Cours (F CFA)',''), rec.get('Volume échangé',''), rec.get('Valeurs échangées (F CFA)','')])
 
