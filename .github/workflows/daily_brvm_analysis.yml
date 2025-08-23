@@ -44,11 +44,12 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: python main.py
 
-      # 6. Sauvegarde le rapport Word généré comme un "artifact"
-      - name: Upload Word Report Artifact
-        if: always() # S'exécute même si l'étape précédente échoue
+      # 6. Sauvegarde le rapport de synthèse final comme un "artifact"
+      - name: Upload Synthesis Report Artifact
+        if: always() 
         uses: actions/upload-artifact@v4
         with:
-          name: Rapport-Analyse-Fondamentale-BRVM
+          # MODIFICATION : Nouveau nom pour le rapport
+          name: Rapport-Synthese-Investissement-BRVM
           path: |
-            ./*.docx
+            ./Rapport_Synthese_*.docx
