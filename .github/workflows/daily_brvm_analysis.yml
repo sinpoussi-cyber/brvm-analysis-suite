@@ -5,8 +5,8 @@ name: Full BRVM Analysis Suite
 
 on:
   schedule:
-    # S'exécute tous les jours à 07h00 UTC
-    - cron: '0 7 * * *'
+    # MODIFICATION ICI : S'exécute tous les lundis à 07h00 UTC
+    - cron: '0 7 * * 1'
   
   # Permet de lancer manuellement le workflow depuis l'onglet "Actions" de GitHub
   workflow_dispatch:
@@ -49,7 +49,6 @@ jobs:
         if: always() 
         uses: actions/upload-artifact@v4
         with:
-          # MODIFICATION : Nouveau nom pour le rapport
           name: Rapport-Synthese-Investissement-BRVM
           path: |
             ./Rapport_Synthese_*.docx
