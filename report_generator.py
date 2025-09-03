@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V1.1 - ROBUSTE)
 # Description: Génère un rapport de synthèse complet en utilisant les données
 #              collectées et les analyses fondamentales et techniques.
 # ==============================================================================
@@ -26,6 +26,7 @@ class ComprehensiveReportGenerator:
         self.spreadsheet = None
 
     def _authenticate(self):
+        # ... (code inchangé)
         logging.info("Générateur de rapport: Authentification Google Services...")
         try:
             creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
@@ -48,32 +49,40 @@ class ComprehensiveReportGenerator:
             return False
 
     def _get_sheet_data(self, sheet_name):
+        # ... (code inchangé)
         logging.info(f"  -> Récupération des données pour {sheet_name}...")
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
             data = worksheet.get_all_values()
-            if len(data) < 51:
-                logging.warning(f"  -> Moins de 50 jours de données pour {sheet_name}. Utilisation de {len(data)-1} jours.")
-                if len(data) < 2: return None
+            if len(data) < 2:
+                logging.warning(f"  -> Pas de données ou seulement un en-tête pour {sheet_name}.")
+                return None
             
             headers = data[0]
             df = pd.DataFrame(data[1:], columns=headers)
-            
-            # Garder uniquement les 50 dernières lignes
-            df = df.tail(50).reset_index(drop=True)
             return df
         except Exception as e:
             logging.error(f"  -> Impossible de récupérer les données pour {sheet_name}: {e}")
             return None
 
-    def _analyze_price_evolution(self, df_prices):
+    # NOUVEAU : Fonction utilitaire pour trouver le nom réel d'une colonne
+    def _find_column_by_keywords(self, columns, keywords):
+        """Trouve le premier nom de colonne qui contient un des mots-clés (insensible à la casse)."""
+        for col in columns:
+            for keyword in keywords:
+                if keyword.lower() in col.lower():
+                    return col
+        return None
+
+    def _analyze_price_evolution(self, df_prices, date_col, price_col):
+        # MODIFIÉ : Utilise les noms de colonnes trouvés
+        data_string = df_prices[[date_col, price_col]].to_csv(index=False)
         prompt = f"""
         Tu es un analyste de marché financier spécialisé sur la BRVM.
-        Analyse l'évolution du cours de l'action sur les 50 derniers jours de cotation fournis ci-dessous.
+        Analyse l'évolution du cours de l'action sur la période de cotation fournie ci-dessous.
 
         Données du cours:
-        Date,Cours (F CFA)
-        {df_prices.to_csv(index=False)}
+        {data_string}
 
         Fournis une analyse concise en français qui inclut :
         1. Une phrase d'introduction sur la tendance générale (haussière, baissière, stable, volatile).
@@ -87,6 +96,7 @@ class ComprehensiveReportGenerator:
             return f"Erreur lors de l'analyse de l'évolution du cours : {e}"
 
     def _analyze_technical_indicators(self, df_indicators):
+        # ... (code inchangé)
         prompt = f"""
         Tu es un analyste technique expert. Analyse les 5 indicateurs techniques pour une action de la BRVM sur les 50 derniers jours, en te concentrant sur les valeurs les plus récentes pour déduire un signal.
 
@@ -108,6 +118,7 @@ class ComprehensiveReportGenerator:
             return f"Erreur lors de l'analyse des indicateurs techniques : {e}"
             
     def _summarize_fundamental_analysis(self, fundamental_data):
+        # ... (code inchangé)
         if not fundamental_data or not fundamental_data.get('rapports_analyses'):
             return "Aucune analyse fondamentale disponible pour cette société."
 
@@ -141,13 +152,29 @@ class ComprehensiveReportGenerator:
             logging.info(f"--- Génération de l'analyse pour : {sheet_name} ---")
             df = self._get_sheet_data(sheet_name)
             if df is None or df.empty:
+                logging.warning(f"  -> Aucune donnée pour {sheet_name}, feuille ignorée.")
+                continue
+
+            # MODIFIÉ : Logique robuste pour trouver les colonnes de date et de cours
+            date_col = self._find_column_by_keywords(df.columns, ['date'])
+            price_col = self._find_column_by_keywords(df.columns, ['cours', 'prix'])
+
+            if not date_col or not price_col:
+                logging.error(f"  -> Colonnes 'Date' ou 'Cours' introuvables pour {sheet_name}. Feuille ignorée.")
+                continue
+
+            # Nettoyage et préparation des données
+            df[price_col] = pd.to_numeric(df[price_col], errors='coerce')
+            df.dropna(subset=[price_col], inplace=True)
+            df = df.tail(50).reset_index(drop=True)
+            
+            if df.empty:
+                logging.warning(f"  -> Pas de données valides après nettoyage pour {sheet_name}. Feuille ignorée.")
                 continue
 
             # 1. Analyse de l'évolution du cours
-            price_cols = ['Date', 'Cours (F CFA)']
-            df_prices = df.loc[:, price_cols].copy()
-            price_analysis = self._analyze_price_evolution(df_prices)
-            time.sleep(2) # Pause pour l'API
+            price_analysis = self._analyze_price_evolution(df, date_col, price_col)
+            time.sleep(2)
 
             # 2. Analyse des indicateurs techniques
             indicator_cols = ['MM5', 'MM10', 'MM20', 'MM50', 'Bande_centrale', 'Bande_Inferieure', 'Bande_Supérieure', 'Ligne MACD', 'Ligne de signal', 'Histogramme', 'RSI', '%K', '%D']
@@ -168,9 +195,14 @@ class ComprehensiveReportGenerator:
             logging.info(f"  -> Analyses pour {sheet_name} terminées.")
 
         # 4. Génération du document Word
+        if not company_reports:
+            logging.error("Aucune donnée n'a pu être analysée. Le rapport final ne sera pas généré.")
+            return
+            
         self._create_word_report(company_reports)
 
     def _create_word_report(self, company_reports):
+        # ... (code inchangé)
         logging.info("Création du rapport de synthèse final...")
         doc = Document()
         doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
