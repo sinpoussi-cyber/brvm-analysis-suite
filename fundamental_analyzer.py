@@ -1,6 +1,7 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER
-# Description: Analyse les rapports financiers avec l'IA Gemini.
+# MODULE: FUNDAMENTAL ANALYZER (AVEC MÉMOIRE)
+# Description: Analyse les rapports financiers avec l'IA Gemini et mémorise
+#              les résultats pour éviter les analyses redondantes.
 # ==============================================================================
 
 # --- Imports ---
@@ -30,11 +31,15 @@ import google.generativeai as genai
 # Désactiver les avertissements de sécurité
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# NOUVEAU : Nom de la feuille pour la mémoire
+ANALYSIS_MEMORY_SHEET = 'ANALYSIS_MEMORY'
+
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id, api_key):
         self.spreadsheet_id = spreadsheet_id
         self.api_key = api_key
         self.societes_mapping = {
+            # ... (votre mapping de sociétés reste inchangé, je l'ai omis pour la lisibilité)
             'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
             'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total ci']},
@@ -90,7 +95,13 @@ class BRVMAnalyzer:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
         
+        # NOUVEAU : Attributs pour la gestion de la mémoire
+        self.spreadsheet = None
+        self.memory_worksheet = None
+        self.analysis_memory = {}
+
     def setup_selenium(self):
+        # ... (code inchangé)
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -104,6 +115,7 @@ class BRVMAnalyzer:
             self.driver = None
 
     def configure_gemini(self):
+        # ... (code inchangé)
         if not self.api_key:
             logging.error("❌ Clé API Google (GOOGLE_API_KEY) non trouvée. L'analyse par IA est impossible.")
             return False
@@ -117,6 +129,7 @@ class BRVMAnalyzer:
             return False
             
     def authenticate_google_services(self):
+        # ... (code inchangé)
         logging.info("Authentification Google...")
         try:
             creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
@@ -133,11 +146,48 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur d'authentification : {e}")
             return False
 
+    # NOUVEAU : Fonction pour charger les analyses déjà effectuées
+    def _load_analysis_memory(self):
+        logging.info("Chargement de la mémoire d'analyse...")
+        try:
+            self.memory_worksheet = self.spreadsheet.worksheet(ANALYSIS_MEMORY_SHEET)
+            logging.info(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' trouvée.")
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' non trouvée. Création en cours...")
+            self.memory_worksheet = self.spreadsheet.add_worksheet(title=ANALYSIS_MEMORY_SHEET, rows=2000, cols=4)
+            headers = ['URL', 'Symbol', 'Analysis_Summary', 'Analysis_Date']
+            self.memory_worksheet.update('A1:D1', [headers])
+            logging.info(f"Feuille '{ANALYSIS_MEMORY_SHEET}' créée avec les en-têtes.")
+
+        try:
+            records = self.memory_worksheet.get_all_records()
+            self.analysis_memory = {row['URL']: row['Analysis_Summary'] for row in records if row.get('URL')}
+            logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées en mémoire.")
+        except Exception as e:
+            logging.error(f"Impossible de charger les enregistrements de la mémoire : {e}")
+
+    # NOUVEAU : Fonction pour sauvegarder une nouvelle analyse
+    def _save_to_memory(self, symbol, report_url, summary):
+        if not self.memory_worksheet:
+            logging.error("Impossible de sauvegarder en mémoire, la feuille n'est pas initialisée.")
+            return
+        
+        try:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            row_to_add = [report_url, symbol, summary, timestamp]
+            self.memory_worksheet.append_row(row_to_add, value_input_option='USER_ENTERED')
+            
+            # Mettre à jour le dictionnaire en mémoire pour éviter de le ré-analyser dans la même session
+            self.analysis_memory[report_url] = summary
+            logging.info(f"    -> Analyse pour {symbol} sauvegardée dans la mémoire persistante.")
+        except Exception as e:
+            logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
+
     def verify_and_filter_companies(self):
+        # ... (code inchangé)
         try:
             logging.info(f"Vérification des feuilles dans G-Sheet...")
-            sheet = self.gc.open_by_key(self.spreadsheet_id)
-            existing_sheets = [ws.title for ws in sheet.worksheets()]
+            existing_sheets = [ws.title for ws in self.spreadsheet.worksheets()] # MODIFIÉ : Utilise self.spreadsheet
             logging.info(f"Onglets trouvés : {existing_sheets}")
             symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
@@ -151,6 +201,7 @@ class BRVMAnalyzer:
             return False
 
     def _normalize_text(self, text):
+        # ... (code inchangé)
         if not text: return ""
         text = text.replace('-', ' ')
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
@@ -158,6 +209,7 @@ class BRVMAnalyzer:
         return re.sub(r'\s+', ' ', text).strip()
     
     def _find_all_reports(self):
+        # ... (code inchangé)
         if not self.driver: return {}
         base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
@@ -222,6 +274,7 @@ class BRVMAnalyzer:
         return all_reports
 
     def _get_symbol_from_name(self, company_name_normalized):
+        # ... (code inchangé)
         for symbol, info in self.original_societes_mapping.items():
             for alt in info['alternatives']:
                 if alt in company_name_normalized:
@@ -229,6 +282,7 @@ class BRVMAnalyzer:
         return None
 
     def _extract_date_from_text(self, text):
+        # ... (code inchangé)
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
         if not year_match: return datetime(1900, 1, 1)
@@ -245,14 +299,21 @@ class BRVMAnalyzer:
         if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
-    def _analyze_pdf_with_gemini(self, pdf_url):
+    # MODIFIÉ : La fonction accepte le 'symbol' pour la sauvegarde en mémoire
+    def _analyze_pdf_with_gemini(self, pdf_url, symbol):
+        # NOUVEAU : Vérification de la mémoire avant de contacter l'API
+        if pdf_url in self.analysis_memory:
+            logging.info(f"    -> Analyse pour {pdf_url} trouvée en mémoire. Utilisation de la version en cache.")
+            return self.analysis_memory[pdf_url]
+
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
         
-        logging.info(f"    -> Téléchargement du PDF pour l'envoyer à Gemini...")
+        logging.info(f"    -> Nouvelle analyse IA : Téléchargement du PDF...")
         uploaded_file = None
         temp_pdf_path = "temp_report.pdf"
         try:
+            # ... (logique de téléchargement et d'appel à Gemini inchangée)
             response = self.session.get(pdf_url, timeout=45, verify=False)
             response.raise_for_status()
             pdf_content = response.content
@@ -282,31 +343,37 @@ class BRVMAnalyzer:
             logging.info("    -> Fichier envoyé. Génération de l'analyse...")
             response = self.gemini_model.generate_content([prompt, uploaded_file])
             
+            analysis_text = ""
             if response.parts:
-                return response.text
+                analysis_text = response.text
             elif response.prompt_feedback:
                 block_reason = response.prompt_feedback.block_reason.name
-                error_message = f"Analyse bloquée par l'IA. Raison : {block_reason}."
-                return error_message
+                analysis_text = f"Analyse bloquée par l'IA. Raison : {block_reason}."
             else:
-                 return "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
+                analysis_text = "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
+            
+            # NOUVEAU : Sauvegarde du résultat en mémoire si l'analyse est réussie
+            if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
+                self._save_to_memory(symbol, pdf_url, analysis_text)
+            
+            return analysis_text
 
         except Exception as e:
             error_details = f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
             return error_details
         finally:
+            # ... (logique de nettoyage inchangée)
             if uploaded_file:
                 try:
                     logging.info(f"    -> Suppression du fichier temporaire de l'API Gemini.")
                     genai.delete_file(uploaded_file.name)
                 except Exception as e:
                     logging.warning(f"    -> N'a pas pu supprimer le fichier temporaire de l'API : {e}")
-
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
-                logging.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
 
     def process_all_companies(self):
+        # ... (début de la fonction inchangé)
         all_reports = self._find_all_reports()
         results = {}
         if not all_reports:
@@ -344,14 +411,18 @@ class BRVMAnalyzer:
             logging.info(f"  -> {len(reports_to_analyze)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
 
             for i, report in enumerate(reports_to_analyze):
-                logging.info(f"  -> Analyse IA {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
-                gemini_analysis = self._analyze_pdf_with_gemini(report['url'])
+                logging.info(f"  -> Traitement rapport {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
+                
+                # MODIFIÉ : Appel de la fonction avec le symbole
+                gemini_analysis = self._analyze_pdf_with_gemini(report['url'], symbol)
+                
                 analysis_data['rapports_analyses'].append({
                     'titre': report['titre'], 
                     'url': report['url'], 
                     'date': report['date'].strftime('%Y-%m-%d'),
                     'analyse_ia': gemini_analysis
                 })
+                
                 time.sleep(3)
             
             results[symbol] = analysis_data
@@ -359,66 +430,36 @@ class BRVMAnalyzer:
         logging.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
 
-    def create_word_report(self, results, output_path):
-        logging.info(f"Création du rapport Word : {output_path}")
-        try:
-            doc = Document()
-            doc.add_heading('Analyse Financière des Sociétés Cotées par IA (Gemini)', 0)
-            doc.add_paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
-            doc.add_paragraph("Ce rapport analyse les états financiers certifiés pour l'année 2024 et tous les rapports publiés à partir de 2025.")
-
-            for symbol, data in results.items():
-                doc.add_heading(f"{symbol} - {data['nom']}", level=2)
-                
-                if not data.get('rapports_analyses'):
-                    status_message = data.get('statut', 'Aucun rapport pertinent n\'a été trouvé.')
-                    doc.add_paragraph(f"❌ {status_message}")
-                    continue
-                
-                table = doc.add_table(rows=1, cols=2, style='Table Grid')
-                table.autofit = False
-                table.columns[0].width = Pt(150)
-                table.columns[1].width = Pt(350)
-                headers = ['Titre du Rapport / Date de Publication', "Synthèse de l'Analyse par l'IA"]
-                header_cells = table.rows[0].cells
-                header_cells[0].text = headers[0]
-                header_cells[1].text = headers[1]
-
-                for rapport in data['rapports_analyses']:
-                    row_cells = table.add_row().cells
-                    cell_0_p = row_cells[0].paragraphs[0]
-                    cell_0_p.add_run(rapport['titre']).bold = True
-                    cell_0_p.add_run(f"\n(Date extraite : {rapport['date']})").italic = True
-                    row_cells[1].text = rapport.get('analyse_ia', 'Analyse non disponible.')
-
-                doc.add_paragraph()
-
-            doc.save(output_path)
-            logging.info(f"🎉 RAPPORT FINALISÉ. Fichier sauvegardé : {output_path}")
-        except Exception as e:
-            logging.error(f"❌ Impossible d'enregistrer le rapport Word : {e}", exc_info=True)
-
-    def run_fundamental_analysis(self):
+    # MODIFIÉ : La méthode run est maintenant une interface claire pour main.py
+    def run_and_get_results(self):
         logging.info("="*60)
-        logging.info("ÉTAPE 2 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
+        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
         logging.info("="*60)
         
+        analysis_results = {}
         try:
-            if not self.configure_gemini(): return
+            if not self.configure_gemini(): return {}
+            if not self.authenticate_google_services(): return {}
+            
+            # NOUVEAU : Ouverture du spreadsheet et chargement de la mémoire
+            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
+            self._load_analysis_memory()
+
             self.setup_selenium()
-            if not self.driver or not self.authenticate_google_services(): return
-            if not self.verify_and_filter_companies(): return
+            if not self.driver: return {}
+            if not self.verify_and_filter_companies(): return {}
+            
             analysis_results = self.process_all_companies()
-            if analysis_results:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-                output_filename = f"Analyse_Financiere_BRVM_{timestamp}.docx"
-                self.create_word_report(analysis_results, output_filename)
-            else:
-                logging.warning("❌ Aucun résultat d'analyse à inclure dans le rapport.")
+            
+            if not analysis_results:
+                logging.warning("❌ Aucun résultat d'analyse à retourner.")
+
         except Exception as e:
-            logging.critical(f"❌ Une erreur critique a interrompu l'analyse: {e}", exc_info=True)
+            logging.critical(f"❌ Une erreur critique a interrompu l'analyse fondamentale: {e}", exc_info=True)
         finally:
             if self.driver:
                 self.driver.quit()
                 logging.info("Navigateur Selenium fermé.")
             logging.info("Processus d'analyse fondamentale terminé.")
+        
+        return analysis_results
