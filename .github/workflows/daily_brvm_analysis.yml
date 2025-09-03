@@ -5,8 +5,8 @@ name: Full BRVM Analysis Suite
 
 on:
   schedule:
-    # MODIFICATION ICI : S'exécute tous les lundis à 07h00 UTC
-    - cron: '0 7 * * 1'
+    # S'exécute tous les jours à 07h00 UTC (vous pouvez changer l'heure si besoin)
+    - cron: '0 7 * * *'
   
   # Permet de lancer manuellement le workflow depuis l'onglet "Actions" de GitHub
   workflow_dispatch:
@@ -14,6 +14,10 @@ on:
 jobs:
   run-analysis-suite:
     runs-on: ubuntu-latest
+    
+    # Augmente le temps maximum d'exécution du job à 6 heures (par défaut 1 heure)
+    # C'est une sécurité si l'analyse par IA devient très longue.
+    timeout-minutes: 360
 
     steps:
       # 1. Récupère le code de votre dépôt
@@ -39,16 +43,20 @@ jobs:
       # 5. Exécute la suite d'analyse complète via le script principal
       - name: Run BRVM Analysis Suite
         env:
-          # Passe les secrets au script
+          # Passe les secrets (que vous avez configurés dans GitHub) au script
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: python main.py
 
       # 6. Sauvegarde le rapport de synthèse final comme un "artifact"
       - name: Upload Synthesis Report Artifact
-        if: always() 
+        # "if: always()" garantit que cette étape s'exécute même si le script échoue,
+        # pour sauvegarder les logs ou un rapport partiel.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
+          # Le nom de l'artefact qui apparaîtra dans GitHub
           name: Rapport-Synthese-Investissement-BRVM
+          # Le chemin du fichier à sauvegarder (l'étoile * gère les noms avec date variable)
           path: |
             ./Rapport_Synthese_*.docx
