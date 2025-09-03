@@ -19,7 +19,7 @@ def main():
     Fonction principale qui exécute la suite d'analyse BRVM dans l'ordre.
     1. Collecte des données quotidiennes.
     2. Analyse technique des données collectées.
-    3. Analyse fondamentale des rapports de sociétés.
+    3. Analyse fondamentale des rapports de sociétés avec mémoire.
     4. Génération du rapport de synthèse final.
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
@@ -34,7 +34,6 @@ def main():
 
     # --- Étape 2 : Analyse technique ---
     try:
-        # CORRECTION DU MESSAGE DE LOG ICI
         logging.info("="*60)
         logging.info("ÉTAPE 2 : DÉMARRAGE DE L'ANALYSE TECHNIQUE")
         logging.info("="*60)
@@ -53,13 +52,9 @@ def main():
         if not google_api_key:
             logging.warning("⚠️ La variable d'environnement GOOGLE_API_KEY n'est pas définie. La partie fondamentale sera vide.")
         else:
+            # MODIFIÉ : Appel de la nouvelle méthode unifiée
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id, api_key=google_api_key)
-            if analyzer.configure_gemini() and analyzer.authenticate_google_services():
-                analyzer.setup_selenium()
-                if analyzer.driver and analyzer.verify_and_filter_companies():
-                    fundamental_results = analyzer.process_all_companies()
-                if analyzer.driver:
-                    analyzer.driver.quit()
+            fundamental_results = analyzer.run_and_get_results()
             logging.info("✅ Étape 3/4 (Analyse fondamentale) terminée avec succès.")
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 3 (Analyse fondamentale): {e}", exc_info=True)
