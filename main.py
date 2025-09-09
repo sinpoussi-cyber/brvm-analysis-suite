@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.1)
 # ==============================================================================
 import os
 import logging
@@ -47,13 +47,13 @@ def main():
     fundamental_results = {}
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        google_api_key = os.environ.get('GOOGLE_API_KEY')
         
-        if not google_api_key:
-            logging.warning("⚠️ La variable d'environnement GOOGLE_API_KEY n'est pas définie. La partie fondamentale sera vide.")
+        # MODIFIÉ : On vérifie juste la présence d'au moins une clé
+        if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')):
+            logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. La partie fondamentale sera vide.")
         else:
-            # MODIFIÉ : Appel de la nouvelle méthode unifiée
-            analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id, api_key=google_api_key)
+            # MODIFIÉ : L'initialisation n'a plus besoin de la clé
+            analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
             fundamental_results = analyzer.run_and_get_results()
             logging.info("✅ Étape 3/4 (Analyse fondamentale) terminée avec succès.")
     except Exception as e:
@@ -62,10 +62,11 @@ def main():
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        google_api_key = os.environ.get('GOOGLE_API_KEY')
+        # MODIFIÉ : Le report_generator a aussi besoin d'une clé, on lui passe la principale
+        google_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')
 
         if not google_api_key:
-            logging.warning("⚠️ GOOGLE_API_KEY non disponible. Impossible de générer le rapport de synthèse.")
+            logging.warning("⚠️ GOOGLE_API_KEY(_1) non disponible. Impossible de générer le rapport de synthèse.")
         else:
             final_report_generator = report_generator.ComprehensiveReportGenerator(
                 spreadsheet_id=spreadsheet_id,
