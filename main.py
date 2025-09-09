@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.1)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.2)
 # ==============================================================================
 import os
 import logging
@@ -48,7 +48,6 @@ def main():
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
         
-        # Vérifie si au moins une clé API est disponible
         if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. La partie fondamentale sera vide.")
         else:
@@ -61,7 +60,6 @@ def main():
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        # Le report_generator utilisera la première clé disponible pour ses propres analyses
         report_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')
 
         if not report_api_key:
