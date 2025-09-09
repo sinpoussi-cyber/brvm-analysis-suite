@@ -23,6 +23,9 @@ def main():
     4. Génération du rapport de synthèse final.
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
+    
+    # MODIFIÉ : ID du spreadsheet directement ici pour plus de simplicité
+    spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
 
     # --- Étape 1 : Collecte des données ---
     try:
@@ -46,10 +49,8 @@ def main():
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
     try:
-        spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        
-        if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')):
-            logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. La partie fondamentale sera vide.")
+        if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_2')):
+            logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. L'étape fondamentale sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
             fundamental_results = analyzer.run_and_get_results()
@@ -59,11 +60,10 @@ def main():
 
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
-        spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        report_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')
+        report_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_2')
 
         if not report_api_key:
-            logging.warning("⚠️ GOOGLE_API_KEY(_1) non disponible. Impossible de générer le rapport de synthèse.")
+            logging.warning("⚠️ GOOGLE_API_KEY ou GOOGLE_API_KEY_2 non disponible. Impossible de générer le rapport de synthèse.")
         else:
             final_report_generator = report_generator.ComprehensiveReportGenerator(
                 spreadsheet_id=spreadsheet_id,
