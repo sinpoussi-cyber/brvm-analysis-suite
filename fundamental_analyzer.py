@@ -27,20 +27,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from google.oauth2 import service_account
 import google.generativeai as genai
-# NOUVEAU : Import pour les types d'exceptions de l'API
 from google.api_core import exceptions as api_exceptions
 
-# ... (le reste des imports reste inchangé)
-
+# Désactiver les avertissements de sécurité
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 ANALYSIS_MEMORY_SHEET = 'ANALYSIS_MEMORY'
 
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # MODIFIÉ : Plus besoin de passer la clé ici
         self.societes_mapping = {
-            # ... (votre mapping de sociétés reste inchangé)
             'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
             'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total ci']},
@@ -100,11 +97,9 @@ class BRVMAnalyzer:
         self.memory_worksheet = None
         self.analysis_memory = {}
         
-        # NOUVEAU : Gestion des clés API
         self.api_keys = []
         self.current_key_index = 0
 
-    # ... (setup_selenium, authenticate_google_services, _load_analysis_memory, _save_to_memory, etc. restent inchangés)
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -169,14 +164,17 @@ class BRVMAnalyzer:
         except Exception as e:
             logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
 
-    # NOUVEAU : Logique de chargement et de rotation des clés API Gemini
     def _configure_gemini_with_rotation(self):
         """Charge toutes les clés API Gemini depuis les variables d'environnement."""
-        self.api_keys = [key for key in [os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)] if key]
-        # Ajoute également la clé principale si elle existe
         main_key = os.environ.get('GOOGLE_API_KEY')
-        if main_key and main_key not in self.api_keys:
-            self.api_keys.insert(0, main_key)
+        if main_key:
+            self.api_keys.append(main_key)
+            
+        # Cherche les clés numérotées (GOOGLE_API_KEY_1, GOOGLE_API_KEY_2, etc.)
+        for i in range(1, 10):
+            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
+            if key:
+                self.api_keys.append(key)
 
         if not self.api_keys:
             logging.error("❌ Aucune clé GOOGLE_API_KEY ou GOOGLE_API_KEY_n trouvée.")
@@ -191,14 +189,14 @@ class BRVMAnalyzer:
             return True
         except Exception as e:
             logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key() # Tente avec la clé suivante si la première est invalide
+            return self._rotate_api_key()
 
     def _rotate_api_key(self):
         """Passe à la clé API suivante dans la liste."""
         self.current_key_index += 1
         if self.current_key_index >= len(self.api_keys):
             logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
-            return False # Aucune clé valide restante
+            return False
         
         logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
@@ -208,63 +206,65 @@ class BRVMAnalyzer:
             return True
         except Exception as e:
             logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key() # Tente récursivement la suivante si celle-ci est aussi invalide
+            return self._rotate_api_key()
 
-
-    # MODIFIÉ : Utilise la nouvelle logique de rotation de clés
     def _analyze_pdf_with_gemini(self, pdf_url, symbol):
         if pdf_url in self.analysis_memory:
-            logging.info(f"    -> Analyse trouvée en mémoire. Utilisation de la version en cache.")
+            logging.info(f"    -> Analyse pour {pdf_url} trouvée en mémoire. Utilisation de la version en cache.")
             return self.analysis_memory[pdf_url]
 
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
         
-        logging.info(f"    -> Nouvelle analyse IA : Téléchargement du PDF...")
-        
-        max_retries = len(self.api_keys) # Le nombre maximum de tentatives est le nombre de clés
+        max_retries = len(self.api_keys)
         for attempt in range(max_retries):
             try:
-                # ... La logique interne de téléchargement et d'analyse reste la même
-                # ... (je l'ai omise pour la lisibilité mais elle est présente dans le code complet ci-dessous)
-                # ...
+                logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : Téléchargement du PDF...")
                 response = self.session.get(pdf_url, timeout=45, verify=False)
                 response.raise_for_status()
                 pdf_content = response.content
                 if len(pdf_content) < 1024:
                     return "Fichier PDF invalide ou vide."
                 
+                # Utilise une approche plus stable pour l'upload
                 uploaded_file = genai.upload_file(files=[{'name': 'report.pdf', 'display_name': 'Rapport Financier BRVM', 'mime_type': 'application/pdf', 'content': pdf_content}])
                 
-                prompt = "..." # Votre prompt
+                prompt = """
+                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+
+                Concentre-toi impérativement sur les aspects suivants :
+                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
+                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
+                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
+
+                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
+                """
                 
                 logging.info("    -> Fichier envoyé. Génération de l'analyse...")
                 response = self.gemini_model.generate_content([prompt, uploaded_file])
                 
                 analysis_text = response.text
                 
-                # NOUVEAU : Nettoyage du fichier uploadé après utilisation
                 genai.delete_file(uploaded_file.name)
                 
                 if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
                     self._save_to_memory(symbol, pdf_url, analysis_text)
                 
-                return analysis_text # Succès, on sort de la boucle de tentatives
+                return analysis_text
             
             except api_exceptions.ResourceExhausted as e:
                 logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. ({e})")
-                if not self._rotate_api_key(): # Tente de passer à la clé suivante
+                if not self._rotate_api_key():
                     return "Erreur d'analyse : Toutes les clés API ont atteint leur quota."
-                # Si la rotation a réussi, la boucle continuera avec la nouvelle clé
             
             except Exception as e:
                 logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
                 return f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
         
         return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
-
-    # ... (Le reste du code, process_all_companies, run_and_get_results, etc. reste le même mais bénéficie de la nouvelle logique)
-    # run_and_get_results est la seule méthode à appeler depuis l'extérieur.
 
     def run_and_get_results(self):
         logging.info("="*60)
@@ -273,7 +273,6 @@ class BRVMAnalyzer:
         
         analysis_results = {}
         try:
-            # MODIFIÉ : On appelle la nouvelle fonction de configuration
             if not self._configure_gemini_with_rotation(): return {}
             if not self.authenticate_google_services(): return {}
             
@@ -298,9 +297,6 @@ class BRVMAnalyzer:
             logging.info("Processus d'analyse fondamentale terminé.")
         
         return analysis_results
-
-    # NOTE : Le reste des fonctions (_get_symbol_from_name, process_all_companies, etc.) n'ont pas besoin de changer.
-    # Je les inclus ci-dessous pour que le fichier soit complet.
 
     def verify_and_filter_companies(self):
         try:
@@ -462,8 +458,7 @@ class BRVMAnalyzer:
                     'analyse_ia': gemini_analysis
                 })
                 
-                # Petite pause pour ne pas surcharger le site de la BRVM, même si l'IA n'est pas appelée
-                time.sleep(1) 
+                time.sleep(1) # Petite pause pour ne pas surcharger la BRVM
             
             results[symbol] = analysis_data
         
