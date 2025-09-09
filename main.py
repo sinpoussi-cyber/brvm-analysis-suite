@@ -5,13 +5,11 @@ import os
 import logging
 import sys
 
-# Importer les modules de chaque étape
 import data_collector
 import fundamental_analyzer
 import technical_analyzer
 import report_generator
 
-# Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 def main():
@@ -24,20 +22,16 @@ def main():
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
-    # MODIFIÉ : Récupération du SPREADSHEET_ID depuis les secrets
     spreadsheet_id = os.environ.get('SPREADSHEET_ID')
     if not spreadsheet_id:
         logging.error("❌ Le secret SPREADSHEET_ID n'est pas défini. Arrêt du script.")
         sys.exit(1)
         
-    # On passe le spreadsheet_id à l'objet qui en a besoin, s'il a été conçu pour le recevoir
-    # Pour l'instant, seul fundamental_analyzer et report_generator le prennent en paramètre.
-    # data_collector et technical_analyzer le lisent directement.
-    # C'est une bonne pratique de centraliser la configuration ici.
+    data_collector.SPREADSHEET_ID = spreadsheet_id
+    technical_analyzer.SPREADSHEET_ID = spreadsheet_id
 
     # --- Étape 1 : Collecte des données ---
     try:
-        # On pourrait modifier data_collector pour qu'il prenne l'ID en paramètre, mais pour l'instant on le laisse lire sa constante interne
         data_collector.run_data_collection()
         logging.info("✅ Étape 1/4 (Collecte de données) terminée avec succès.")
     except Exception as e:
@@ -85,3 +79,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+```**Changement clé :** J'ai retiré le `SPREADSHEET_ID` codé en dur pour utiliser celui que vous avez placé dans les secrets GitHub. C'est une bien meilleure pratique.
+
+Après avoir mis à jour ces deux fichiers et votre workflow YAML, votre projet sera prêt.
