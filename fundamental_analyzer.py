@@ -57,7 +57,7 @@ class BRVMAnalyzer:
     # MODIFIÉ : Simplification de la logique de chargement des clés
     def _configure_gemini_with_rotation(self):
         """Charge toutes les clés API Gemini depuis les variables d'environnement."""
-        main_key = os.environ.get('GOOGLE_API_KEY')
+        main_key = os.environ.get('GOOGLE_API_KEY_1')
         if main_key:
             self.api_keys.append(main_key)
         
