@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR
+# MODULE: DATA COLLECTOR (V1.2 - ROBUSTE AUX ERREURS API)
 # Description: Récupère les données quotidiennes depuis les BOC de la BRVM.
 # ==============================================================================
 
@@ -23,14 +23,12 @@ from google.oauth2 import service_account
 import urllib3
 
 # --- Configuration du Logging ---
-# Le logger est configuré dans le main.py principal
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- Paramètres Globaux ---
 SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
 DEFAULT_HEADERS = ["Symbole", "Date", "Cours (F CFA)", "Volume échangé", "Valeurs échangées (F CFA)"]
 
-# Keywords pour la reconnaissance des colonnes
 KEYS = {
     "sym": ["SYM", "SYMBOL", "TICKER", "ISSUER", "NOM", "LIBELLE", "ENTREPRISE", "COMPANY"],
     "date": ["DATE", "YYYY", "YYYYMMDD", "DATE(YYYYMMDD)"],
@@ -52,9 +50,6 @@ def normalize_text(s):
 def extract_date_from_filename(url):
     m = re.search(r'boc_(\d{8})', url, flags=re.IGNORECASE)
     return m.group(1) if m else None
-
-def backoff_sleep(attempt):
-    time.sleep(min(2 ** attempt, 30))
 
 # --- Authentification via Compte de Service ---
 def authenticate_google_services():
@@ -89,9 +84,7 @@ def prepare_worksheets_metadata(spreadsheet):
     logging.info(f"Préparation des métadonnées pour {len(title_to_ws)} feuilles. Ce processus peut prendre plusieurs minutes en raison des limitations de l'API.")
     
     for title, ws in list(title_to_ws.items()):
-        # AMÉLIORATION : Pause plus longue (2.1s) pour garantir de rester sous la limite de 60 requêtes/minute.
-        # (2 appels par feuille => ~28 feuilles par minute, ce qui est sûr)
-        time.sleep(2.1) 
+        time.sleep(2.1)
         
         header = []
         try:
@@ -141,8 +134,8 @@ def prepare_worksheets_metadata(spreadsheet):
     logging.info(f"Métadonnées initialisées pour {len(ws_meta)} feuilles.")
     return ws_meta, title_to_ws
 
-
 def get_boc_links():
+    # ... (code inchangé)
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     r = requests.get(url, verify=False, timeout=30)
     soup = BeautifulSoup(r.content, 'html.parser')
@@ -158,6 +151,7 @@ def get_boc_links():
     return sorted(list(links), key=lambda u: extract_date_from_filename(u) or '')
 
 def extract_data_from_pdf(pdf_url):
+    # ... (code inchangé)
     logging.info(f"Téléchargement et analyse du PDF: {pdf_url}")
     try:
         r = requests.get(pdf_url, verify=False, timeout=30)
@@ -190,6 +184,7 @@ def extract_data_from_pdf(pdf_url):
         return []
 
 def find_worksheet_title_for_symbol(raw_symbol, norm_to_title, norm_titles_list):
+    # ... (code inchangé)
     s_norm = normalize_text(raw_symbol)
     if s_norm in norm_to_title:
         return norm_to_title[s_norm]
@@ -206,7 +201,29 @@ def run_data_collection():
     if not gc:
         return
 
-    spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+    # MODIFIÉ : Ajout d'une boucle de nouvelle tentative pour l'ouverture du fichier
+    spreadsheet = None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+            logging.info("✅ Fichier Google Sheet ouvert avec succès.")
+            break  # Sortir de la boucle si l'ouverture réussit
+        except gspread.exceptions.APIError as e:
+            # Réessayer uniquement pour les erreurs serveur (5xx)
+            if e.response.status_code >= 500:
+                wait_time = 10 * (attempt + 1)
+                logging.warning(f"Erreur 5xx de l'API Google. Le service est peut-être indisponible. Nouvelle tentative dans {wait_time} secondes... ({attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"Erreur API non récupérable : {e}")
+                raise e # Lève l'exception pour les autres erreurs (ex: 403 Forbidden)
+    
+    if not spreadsheet:
+        logging.error("❌ Impossible d'ouvrir le Google Sheet après plusieurs tentatives. Arrêt de l'étape de collecte.")
+        # Lève une exception pour que main.py puisse arrêter l'exécution complète
+        raise ConnectionError("Échec de la connexion à l'API Google Sheets.")
+
     ws_meta, title_to_ws = prepare_worksheets_metadata(spreadsheet)
     
     norm_to_title = {normalize_text(title): title for title in title_to_ws.keys()}
@@ -241,7 +258,7 @@ def run_data_collection():
                     continue
                 
                 inds = meta['indices']
-                width = max(len(meta['header']), max(inds.values()) + 1)
+                width = max(len(meta['header']), max(inds.values()) + 1) if meta['header'] else max(inds.values()) + 1
                 row = [""] * width
                 
                 row[inds['sym']] = raw_sym
