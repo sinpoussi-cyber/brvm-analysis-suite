@@ -1,62 +1,50 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.2)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
   schedule:
-    # S'exécute tous les jours à 07h00 UTC (vous pouvez changer l'heure si besoin)
     - cron: '0 7 * * *'
-  
-  # Permet de lancer manuellement le workflow depuis l'onglet "Actions" de GitHub
   workflow_dispatch:
 
 jobs:
   run-analysis-suite:
     runs-on: ubuntu-latest
-    
-    # Augmente le temps maximum d'exécution du job à 6 heures (par défaut 1 heure)
-    # C'est une sécurité si l'analyse par IA devient très longue.
     timeout-minutes: 360
 
     steps:
-      # 1. Récupère le code de votre dépôt
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Configure Chrome pour Selenium (nécessaire pour l'analyse fondamentale)
       - name: Setup Chrome for Selenium
         uses: browser-actions/setup-chrome@latest
 
-      # 3. Configure l'environnement Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 4. Installe les dépendances Python via requirements.txt
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 5. Exécute la suite d'analyse complète via le script principal
       - name: Run BRVM Analysis Suite
         env:
-          # Passe les secrets (que vous avez configurés dans GitHub) au script
+          # MODIFIÉ : On passe explicitement toutes les clés au script
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
         run: python main.py
 
-      # 6. Sauvegarde le rapport de synthèse final comme un "artifact"
       - name: Upload Synthesis Report Artifact
-        # "if: always()" garantit que cette étape s'exécute même si le script échoue,
-        # pour sauvegarder les logs ou un rapport partiel.
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # Le nom de l'artefact qui apparaîtra dans GitHub
           name: Rapport-Synthese-Investissement-BRVM
-          # Le chemin du fichier à sauvegarder (l'étoile * gère les noms avec date variable)
           path: |
             ./Rapport_Synthese_*.docx
