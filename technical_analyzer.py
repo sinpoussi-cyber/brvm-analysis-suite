@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER
+# MODULE: TECHNICAL ANALYZER (V2.4 - EXCLUSION DE LA FEUILLE MÉMOIRE)
 # Description: Calcule les indicateurs techniques pour chaque société.
 # ==============================================================================
 
@@ -161,6 +161,7 @@ def process_single_sheet(gc, spreadsheet_id, sheet_name):
         data = all_values[1:]
         
         valid_columns_indices = {i: h for i, h in enumerate(headers) if h.strip()}
+        
         filtered_data = [[row[i] for i in valid_columns_indices] if len(row) > max(valid_columns_indices) else [row[i] for i in valid_columns_indices if i < len(row)] for row in data]
         df = pd.DataFrame(filtered_data, columns=list(valid_columns_indices.values()))
 
@@ -200,10 +201,6 @@ def process_single_sheet(gc, spreadsheet_id, sheet_name):
         logging.error(f"  ✗ Erreur lors du traitement de {sheet_name}: {e}")
 
 def run_technical_analysis():
-    logging.info("="*60)
-    logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE TECHNIQUE")
-    logging.info("="*60)
-    
     spreadsheet_id = "1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM"
     gc = authenticate_gsheets()
     if not gc: return
@@ -212,11 +209,14 @@ def run_technical_analysis():
         spreadsheet = gc.open_by_key(spreadsheet_id)
         logging.info(f"Fichier ouvert: {spreadsheet.title}")
 
-        sheet_names = [ws.title for ws in spreadsheet.worksheets() if ws.title not in ["UNMATCHED", "Actions_BRVM"]]
+        # MODIFIÉ : Ajout de 'ANALYSIS_MEMORY' à la liste des feuilles à exclure
+        sheets_to_exclude = ["UNMATCHED", "Actions_BRVM", "ANALYSIS_MEMORY"]
+        sheet_names = [ws.title for ws in spreadsheet.worksheets() if ws.title not in sheets_to_exclude]
         logging.info(f"Feuilles à traiter: {sheet_names}")
 
         for sheet_name in sheet_names:
             logging.info(f"\n--- TRAITEMENT DE LA FEUILLE: {sheet_name} ---")
+            # Les pauses entre chaque appel API sont cruciales pour ne pas dépasser les quotas
             time.sleep(5)
             convert_columns_to_numeric(gc, spreadsheet_id, sheet_name)
             time.sleep(5)
@@ -224,5 +224,5 @@ def run_technical_analysis():
 
     except Exception as e:
         logging.error(f"Erreur générale: {e}")
-    
+
     logging.info("Processus d'analyse technique terminé.")
