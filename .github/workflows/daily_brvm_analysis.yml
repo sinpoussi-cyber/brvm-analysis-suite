@@ -1,11 +1,13 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.3)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.4)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
   schedule:
+    # S'exécute tous les jours à 07h00 UTC
     - cron: '0 7 * * *'
+  
   workflow_dispatch:
 
 jobs:
@@ -32,13 +34,20 @@ jobs:
 
       - name: Run BRVM Analysis Suite
         env:
-          # MODIFIÉ : On passe explicitement TOUTES les clés numérotées
+          # MODIFIÉ : Passe les 11 clés API et le SPREADSHEET_ID au script
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
           GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
           GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
         run: python main.py
 
       - name: Upload Synthesis Report Artifact
