@@ -48,7 +48,6 @@ def main():
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
     try:
-        # CORRIGÉ : Vérifie la présence de n'importe quelle clé GOOGLE_API_KEY_n
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY_n n'est définie. L'étape fondamentale sera sautée.")
         else:
@@ -60,15 +59,12 @@ def main():
 
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
-        # CORRIGÉ : Utilise la première clé disponible pour le générateur de rapport
-        report_api_key = os.environ.get('GOOGLE_API_KEY_1')
-
-        if not report_api_key:
-            logging.warning("⚠️ GOOGLE_API_KEY_1 non disponible. Impossible de générer le rapport de synthèse.")
+        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)):
+            logging.warning("⚠️ Aucune clé API n'est disponible. Impossible de générer le rapport de synthèse.")
         else:
+            # MODIFIÉ : Plus besoin de passer la clé API, le générateur la trouve tout seul
             final_report_generator = report_generator.ComprehensiveReportGenerator(
-                spreadsheet_id=spreadsheet_id,
-                api_key=report_api_key
+                spreadsheet_id=spreadsheet_id
             )
             final_report_generator.generate_report(fundamental_results)
             logging.info("✅ Étape 4/4 (Génération du rapport de synthèse) terminée avec succès.")
