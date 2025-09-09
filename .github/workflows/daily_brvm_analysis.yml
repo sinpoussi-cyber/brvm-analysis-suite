@@ -1,5 +1,5 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.2)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.3)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
@@ -32,7 +32,7 @@ jobs:
 
       - name: Run BRVM Analysis Suite
         env:
-          # MODIFIÉ : On passe explicitement toutes les clés au script
+          # MODIFIÉ : On passe explicitement TOUTES les clés numérotées
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
