@@ -19,7 +19,7 @@ def main():
     Fonction principale qui exécute la suite d'analyse BRVM dans l'ordre.
     1. Collecte des données quotidiennes.
     2. Analyse technique des données collectées.
-    3. Analyse fondamentale des rapports de sociétés avec mémoire.
+    3. Analyse fondamentale des rapports de sociétés avec mémoire et rotation de clés.
     4. Génération du rapport de synthèse final.
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
@@ -48,11 +48,10 @@ def main():
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
         
-        # MODIFIÉ : On vérifie juste la présence d'au moins une clé
+        # Vérifie si au moins une clé API est disponible
         if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. La partie fondamentale sera vide.")
         else:
-            # MODIFIÉ : L'initialisation n'a plus besoin de la clé
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
             fundamental_results = analyzer.run_and_get_results()
             logging.info("✅ Étape 3/4 (Analyse fondamentale) terminée avec succès.")
@@ -62,15 +61,15 @@ def main():
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
         spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-        # MODIFIÉ : Le report_generator a aussi besoin d'une clé, on lui passe la principale
-        google_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')
+        # Le report_generator utilisera la première clé disponible pour ses propres analyses
+        report_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_1')
 
-        if not google_api_key:
+        if not report_api_key:
             logging.warning("⚠️ GOOGLE_API_KEY(_1) non disponible. Impossible de générer le rapport de synthèse.")
         else:
             final_report_generator = report_generator.ComprehensiveReportGenerator(
                 spreadsheet_id=spreadsheet_id,
-                api_key=google_api_key
+                api_key=report_api_key
             )
             final_report_generator.generate_report(fundamental_results)
             logging.info("✅ Étape 4/4 (Génération du rapport de synthèse) terminée avec succès.")
