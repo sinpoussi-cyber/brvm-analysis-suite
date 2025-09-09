@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.2)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.3)
 # ==============================================================================
 import os
 import logging
@@ -24,7 +24,6 @@ def main():
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
-    # MODIFIÉ : ID du spreadsheet directement ici pour plus de simplicité
     spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
 
     # --- Étape 1 : Collecte des données ---
@@ -49,8 +48,9 @@ def main():
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
     try:
-        if not (os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_2')):
-            logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY(_n) n'est définie. L'étape fondamentale sera sautée.")
+        # CORRIGÉ : Vérifie la présence de n'importe quelle clé GOOGLE_API_KEY_n
+        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)):
+            logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY_n n'est définie. L'étape fondamentale sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
             fundamental_results = analyzer.run_and_get_results()
@@ -60,10 +60,11 @@ def main():
 
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
-        report_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_API_KEY_2')
+        # CORRIGÉ : Utilise la première clé disponible pour le générateur de rapport
+        report_api_key = os.environ.get('GOOGLE_API_KEY_1')
 
         if not report_api_key:
-            logging.warning("⚠️ GOOGLE_API_KEY ou GOOGLE_API_KEY_2 non disponible. Impossible de générer le rapport de synthèse.")
+            logging.warning("⚠️ GOOGLE_API_KEY_1 non disponible. Impossible de générer le rapport de synthèse.")
         else:
             final_report_generator = report_generator.ComprehensiveReportGenerator(
                 spreadsheet_id=spreadsheet_id,
