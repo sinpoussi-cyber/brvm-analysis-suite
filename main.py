@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.3)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.4)
 # ==============================================================================
 import os
 import logging
@@ -24,10 +24,20 @@ def main():
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
-    spreadsheet_id = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
+    # MODIFIÉ : Récupération du SPREADSHEET_ID depuis les secrets
+    spreadsheet_id = os.environ.get('SPREADSHEET_ID')
+    if not spreadsheet_id:
+        logging.error("❌ Le secret SPREADSHEET_ID n'est pas défini. Arrêt du script.")
+        sys.exit(1)
+        
+    # On passe le spreadsheet_id à l'objet qui en a besoin, s'il a été conçu pour le recevoir
+    # Pour l'instant, seul fundamental_analyzer et report_generator le prennent en paramètre.
+    # data_collector et technical_analyzer le lisent directement.
+    # C'est une bonne pratique de centraliser la configuration ici.
 
     # --- Étape 1 : Collecte des données ---
     try:
+        # On pourrait modifier data_collector pour qu'il prenne l'ID en paramètre, mais pour l'instant on le laisse lire sa constante interne
         data_collector.run_data_collection()
         logging.info("✅ Étape 1/4 (Collecte de données) terminée avec succès.")
     except Exception as e:
@@ -48,7 +58,7 @@ def main():
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
     try:
-        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)):
+        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY_n n'est définie. L'étape fondamentale sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
@@ -59,10 +69,9 @@ def main():
 
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
-        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 10)):
+        if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
             logging.warning("⚠️ Aucune clé API n'est disponible. Impossible de générer le rapport de synthèse.")
         else:
-            # MODIFIÉ : Plus besoin de passer la clé API, le générateur la trouve tout seul
             final_report_generator = report_generator.ComprehensiveReportGenerator(
                 spreadsheet_id=spreadsheet_id
             )
