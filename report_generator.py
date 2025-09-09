@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V1.2 - ROTATION DE CLÉS API)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V1.3 - ROTATION DE CLÉS API)
 # Description: Génère un rapport de synthèse complet et gère plusieurs clés API
 #              pour contourner les limites de quota journalières.
 # ==============================================================================
@@ -23,7 +23,6 @@ class ComprehensiveReportGenerator:
         self.gc = None
         self.gemini_model = None
         self.spreadsheet = None
-        # NOUVEAU : Attributs pour la gestion des clés API
         self.api_keys = []
         self.current_key_index = 0
 
@@ -47,13 +46,14 @@ class ComprehensiveReportGenerator:
 
     def _configure_gemini_with_rotation(self):
         """Charge toutes les clés API Gemini depuis les variables d'environnement."""
-        for i in range(1, 10):
+        # Cherche les clés numérotées (GOOGLE_API_KEY_1, _2, etc.)
+        for i in range(1, 20): 
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
                 self.api_keys.append(key)
 
         if not self.api_keys:
-            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée.")
+            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée dans les secrets.")
             return False
             
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées pour le générateur de rapport.")
