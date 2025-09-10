@@ -1,15 +1,17 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.4)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.5 - Corrigé)
 # ==============================================================================
 import os
 import logging
 import sys
 
+# Importer les modules de chaque étape
 import data_collector
 import fundamental_analyzer
 import technical_analyzer
 import report_generator
 
+# Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 def main():
@@ -27,6 +29,7 @@ def main():
         logging.error("❌ Le secret SPREADSHEET_ID n'est pas défini. Arrêt du script.")
         sys.exit(1)
         
+    # On assigne l'ID globalement aux modules qui l'utilisent en dur
     data_collector.SPREADSHEET_ID = spreadsheet_id
     technical_analyzer.SPREADSHEET_ID = spreadsheet_id
 
@@ -79,6 +82,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```**Changement clé :** J'ai retiré le `SPREADSHEET_ID` codé en dur pour utiliser celui que vous avez placé dans les secrets GitHub. C'est une bien meilleure pratique.
-
-Après avoir mis à jour ces deux fichiers et votre workflow YAML, votre projet sera prêt.
