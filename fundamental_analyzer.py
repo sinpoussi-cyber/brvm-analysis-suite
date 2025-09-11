@@ -1,5 +1,7 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V1.5 - GESTION DES CLÉS ÉTENDUE)
+# MODULE: FUNDAMENTAL ANALYZER (V1.5 - COMPLET ET CORRIGÉ)
+# Description: Analyse les rapports financiers avec l'IA Gemini et gère
+#              plusieurs clés API pour contourner les limites de quota.
 # ==============================================================================
 
 # --- Imports ---
@@ -162,7 +164,6 @@ class BRVMAnalyzer:
 
     def _configure_gemini_with_rotation(self):
         """Charge toutes les clés API Gemini depuis les variables d'environnement."""
-        # MODIFIÉ : Boucle étendue pour chercher plus de clés
         for i in range(1, 20): 
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
@@ -294,4 +295,170 @@ class BRVMAnalyzer:
         
         return analysis_results
 
-    # ... Le reste des fonctions (_verify_and_filter_companies, _normalize_text, etc.) est inchangé ...
+    # CORRECTION : Ces fonctions manquaient et provoquaient l'erreur
+    def verify_and_filter_companies(self):
+        try:
+            logging.info(f"Vérification des feuilles dans G-Sheet...")
+            existing_sheets = [ws.title for ws in self.spreadsheet.worksheets()]
+            logging.info(f"Onglets trouvés : {existing_sheets}")
+            symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
+            self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
+            if not self.societes_mapping:
+                logging.error("❌ ERREUR FATALE : Aucune société à analyser.")
+                return False
+            logging.info(f"✅ {len(self.societes_mapping)} sociétés seront analysées.")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
+            return False
+
+    def _normalize_text(self, text):
+        if not text: return ""
+        text = text.replace('-', ' ')
+        text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
+        text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
+        return re.sub(r'\s+', ' ', text).strip()
+    
+    def _find_all_reports(self):
+        if not self.driver: return {}
+        base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
+        all_reports = defaultdict(list)
+        company_links = []
+        try:
+            for page_num in range(5): 
+                page_url = f"{base_url}?page={page_num}"
+                logging.info(f"Navigation vers la page de liste : {page_url}")
+                self.driver.get(page_url)
+                try:
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                except TimeoutException:
+                    logging.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
+                    break
+                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                table_rows = soup.select("table.views-table tbody tr")
+                if not table_rows:
+                    logging.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
+                    break
+                for row in table_rows:
+                    link_tag = row.find('a', href=True)
+                    if link_tag:
+                        company_name_normalized = self._normalize_text(link_tag.text)
+                        company_url = f"https://www.brvm.org{link_tag['href']}"
+                        symbol = self._get_symbol_from_name(company_name_normalized)
+                        if symbol and symbol in self.societes_mapping:
+                            if not any(c['url'] == company_url for c in company_links):
+                                company_links.append({'symbol': symbol, 'url': company_url})
+                time.sleep(1)
+            logging.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
+            for company in company_links:
+                symbol = company['symbol']
+                logging.info(f"--- Collecte des rapports pour {symbol} ---")
+                try:
+                    self.driver.get(company['url'])
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                    page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                    report_items = page_soup.select("table.views-table tbody tr")
+                    if not report_items:
+                        logging.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
+                        continue
+                    for item in report_items:
+                        pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
+                        if pdf_link_tag:
+                            full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
+                            if not any(r['url'] == full_url for r in all_reports[symbol]):
+                                report_data = {
+                                    'titre': " ".join(item.get_text().split()),
+                                    'url': full_url,
+                                    'date': self._extract_date_from_text(item.get_text())
+                                }
+                                all_reports[symbol].append(report_data)
+                                logging.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
+                    time.sleep(1)
+                except TimeoutException:
+                    logging.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
+                except Exception as e:
+                    logging.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
+        except Exception as e:
+            logging.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
+            return {}
+        return all_reports
+
+    def _get_symbol_from_name(self, company_name_normalized):
+        for symbol, info in self.original_societes_mapping.items():
+            for alt in info['alternatives']:
+                if alt in company_name_normalized:
+                    return symbol
+        return None
+
+    def _extract_date_from_text(self, text):
+        if not text: return datetime(1900, 1, 1)
+        year_match = re.search(r'\b(20\d{2})\b', text)
+        if not year_match: return datetime(1900, 1, 1)
+        year = int(year_match.group(1))
+        text_lower = text.lower()
+        trim_match = re.search(r't(\d)|(\d)\s*er\s*trimestre', text_lower)
+        if trim_match:
+            trimester = int(trim_match.group(1) or trim_match.group(2))
+            return datetime(year, trimester * 3, 1)
+        sem_match = re.search(r's(\d)|(\d)\s*er\s*semestre', text_lower)
+        if sem_match:
+            semester = int(sem_match.group(1) or sem_match.group(2))
+            return datetime(year, 6 if semester == 1 else 12, 1)
+        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
+        return datetime(year, 6, 15)
+
+    def process_all_companies(self):
+        all_reports = self._find_all_reports()
+        results = {}
+        if not all_reports:
+            logging.error("❌ ÉCHEC FINAL : Aucun rapport n'a pu être collecté sur le site de la BRVM.")
+            return {}
+        logging.info(f"\n✅ COLLECTE TERMINÉE : {sum(len(r) for r in all_reports.values())} rapports trouvés au total.")
+        
+        date_2024_start = datetime(2024, 1, 1)
+        date_2025_start = datetime(2025, 1, 1)
+        keywords_financiers = ['états financiers', 'etats financiers', 'certifié', 'commissaires aux comptes', 'rapport annuel']
+
+        for symbol, info in self.societes_mapping.items():
+            logging.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
+            
+            company_reports = all_reports.get(symbol, [])
+            analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
+            reports_to_analyze = []
+            
+            for report in company_reports:
+                report_date = report['date']
+                title_lower = report['titre'].lower()
+                if date_2024_start <= report_date < date_2025_start:
+                    if any(keyword in title_lower for keyword in keywords_financiers):
+                        reports_to_analyze.append(report)
+                elif report_date >= date_2025_start:
+                    reports_to_analyze.append(report)
+            
+            reports_to_analyze.sort(key=lambda x: x['date'], reverse=True)
+            
+            if not reports_to_analyze:
+                analysis_data['statut'] = 'Aucun rapport pertinent trouvé selon les critères de filtrage (date/titre).'
+                results[symbol] = analysis_data
+                continue
+            
+            logging.info(f"  -> {len(reports_to_analyze)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
+
+            for i, report in enumerate(reports_to_analyze):
+                logging.info(f"  -> Traitement rapport {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
+                
+                gemini_analysis = self._analyze_pdf_with_gemini(report['url'], symbol)
+                
+                analysis_data['rapports_analyses'].append({
+                    'titre': report['titre'], 
+                    'url': report['url'], 
+                    'date': report['date'].strftime('%Y-%m-%d'),
+                    'analyse_ia': gemini_analysis
+                })
+                
+                time.sleep(1)
+            
+            results[symbol] = analysis_data
+        
+        logging.info("\n✅ Traitement de toutes les sociétés terminé.")
+        return results
