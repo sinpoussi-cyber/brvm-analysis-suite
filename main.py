@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.5 - Corrigé)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.5)
 # ==============================================================================
 import os
 import logging
@@ -24,6 +24,7 @@ def main():
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
+    # MODIFIÉ : Récupération du SPREADSHEET_ID depuis les secrets
     spreadsheet_id = os.environ.get('SPREADSHEET_ID')
     if not spreadsheet_id:
         logging.error("❌ Le secret SPREADSHEET_ID n'est pas défini. Arrêt du script.")
@@ -55,6 +56,7 @@ def main():
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
     try:
+        # CORRIGÉ : Vérifie la présence de n'importe quelle clé GOOGLE_API_KEY_n
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY_n n'est définie. L'étape fondamentale sera sautée.")
         else:
