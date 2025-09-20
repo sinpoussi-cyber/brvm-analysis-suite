@@ -1,10 +1,7 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V1.5 - COMPLET ET CORRIGÉ)
-# Description: Analyse les rapports financiers avec l'IA Gemini et gère
-#              plusieurs clés API pour contourner les limites de quota.
+# MODULE: FUNDAMENTAL ANALYZER (V1.6 - RETOUR DES NOUVEAUTÉS)
 # ==============================================================================
 
-# --- Imports ---
 import gspread
 import requests
 from bs4 import BeautifulSoup
@@ -97,6 +94,7 @@ class BRVMAnalyzer:
         
         self.api_keys = []
         self.current_key_index = 0
+        self.newly_analyzed_reports = []
 
     def setup_selenium(self):
         chrome_options = Options()
@@ -163,8 +161,7 @@ class BRVMAnalyzer:
             logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
 
     def _configure_gemini_with_rotation(self):
-        """Charge toutes les clés API Gemini depuis les variables d'environnement."""
-        for i in range(1, 20): 
+        for i in range(1, 20):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
                 self.api_keys.append(key)
@@ -185,7 +182,6 @@ class BRVMAnalyzer:
             return self._rotate_api_key()
 
     def _rotate_api_key(self):
-        """Passe à la clé API suivante dans la liste."""
         self.current_key_index += 1
         if self.current_key_index >= len(self.api_keys):
             logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
@@ -249,6 +245,7 @@ class BRVMAnalyzer:
                 
                 if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
                     self._save_to_memory(symbol, pdf_url, analysis_text)
+                    self.newly_analyzed_reports.append(f"Rapport pour {symbol} ({os.path.basename(pdf_url)}):\n{analysis_text}\n")
                 
                 return analysis_text
             
@@ -270,15 +267,15 @@ class BRVMAnalyzer:
         
         analysis_results = {}
         try:
-            if not self._configure_gemini_with_rotation(): return {}
-            if not self.authenticate_google_services(): return {}
+            if not self._configure_gemini_with_rotation(): return {}, []
+            if not self.authenticate_google_services(): return {}, []
             
             self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
             self._load_analysis_memory()
 
             self.setup_selenium()
-            if not self.driver: return {}
-            if not self.verify_and_filter_companies(): return {}
+            if not self.driver: return {}, []
+            if not self.verify_and_filter_companies(): return {}, []
             
             analysis_results = self.process_all_companies()
             
@@ -293,9 +290,8 @@ class BRVMAnalyzer:
                 logging.info("Navigateur Selenium fermé.")
             logging.info("Processus d'analyse fondamentale terminé.")
         
-        return analysis_results
+        return (analysis_results, self.newly_analyzed_reports)
 
-    # CORRECTION : Ces fonctions manquaient et provoquaient l'erreur
     def verify_and_filter_companies(self):
         try:
             logging.info(f"Vérification des feuilles dans G-Sheet...")
