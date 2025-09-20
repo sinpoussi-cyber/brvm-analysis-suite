@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.5)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.6 - FINAL)
 # ==============================================================================
 import os
 import logging
@@ -20,14 +20,15 @@ def main():
     1. Collecte des données quotidiennes.
     2. Analyse technique des données collectées.
     3. Analyse fondamentale des rapports de sociétés avec mémoire et rotation de clés.
-    4. Génération du rapport de synthèse final.
+    4. Génération des rapports de synthèse et sauvegarde sur Drive.
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
-    # MODIFIÉ : Récupération du SPREADSHEET_ID depuis les secrets
     spreadsheet_id = os.environ.get('SPREADSHEET_ID')
-    if not spreadsheet_id:
-        logging.error("❌ Le secret SPREADSHEET_ID n'est pas défini. Arrêt du script.")
+    drive_folder_id = os.environ.get('DRIVE_FOLDER_ID')
+
+    if not spreadsheet_id or not drive_folder_id:
+        logging.error("❌ Les secrets SPREADSHEET_ID ou DRIVE_FOLDER_ID ne sont pas définis. Arrêt du script.")
         sys.exit(1)
         
     # On assigne l'ID globalement aux modules qui l'utilisent en dur
@@ -55,13 +56,13 @@ def main():
 
     # --- Étape 3 : Analyse fondamentale ---
     fundamental_results = {}
+    new_fundamental_analyses = []
     try:
-        # CORRIGÉ : Vérifie la présence de n'importe quelle clé GOOGLE_API_KEY_n
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
             logging.warning("⚠️ Aucune variable d'environnement GOOGLE_API_KEY_n n'est définie. L'étape fondamentale sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer(spreadsheet_id=spreadsheet_id)
-            fundamental_results = analyzer.run_and_get_results()
+            fundamental_results, new_fundamental_analyses = analyzer.run_and_get_results()
             logging.info("✅ Étape 3/4 (Analyse fondamentale) terminée avec succès.")
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 3 (Analyse fondamentale): {e}", exc_info=True)
@@ -69,15 +70,16 @@ def main():
     # --- Étape 4 : Génération du rapport de synthèse ---
     try:
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
-            logging.warning("⚠️ Aucune clé API n'est disponible. Impossible de générer le rapport de synthèse.")
+            logging.warning("⚠️ Aucune clé API n'est disponible. Impossible de générer les rapports.")
         else:
             final_report_generator = report_generator.ComprehensiveReportGenerator(
-                spreadsheet_id=spreadsheet_id
+                spreadsheet_id=spreadsheet_id,
+                drive_folder_id=drive_folder_id
             )
-            final_report_generator.generate_report(fundamental_results)
-            logging.info("✅ Étape 4/4 (Génération du rapport de synthèse) terminée avec succès.")
+            final_report_generator.generate_report(fundamental_results, new_fundamental_analyses)
+            logging.info("✅ Étape 4/4 (Génération des rapports) terminée avec succès.")
     except Exception as e:
-        logging.error(f"❌ Échec à l'étape 4 (Génération du rapport de synthèse): {e}", exc_info=True)
+        logging.error(f"❌ Échec à l'étape 4 (Génération des rapports): {e}", exc_info=True)
 
     logging.info("🏁 SUITE D'ANALYSE BRVM COMPLÈTE TERMINÉE 🏁")
 
