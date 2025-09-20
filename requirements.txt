@@ -1,5 +1,3 @@
-# requirements.txt
-
 gspread
 google-auth-oauthlib
 google-auth-httplib2
@@ -13,3 +11,4 @@ pandas
 numpy
 openpyxl
 blinker==1.6.2
+google-api-python-client
