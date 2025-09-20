@@ -1,11 +1,10 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.6 - Corrigé)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.7 - DEBUG)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
   schedule:
-    # S'exécute tous les jours à 07h00 UTC
     - cron: '0 7 * * *'
   
   workflow_dispatch:
@@ -32,9 +31,18 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # NOUVELLE ÉTAPE DE DÉBOGAGE : Vérifie si les secrets sont accessibles
+      - name: Verify Secrets Availability
+        run: |
+          echo "SPREADSHEET_ID is set: ${{ secrets.SPREADSHEET_ID != '' }}"
+          echo "DRIVE_FOLDER_ID is set: ${{ secrets.DRIVE_FOLDER_ID != '' }}"
+          echo "GSPREAD_SERVICE_ACCOUNT is set: ${{ secrets.GSPREAD_SERVICE_ACCOUNT != '' }}"
+          echo "GOOGLE_API_KEY_1 is set: ${{ secrets.GOOGLE_API_KEY_1 != '' }}"
+          echo "GOOGLE_API_KEY_11 is set: ${{ secrets.GOOGLE_API_KEY_11 != '' }}"
+
       - name: Run BRVM Analysis Suite
         env:
-          # CORRECTION : Ajout des secrets SPREADSHEET_ID et DRIVE_FOLDER_ID
+          # On s'assure que toutes les clés sont bien passées
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
