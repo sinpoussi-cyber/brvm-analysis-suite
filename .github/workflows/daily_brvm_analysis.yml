@@ -1,5 +1,5 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.4)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.6 - Corrigé)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
@@ -34,9 +34,10 @@ jobs:
 
       - name: Run BRVM Analysis Suite
         env:
-          # MODIFIÉ : Passe les 11 clés API et le SPREADSHEET_ID au script
+          # CORRECTION : Ajout des secrets SPREADSHEET_ID et DRIVE_FOLDER_ID
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -50,10 +51,11 @@ jobs:
           GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
         run: python main.py
 
-      - name: Upload Synthesis Report Artifact
+      - name: Upload All Reports Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Rapport-Synthese-Investissement-BRVM
+          name: Rapports-BRVM-Analyse
           path: |
-            ./Rapport_Synthese_*.docx
+            ./Rapport_*.docx
+            ./Synthese_*.docx
