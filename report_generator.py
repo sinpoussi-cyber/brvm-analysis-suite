@@ -319,8 +319,8 @@ class ComprehensiveReportGenerator:
             
         main_doc_path = self._create_main_report(company_reports)
         if main_doc_path:
-            self._generate_delta_report(main_doc_path)
             self._upload_to_drive(main_doc_path)
+            self._generate_delta_report(main_doc_path)
         
         self._generate_market_events_report(new_fundamental_analyses)
 
