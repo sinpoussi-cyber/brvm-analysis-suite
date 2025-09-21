@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V2.0 - GESTION INTELLIGENTE DES API)
+# MODULE: FUNDAMENTAL ANALYZER (V1.7 - CORRECTION UPLOAD API)
 # ==============================================================================
 import gspread
 import requests
@@ -87,85 +87,9 @@ class BRVMAnalyzer:
         self.spreadsheet = None
         self.memory_worksheet = None
         self.analysis_memory = {}
-        self.newly_analyzed_reports = []
-        
-        # Propriétés pour la gestion intelligente des API
         self.api_keys = []
         self.current_key_index = 0
-        self.request_count_per_key = {}
-        self.max_requests_per_key = 48
-        self.failed_keys = set()
-        self.current_key_number = None
-
-    def _load_all_api_keys(self):
-        """Charge toutes les clés API disponibles"""
-        loaded_keys = []
-        for i in range(1, 200):  # Chercher jusqu'à 200 clés
-            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
-                loaded_keys.append((i, key))
-                self.request_count_per_key[i] = 0
-        
-        # Mélanger les clés pour répartir la charge
-        import random
-        random.shuffle(loaded_keys)
-        
-        self.api_keys = loaded_keys
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API chargées et mélangées")
-        return len(self.api_keys) > 0
-    
-    def _find_next_available_key(self):
-        """Trouve la prochaine clé API disponible"""
-        starting_index = self.current_key_index
-        
-        while True:
-            if self.current_key_index >= len(self.api_keys):
-                self.current_key_index = 0  # Revenir au début
-            
-            key_number, key_value = self.api_keys[self.current_key_index]
-            
-            # Vérifier si cette clé a encore du quota
-            if (key_number not in self.failed_keys and 
-                self.request_count_per_key.get(key_number, 0) < self.max_requests_per_key):
-                return key_number, key_value
-            
-            self.current_key_index += 1
-            
-            # Si on a fait le tour complet
-            if self.current_key_index == starting_index:
-                return None, None
-
-    def _configure_gemini_with_rotation(self):
-        """Configure Gemini avec rotation intelligente"""
-        if not self._load_all_api_keys():
-            logging.error("❌ Aucune clé API trouvée")
-            return False
-        
-        return self._setup_next_key()
-    
-    def _setup_next_key(self):
-        """Configure la prochaine clé disponible"""
-        key_number, key_value = self._find_next_available_key()
-        
-        if not key_value:
-            logging.error("❌ Toutes les clés API ont été épuisées ou ont échoué")
-            return False
-        
-        try:
-            genai.configure(api_key=key_value)
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            self.current_key_number = key_number
-            logging.info(f"✅ Clé API #{key_number} configurée (utilisations: {self.request_count_per_key[key_number]})")
-            return True
-        except Exception as e:
-            logging.warning(f"⚠️ Erreur avec la clé #{key_number}: {e}")
-            self.failed_keys.add(key_number)
-            self.current_key_index += 1
-            return self._setup_next_key()
-
-    def _rotate_api_key(self):
-        """Rotation vers la prochaine clé"""
-        return self._setup_next_key()
+        self.newly_analyzed_reports = []
 
     def setup_selenium(self):
         chrome_options = Options()
@@ -231,24 +155,44 @@ class BRVMAnalyzer:
         except Exception as e:
             logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
 
-    def _is_important_report(self, pdf_url, symbol):
-        """Filtre les rapports pour ne traiter que les plus importants"""
-        url_lower = pdf_url.lower()
-        important_keywords = [
-            'annuel', 'semestriel', 'trimestriel', 'resultats',
-            'etats financiers', 'etats-financiers', 'consolide',
-            'audite', 'certifie', 'rapport-annuel'
-        ]
+    def _configure_gemini_with_rotation(self):
+        for i in range(1, 20): 
+            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
+            if key:
+                self.api_keys.append(key)
+
+        if not self.api_keys:
+            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée dans les secrets GitHub.")
+            return False
+            
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini ont été chargées.")
         
-        is_important = any(keyword in url_lower for keyword in important_keywords)
+        try:
+            genai.configure(api_key=self.api_keys[self.current_key_index])
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
+            return self._rotate_api_key()
+
+    def _rotate_api_key(self):
+        self.current_key_index += 1
+        if self.current_key_index >= len(self.api_keys):
+            logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
+            return False
         
-        if is_important:
-            logging.info(f"    -> Rapport prioritaire détecté pour {symbol}")
-        
-        return is_important
+        logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
+        try:
+            genai.configure(api_key=self.api_keys[self.current_key_index])
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            logging.info(f"API Gemini reconfigurée avec succès avec la clé #{self.current_key_index + 1}.")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
+            return self._rotate_api_key()
 
     def _analyze_pdf_with_gemini(self, pdf_url, symbol):
-        """Analyse un PDF avec Gemini en utilisant la gestion intelligente des clés"""
         if pdf_url in self.analysis_memory:
             logging.info(f"    -> Analyse pour {pdf_url} trouvée en mémoire. Utilisation de la version en cache.")
             return self.analysis_memory[pdf_url]
@@ -256,88 +200,101 @@ class BRVMAnalyzer:
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
         
-        # Filtrer les rapports non prioritaires pour économiser les quotas
-        if not self._is_important_report(pdf_url, symbol):
-            logging.info(f"    -> Rapport non prioritaire pour {symbol} - analyse sautée")
-            return "Rapport non prioritaire - analyse sautée pour préserver les quotas API"
+        max_retries = len(self.api_keys)
+        for attempt in range(max_retries):
+            temp_pdf_path = "temp_report.pdf"
+            uploaded_file = None
+            try:
+                logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : Téléchargement du PDF...")
+                response = self.session.get(pdf_url, timeout=45, verify=False)
+                response.raise_for_status()
+                pdf_content = response.content
+                if len(pdf_content) < 1024:
+                    return "Fichier PDF invalide ou vide."
+                
+                with open(temp_pdf_path, 'wb') as f:
+                    f.write(pdf_content)
+                
+                uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier BRVM")
+                
+                prompt = """
+                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+                Concentre-toi impérativement sur les aspects suivants :
+                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
+                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
+                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
+                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
+                """
+                
+                logging.info("    -> Fichier envoyé. Génération de l'analyse...")
+                response = self.gemini_model.generate_content([prompt, uploaded_file])
+                
+                analysis_text = ""
+                if hasattr(response, 'text'):
+                    analysis_text = response.text
+                elif hasattr(response, 'prompt_feedback'):
+                    block_reason = response.prompt_feedback.block_reason.name
+                    analysis_text = f"Analyse bloquée par l'IA. Raison : {block_reason}."
+                else:
+                    analysis_text = "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
+                
+                if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
+                    self._save_to_memory(symbol, pdf_url, analysis_text)
+                    self.newly_analyzed_reports.append(f"Rapport pour {symbol} ({os.path.basename(pdf_url)}):\n{analysis_text}\n")
+                
+                return analysis_text
+            
+            except api_exceptions.ResourceExhausted as e:
+                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. ({e})")
+                if not self._rotate_api_key():
+                    return "Erreur d'analyse : Toutes les clés API ont atteint leur quota."
+            
+            except Exception as e:
+                logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
+                return f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
+            finally:
+                if uploaded_file:
+                    try: genai.delete_file(uploaded_file.name)
+                    except Exception as del_e: logging.warning(f"Impossible de supprimer le fichier uploadé {uploaded_file.name}: {del_e}")
+                if os.path.exists(temp_pdf_path):
+                    os.remove(temp_pdf_path)
         
-        temp_pdf_path = "temp_report.pdf"
-        uploaded_file = None
+        return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
+
+    def run_and_get_results(self):
+        logging.info("="*60)
+        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
+        logging.info("="*60)
         
+        analysis_results = {}
         try:
-            logging.info(f"    -> Nouvelle analyse IA prioritaire pour {symbol}...")
+            if not self._configure_gemini_with_rotation(): return {}, []
+            if not self.authenticate_google_services(): return {}, []
             
-            # Vérifier le quota préventif
-            current_usage = self.request_count_per_key.get(self.current_key_number, 0)
-            if current_usage >= self.max_requests_per_key:
-                logging.info(f"Quota préventif atteint pour clé #{self.current_key_number}")
-                if not self._setup_next_key():
-                    return "Erreur : Toutes les clés ont atteint leur quota"
+            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
+            self._load_analysis_memory()
+
+            self.setup_selenium()
+            if not self.driver: return {}, []
+            if not self.verify_and_filter_companies(): return {}, []
             
-            # Télécharger le PDF
-            response = self.session.get(pdf_url, timeout=45, verify=False)
-            response.raise_for_status()
-            pdf_content = response.content
+            analysis_results = self.process_all_companies()
             
-            if len(pdf_content) < 1024:
-                return "Fichier PDF invalide ou vide."
-            
-            with open(temp_pdf_path, 'wb') as f:
-                f.write(pdf_content)
-            
-            uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier BRVM")
-            
-            # Prompt optimisé pour réduire la longueur de réponse
-            prompt = """
-            Analyse ce rapport financier BRVM et fournis une synthèse CONCISE en français (maximum 200 mots).
-            Points essentiels uniquement :
-            - **CA** : Evolution en % et valeur
-            - **Résultat Net** : Evolution et causes principales  
-            - **Dividende** : Montant proposé/payé ou "non mentionné"
-            - **Perspectives** : Points clés uniquement
-            Sois factuel, précis et concis.
-            """
-            
-            logging.info("    -> Fichier envoyé. Génération de l'analyse...")
-            response = self.gemini_model.generate_content([prompt, uploaded_file])
-            
-            # Incrémenter le compteur
-            self.request_count_per_key[self.current_key_number] += 1
-            
-            analysis_text = ""
-            if hasattr(response, 'text'):
-                analysis_text = response.text
-            elif response.prompt_feedback:
-                block_reason = response.prompt_feedback.block_reason.name
-                analysis_text = f"Analyse bloquée par l'IA. Raison : {block_reason}."
-            else:
-                analysis_text = "Erreur : L'API Gemini n'a retourné aucun contenu."
-            
-            if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
-                self._save_to_memory(symbol, pdf_url, analysis_text)
-                self.newly_analyzed_reports.append(f"Rapport pour {symbol} ({os.path.basename(pdf_url)}):\n{analysis_text}\n")
-            
-            return analysis_text
-            
-        except api_exceptions.ResourceExhausted as e:
-            logging.warning(f"Quota atteint pour la clé API #{self.current_key_number}. ({e})")
-            self.failed_keys.add(self.current_key_number)
-            if not self._setup_next_key():
-                return "Erreur : Toutes les clés API ont atteint leur quota."
-            return "Quota épuisé - analyse reportée"
-            
+            if not analysis_results:
+                logging.warning("❌ Aucun résultat d'analyse à retourner.")
+
         except Exception as e:
-            logging.error(f"    -> Erreur technique lors de l'analyse IA : {e}")
-            return f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
-            
+            logging.critical(f"❌ Une erreur critique a interrompu l'analyse fondamentale: {e}", exc_info=True)
         finally:
-            if uploaded_file:
-                try: 
-                    genai.delete_file(uploaded_file.name)
-                except Exception as del_e: 
-                    logging.warning(f"Impossible de supprimer le fichier uploadé: {del_e}")
-            if os.path.exists(temp_pdf_path):
-                os.remove(temp_pdf_path)
+            if self.driver:
+                self.driver.quit()
+                logging.info("Navigateur Selenium fermé.")
+            logging.info("Processus d'analyse fondamentale terminé.")
+        
+        return (analysis_results, self.newly_analyzed_reports)
 
     def verify_and_filter_companies(self):
         try:
@@ -506,58 +463,3 @@ class BRVMAnalyzer:
         
         logging.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
-
-    def get_usage_stats(self):
-        """Retourne les statistiques d'utilisation des API"""
-        total_requests = sum(self.request_count_per_key.values())
-        active_keys = len([k for k in self.request_count_per_key.keys() if k not in self.failed_keys])
-        failed_keys_count = len(self.failed_keys)
-        
-        return {
-            'total_keys': len(self.api_keys),
-            'active_keys': active_keys,
-            'failed_keys': failed_keys_count,
-            'total_requests': total_requests,
-            'current_key': self.current_key_number
-        }
-
-    def run_and_get_results(self):
-        logging.info("="*60)
-        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
-        logging.info("="*60)
-        
-        analysis_results = {}
-        try:
-            if not self._configure_gemini_with_rotation(): 
-                return {}, []
-            if not self.authenticate_google_services(): 
-                return {}, []
-            
-            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
-            self._load_analysis_memory()
-
-            self.setup_selenium()
-            if not self.driver: 
-                return {}, []
-            if not self.verify_and_filter_companies(): 
-                return {}, []
-            
-            analysis_results = self.process_all_companies()
-            
-            if not analysis_results:
-                logging.warning("❌ Aucun résultat d'analyse à retourner.")
-
-        except Exception as e:
-            logging.critical(f"❌ Une erreur critique a interrompu l'analyse fondamentale: {e}", exc_info=True)
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logging.info("Navigateur Selenium fermé.")
-            logging.info("Processus d'analyse fondamentale terminé.")
-        
-        # Affichage des statistiques d'utilisation
-        if hasattr(self, 'api_keys') and self.api_keys:
-            stats = self.get_usage_stats()
-            logging.info(f"📊 Statistiques API: {stats['total_requests']} requêtes, {stats['active_keys']} clés actives, {stats['failed_keys']} clés épuisées")
-        
-        return (analysis_results, self.newly_analyzed_reports)
