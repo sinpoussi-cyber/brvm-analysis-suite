@@ -1,6 +1,6 @@
 # Suite d'Analyse Complète et Automatisée pour la BRVM
 
-Ce projet est une suite logicielle entièrement automatisée qui collecte, analyse et synthétise des données sur les sociétés cotées à la Bourse Régionale des Valeurs Mobilières (BRVM). Le processus complet s'exécute quotidiennement via GitHub Actions et produit trois rapports d'investissement distincts.
+Ce projet est une suite logicielle entièrement automatisée qui collecte, analyse et synthétise des données sur les sociétés cotées à la Bourse Régionale des Valeurs Mobilières (BRVM). Le processus complet s'exécute quotidiennement via GitHub Actions et produit trois rapports d'investissement distincts qui sont sauvegardés sur Google Drive.
 
 ## 🏗️ Architecture et Fonctionnalités
 
@@ -28,6 +28,7 @@ Suivez ces étapes pour rendre le projet opérationnel.
 
 -   Un compte GitHub.
 -   Un ou plusieurs projets sur [Google Cloud Platform](https://console.cloud.google.com/).
+-   Un compte Google Workspace ou un compte Google personnel pouvant créer des Drives Partagés.
 
 ### Étape 2 : Configuration du Compte de Service Google
 
@@ -35,19 +36,28 @@ Ce compte est le "bot" qui agira en votre nom.
 
 1.  **Créez un Compte de Service** dans un de vos projets Google Cloud et donnez-lui le rôle **"Éditeur"**.
 2.  **Générez une Clé JSON** pour ce compte et téléchargez-la.
-3.  **Créez un Google Sheet** pour stocker vos données.
-4.  **Partagez ce Google Sheet** avec l'adresse e-mail du compte de service (trouvée dans le fichier JSON) en lui donnant le rôle **"Éditeur"**.
-5.  **Créez un Drive Partagé** (Shared Drive) sur Google Drive.
-6.  **Partagez ce Drive Partagé** avec l'adresse e-mail du compte de service en lui donnant le rôle **"Gestionnaire de contenu"**.
-7.  Créez un dossier à l'intérieur de ce Drive Partagé et **copiez l'identifiant de ce dossier** depuis l'URL.
+3.  **Partagez votre Google Sheet** :
+    -   Créez un nouveau Google Sheet pour stocker vos données.
+    -   Ouvrez le fichier JSON et copiez l'adresse e-mail de la ligne `"client_email"`.
+    -   Dans votre Google Sheet, cliquez sur **"Partager"**, collez l'adresse e-mail, donnez-lui les droits **"Éditeur"**, et envoyez.
 
-### Étape 3 : Création des Clés API Gemini
+### Étape 3 : Configuration du Drive Partagé
+
+1.  Allez sur [Google Drive](https://drive.google.com/).
+2.  Dans le menu de gauche, cliquez sur **"Drives partagés"**.
+3.  Créez un nouveau Drive Partagé (ex: `Rapports BRVM`).
+4.  Ouvrez ce Drive Partagé, cliquez sur son nom en haut, puis sur **"Gérer les membres"**.
+5.  **Ajoutez l'adresse e-mail de votre compte de service** et donnez-lui le rôle **"Gestionnaire de contenu"**.
+6.  Créez un dossier à l'intérieur de ce Drive Partagé (ex: `Rapports Journaliers`).
+7.  Ouvrez ce dossier et **copiez l'identifiant de ce dossier** depuis l'URL (la chaîne de caractères à la fin).
+
+### Étape 4 : Création des Clés API Gemini
 
 Pour des quotas séparés, il est recommandé de créer chaque clé dans un projet Google Cloud différent.
 1.  Dans chaque projet, activez l'**API "Vertex AI"**.
 2.  Créez une **Clé d'API** depuis la section "Identifiants".
 
-### Étape 4 : Configuration des Secrets GitHub
+### Étape 5 : Configuration des Secrets GitHub
 
 Dans votre dépôt GitHub, allez dans `Settings` -> `Secrets and variables` -> `Actions` et créez les secrets suivants :
 
@@ -58,6 +68,6 @@ Dans votre dépôt GitHub, allez dans `Settings` -> `Secrets and variables` -> `
 
 ## 🚀 Exécution
 
-Le workflow s'exécute automatiquement chaque jour. Les trois rapports générés sont disponibles dans les **Artifacts** de chaque exécution et sont sauvegardés dans votre Google Drive.
+Le workflow s'exécute automatiquement chaque jour. Les trois rapports générés sont disponibles dans les **Artifacts** de chaque exécution et sont sauvegardés dans votre dossier Google Drive.
 
 ## 📁 Structure du Projet
