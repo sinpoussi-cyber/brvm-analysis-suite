@@ -1,25 +1,19 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V2.0 - Final)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.7 - Final)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
   schedule:
-    # Exécution quotidienne à 07h00 UTC (08h00 en Côte d'Ivoire)
+    # S'exécute tous les jours à 07h00 UTC
     - cron: '0 7 * * *'
   
   workflow_dispatch:
-    inputs:
-      force_analysis:
-        description: 'Forcer l\'analyse même avec peu de clés API'
-        required: false
-        default: 'false'
-        type: boolean
 
 jobs:
   run-analysis-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 480  # 8 heures pour éviter les timeouts
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -38,33 +32,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Check API Keys availability
-        env:
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-        run: |
-          echo "Vérification des clés API disponibles..."
-          count=0
-          for i in {1..50}; do
-            var_name="GOOGLE_API_KEY_$i"
-            if [ ! -z "${!var_name}" ]; then
-              count=$((count + 1))
-            fi
-          done
-          echo "Nombre de clés API détectées: $count"
-          if [ $count -eq 0 ]; then
-            echo "ATTENTION: Aucune clé API détectée - Mode dégradé"
-          fi
-
       - name: Run BRVM Analysis Suite
         env:
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          # Vos 9 clés API existantes
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -74,42 +46,15 @@ jobs:
           GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
           GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-        run: |
-          python main.py
-        continue-on-error: true  # Permet la suite même en cas d'erreur partielle
-
-      - name: Upload Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Logs-Execution-${{ github.run_number }}
-          path: |
-            *.log
-          retention-days: 7
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+        run: python main.py
 
       - name: Upload All Reports Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Rapports-BRVM-Analyse-${{ github.run_number }}
+          name: Rapports-BRVM-Analyse
           path: |
             ./Rapport_*.docx
             ./Synthese_*.docx
-          retention-days: 30
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "=== RÉSUMÉ D'EXÉCUTION ==="
-          if [ -f "brvm_analysis.log" ]; then
-            echo "📋 Logs générés - vérifiez les artifacts"
-            echo "Dernières lignes du log:"
-            tail -20 brvm_analysis.log
-          fi
-          if ls Rapport_*.docx 1> /dev/null 2>&1; then
-            echo "✅ Rapports générés avec succès"
-            ls -la Rapport_*.docx Synthese_*.docx 2>/dev/null || echo "Aucun fichier de synthèse"
-          else
-            echo "⚠️ Aucun rapport généré"
-          fi
-          echo "🔍 Vérifiez les artifacts pour les détails complets"
