@@ -1,70 +1,63 @@
-# Suite d'Analyse Complète pour la BRVM
+# Suite d'Analyse Complète et Automatisée pour la BRVM
 
-Ce projet combine trois modules pour fournir une analyse complète et automatisée du marché de la Bourse Régionale des Valeurs Mobilières (BRVM). Le processus s'exécute quotidiennement via GitHub Actions.
+Ce projet est une suite logicielle entièrement automatisée qui collecte, analyse et synthétise des données sur les sociétés cotées à la Bourse Régionale des Valeurs Mobilières (BRVM). Le processus complet s'exécute quotidiennement via GitHub Actions et produit trois rapports d'investissement distincts.
 
-## ⚙️ Fonctionnalités
+## 🏗️ Architecture et Fonctionnalités
 
-La suite exécute les tâches suivantes dans l'ordre :
+La suite est orchestrée par le script `main.py` et se déroule en quatre étapes séquentielles :
 
-1.  **Collecte de Données (`data_collector.py`)**: Scrape les derniers Bulletins Officiels de la Cote (BOC) depuis le site de la BRVM, extrait les données de transactions (cours, volume, etc.) et les archive dans un Google Sheet.
-2.  **Analyse Fondamentale (`fundamental_analyzer.py`)**: Scrape les rapports financiers des sociétés cotées, utilise l'IA (Google Gemini) pour en générer une synthèse (Chiffre d'affaires, Résultat net, Dividendes, Perspectives), et compile les résultats dans un rapport Microsoft Word.
-3.  **Analyse Technique (`technical_analyzer.py`)**: Utilise les données historiques du Google Sheet pour calculer plusieurs indicateurs techniques (Moyennes Mobiles, Bandes de Bollinger, MACD, RSI, Stochastique) et les inscrit directement dans le Google Sheet.
+1.  **Collecte de Données (`data_collector.py`)** : Scrape les données de marché quotidiennes et les archive dans un Google Sheet.
+2.  **Analyse Technique (`technical_analyzer.py`)** : Calcule les indicateurs techniques (Moyennes Mobiles, Bollinger, MACD, RSI, Stochastique) et les sauvegarde dans le Google Sheet.
+3.  **Analyse Fondamentale (`fundamental_analyzer.py`)** : Scrape les rapports financiers des sociétés et utilise l'IA (Google Gemini) pour les synthétiser.
+4.  **Génération des Rapports (`report_generator.py`)** : Utilise toutes les données collectées pour générer trois documents Word :
+    *   **Rapport de Synthèse Complet** : Une analyse détaillée pour chaque société (cours, technique, fondamental) et une synthèse globale du marché.
+    *   **Rapport Comparatif (Delta)** : Une analyse des changements significatifs par rapport au rapport de la veille.
+    *   **Synthèse des Événements Marquants** : Un résumé des nouvelles analyses fondamentales du jour.
 
-## 🚀 Configuration Initiale
+### Fonctionnalités Avancées
+- **Automatisation Complète** : Le workflow s'exécute chaque jour sans aucune intervention manuelle.
+- **Sauvegarde sur Google Drive** : Tous les rapports générés sont automatiquement sauvegardés dans un Drive Partagé.
+- **Mémoire Persistante** : Le système mémorise les rapports déjà analysés dans une feuille Google Sheet (`ANALYSIS_MEMORY`) pour ne pas les ré-analyser.
+- **Rotation de Clés API** : Gère une liste de plusieurs clés API Gemini pour contourner les limites de quota journalières et par minute.
+
+## ⚙️ Configuration Initiale
 
 Suivez ces étapes pour rendre le projet opérationnel.
 
 ### Étape 1 : Prérequis
 
-- Un compte Google.
-- Un projet sur [Google Cloud Platform](https://console.cloud.google.com/).
-- Un compte GitHub.
+-   Un compte GitHub.
+-   Un ou plusieurs projets sur [Google Cloud Platform](https://console.cloud.google.com/).
 
-### Étape 2 : Configurer le Compte de Service Google
+### Étape 2 : Configuration du Compte de Service Google
 
-Ce script utilise un compte de service pour accéder à votre Google Sheet de manière sécurisée.
+Ce compte est le "bot" qui agira en votre nom.
 
-1.  **Créez un Compte de Service** :
-    - Allez sur la [page des comptes de service](https://console.cloud.google.com/iam-admin/serviceaccounts) de Google Cloud.
-    - Sélectionnez votre projet.
-    - Cliquez sur **"+ CRÉER UN COMPTE DE SERVICE"**.
-    - Donnez-lui un nom (ex: `brvm-suite-bot`) et cliquez sur **"CRÉER ET CONTINUER"**.
-    - Pour le rôle, choisissez **"Éditeur" (Editor)**. Cliquez sur **"OK"**.
+1.  **Créez un Compte de Service** dans un de vos projets Google Cloud et donnez-lui le rôle **"Éditeur"**.
+2.  **Générez une Clé JSON** pour ce compte et téléchargez-la.
+3.  **Créez un Google Sheet** pour stocker vos données.
+4.  **Partagez ce Google Sheet** avec l'adresse e-mail du compte de service (trouvée dans le fichier JSON) en lui donnant le rôle **"Éditeur"**.
+5.  **Créez un Drive Partagé** (Shared Drive) sur Google Drive.
+6.  **Partagez ce Drive Partagé** avec l'adresse e-mail du compte de service en lui donnant le rôle **"Gestionnaire de contenu"**.
+7.  Créez un dossier à l'intérieur de ce Drive Partagé et **copiez l'identifiant de ce dossier** depuis l'URL.
 
-2.  **Générez une Clé JSON** :
-    - Cliquez sur votre nouveau compte de service, allez dans l'onglet **"CLÉS"**.
-    - Cliquez sur **"AJOUTER UNE CLÉ"** -> **"Créer une nouvelle clé"**.
-    - Choisissez le format **JSON** et cliquez sur **"CRÉER"**. Un fichier `.json` sera téléchargé. Gardez-le précieusement.
+### Étape 3 : Création des Clés API Gemini
 
-3.  **Partagez votre Google Sheet** :
-    - Créez un nouveau Google Sheet.
-    - Ouvrez le fichier JSON téléchargé et copiez l'adresse e-mail de la ligne `"client_email"`.
-    - Dans votre Google Sheet, cliquez sur **"Partager"**, collez l'adresse e-mail, donnez-lui les droits **"Éditeur"**, et envoyez.
+Pour des quotas séparés, il est recommandé de créer chaque clé dans un projet Google Cloud différent.
+1.  Dans chaque projet, activez l'**API "Vertex AI"**.
+2.  Créez une **Clé d'API** depuis la section "Identifiants".
 
-### Étape 3 : Activer les APIs Google
+### Étape 4 : Configuration des Secrets GitHub
 
-Assurez-vous que les APIs suivantes sont activées pour votre projet Google Cloud :
-- **Google Sheets API**
-- **Google Drive API**
-- **Vertex AI API** (pour l'utilisation de Gemini)
+Dans votre dépôt GitHub, allez dans `Settings` -> `Secrets and variables` -> `Actions` et créez les secrets suivants :
 
-### Étape 4 : Ajouter les Secrets à GitHub
+-   `GSPREAD_SERVICE_ACCOUNT`: Le contenu complet de votre fichier `.json` de compte de service.
+-   `SPREADSHEET_ID`: L'identifiant de votre Google Sheet.
+-   `DRIVE_FOLDER_ID`: L'identifiant de votre dossier dans le Drive Partagé.
+-   `GOOGLE_API_KEY_1`, `GOOGLE_API_KEY_2`, etc. : Vos différentes clés API Gemini.
 
-Dans votre dépôt GitHub, allez dans `Settings` -> `Secrets and variables` -> `Actions`. Vous devez créer **deux** secrets :
+## 🚀 Exécution
 
-1.  **`GSPREAD_SERVICE_ACCOUNT`**:
-    - **Nom**: `GSPREAD_SERVICE_ACCOUNT`
-    - **Valeur**: Ouvrez le fichier `.json` que vous avez téléchargé, copiez **tout son contenu** et collez-le ici.
+Le workflow s'exécute automatiquement chaque jour. Les trois rapports générés sont disponibles dans les **Artifacts** de chaque exécution et sont sauvegardés dans votre Google Drive.
 
-2.  **`GOOGLE_API_KEY`**:
-    - **Nom**: `GOOGLE_API_KEY`
-    - **Valeur**: [Créez une clé API](https://console.cloud.google.com/apis/credentials) dans votre projet Google Cloud et collez-la ici. Cette clé est nécessaire pour l'analyse par IA.
-
-### Étape 5 : Activer et Tester le Workflow
-
-1.  Allez dans l'onglet **Actions** de votre dépôt GitHub.
-2.  Sur la gauche, cliquez sur **"Full BRVM Analysis Suite"**.
-3.  Cliquez sur le bouton **Run workflow** pour lancer manuellement le script une première fois et vérifier que tout fonctionne.
-4.  L'exécution peut être suivie en temps réel. Le rapport Word généré sera disponible dans les "Artifacts" à la fin de l'exécution.
-
-Le script s'exécutera désormais automatiquement tous les jours à 07h00 UTC.
+## 📁 Structure du Projet
