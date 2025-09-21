@@ -1,7 +1,9 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V1.6 - RETOUR DES NOUVEAUTÉS)
+# MODULE: FUNDAMENTAL ANALYZER (V1.7 - CORRECTION UPLOAD API)
 # ==============================================================================
 
+# ... (tous les imports et le début de la classe restent inchangés) ...
+# ... (copiez-collez tout le début du fichier jusqu'à la fonction _analyze_pdf_with_gemini)
 import gspread
 import requests
 from bs4 import BeautifulSoup
@@ -32,6 +34,7 @@ ANALYSIS_MEMORY_SHEET = 'ANALYSIS_MEMORY'
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
+        # ... (le mapping des sociétés est ici) ...
         self.societes_mapping = {
             'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
@@ -96,107 +99,6 @@ class BRVMAnalyzer:
         self.current_key_index = 0
         self.newly_analyzed_reports = []
 
-    def setup_selenium(self):
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument("--window-size=1920,1080")
-        try:
-            self.driver = webdriver.Chrome(options=chrome_options)
-            logging.info("✅ Pilote Selenium (Chrome) démarré.")
-        except Exception as e:
-            logging.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
-            self.driver = None
-            
-    def authenticate_google_services(self):
-        logging.info("Authentification Google...")
-        try:
-            creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-            if not creds_json_str:
-                logging.error("❌ Secret GSPREAD_SERVICE_ACCOUNT introuvable.")
-                return False
-            creds_dict = json.loads(creds_json_str)
-            scopes = ['https://www.googleapis.com/auth/spreadsheets']
-            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            self.gc = gspread.authorize(creds)
-            logging.info("✅ Authentification Google réussie.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur d'authentification : {e}")
-            return False
-
-    def _load_analysis_memory(self):
-        logging.info("Chargement de la mémoire d'analyse...")
-        try:
-            self.memory_worksheet = self.spreadsheet.worksheet(ANALYSIS_MEMORY_SHEET)
-            logging.info(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' trouvée.")
-        except gspread.exceptions.WorksheetNotFound:
-            logging.warning(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' non trouvée. Création en cours...")
-            self.memory_worksheet = self.spreadsheet.add_worksheet(title=ANALYSIS_MEMORY_SHEET, rows=2000, cols=4)
-            headers = ['URL', 'Symbol', 'Analysis_Summary', 'Analysis_Date']
-            self.memory_worksheet.update('A1:D1', [headers])
-            logging.info(f"Feuille '{ANALYSIS_MEMORY_SHEET}' créée avec les en-têtes.")
-
-        try:
-            records = self.memory_worksheet.get_all_records()
-            self.analysis_memory = {row['URL']: row['Analysis_Summary'] for row in records if row.get('URL')}
-            logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées en mémoire.")
-        except Exception as e:
-            logging.error(f"Impossible de charger les enregistrements de la mémoire : {e}")
-
-    def _save_to_memory(self, symbol, report_url, summary):
-        if not self.memory_worksheet:
-            logging.error("Impossible de sauvegarder en mémoire, la feuille n'est pas initialisée.")
-            return
-        
-        try:
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            row_to_add = [report_url, symbol, summary, timestamp]
-            self.memory_worksheet.append_row(row_to_add, value_input_option='USER_ENTERED')
-            
-            self.analysis_memory[report_url] = summary
-            logging.info(f"    -> Analyse pour {symbol} sauvegardée dans la mémoire persistante.")
-        except Exception as e:
-            logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
-
-    def _configure_gemini_with_rotation(self):
-        for i in range(1, 20):
-            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
-                self.api_keys.append(key)
-
-        if not self.api_keys:
-            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée dans les secrets GitHub.")
-            return False
-            
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini ont été chargées.")
-        
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
-
-    def _rotate_api_key(self):
-        self.current_key_index += 1
-        if self.current_key_index >= len(self.api_keys):
-            logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
-            return False
-        
-        logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini reconfigurée avec succès avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
-
     def _analyze_pdf_with_gemini(self, pdf_url, symbol):
         if pdf_url in self.analysis_memory:
             logging.info(f"    -> Analyse pour {pdf_url} trouvée en mémoire. Utilisation de la version en cache.")
@@ -215,7 +117,12 @@ class BRVMAnalyzer:
                 if len(pdf_content) < 1024:
                     return "Fichier PDF invalide ou vide."
                 
-                uploaded_file = genai.upload_file(files=[{'name': 'report.pdf', 'display_name': 'Rapport Financier BRVM', 'mime_type': 'application/pdf', 'content': pdf_content}])
+                # CORRECTION : La méthode d'upload a changé. On utilise `path` pour un fichier temporaire.
+                temp_pdf_path = "temp_report.pdf"
+                with open(temp_pdf_path, 'wb') as f:
+                    f.write(pdf_content)
+
+                uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier BRVM")
                 
                 prompt = """
                 Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
@@ -242,6 +149,7 @@ class BRVMAnalyzer:
                     analysis_text = "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
                 
                 genai.delete_file(uploaded_file.name)
+                os.remove(temp_pdf_path) # Nettoyage du fichier local
                 
                 if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
                     self._save_to_memory(symbol, pdf_url, analysis_text)
@@ -256,205 +164,15 @@ class BRVMAnalyzer:
             
             except Exception as e:
                 logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
+                # Nettoyage en cas d'erreur
+                if 'uploaded_file' in locals() and uploaded_file:
+                    try: genai.delete_file(uploaded_file.name)
+                    except: pass
+                if os.path.exists("temp_report.pdf"):
+                    os.remove("temp_report.pdf")
                 return f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
         
         return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
 
-    def run_and_get_results(self):
-        logging.info("="*60)
-        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
-        logging.info("="*60)
-        
-        analysis_results = {}
-        try:
-            if not self._configure_gemini_with_rotation(): return {}, []
-            if not self.authenticate_google_services(): return {}, []
-            
-            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
-            self._load_analysis_memory()
-
-            self.setup_selenium()
-            if not self.driver: return {}, []
-            if not self.verify_and_filter_companies(): return {}, []
-            
-            analysis_results = self.process_all_companies()
-            
-            if not analysis_results:
-                logging.warning("❌ Aucun résultat d'analyse à retourner.")
-
-        except Exception as e:
-            logging.critical(f"❌ Une erreur critique a interrompu l'analyse fondamentale: {e}", exc_info=True)
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logging.info("Navigateur Selenium fermé.")
-            logging.info("Processus d'analyse fondamentale terminé.")
-        
-        return (analysis_results, self.newly_analyzed_reports)
-
-    def verify_and_filter_companies(self):
-        try:
-            logging.info(f"Vérification des feuilles dans G-Sheet...")
-            existing_sheets = [ws.title for ws in self.spreadsheet.worksheets()]
-            logging.info(f"Onglets trouvés : {existing_sheets}")
-            symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
-            self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
-            if not self.societes_mapping:
-                logging.error("❌ ERREUR FATALE : Aucune société à analyser.")
-                return False
-            logging.info(f"✅ {len(self.societes_mapping)} sociétés seront analysées.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
-            return False
-
-    def _normalize_text(self, text):
-        if not text: return ""
-        text = text.replace('-', ' ')
-        text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
-        text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
-        return re.sub(r'\s+', ' ', text).strip()
-    
-    def _find_all_reports(self):
-        if not self.driver: return {}
-        base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
-        all_reports = defaultdict(list)
-        company_links = []
-        try:
-            for page_num in range(5): 
-                page_url = f"{base_url}?page={page_num}"
-                logging.info(f"Navigation vers la page de liste : {page_url}")
-                self.driver.get(page_url)
-                try:
-                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
-                except TimeoutException:
-                    logging.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
-                    break
-                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                table_rows = soup.select("table.views-table tbody tr")
-                if not table_rows:
-                    logging.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
-                    break
-                for row in table_rows:
-                    link_tag = row.find('a', href=True)
-                    if link_tag:
-                        company_name_normalized = self._normalize_text(link_tag.text)
-                        company_url = f"https://www.brvm.org{link_tag['href']}"
-                        symbol = self._get_symbol_from_name(company_name_normalized)
-                        if symbol and symbol in self.societes_mapping:
-                            if not any(c['url'] == company_url for c in company_links):
-                                company_links.append({'symbol': symbol, 'url': company_url})
-                time.sleep(1)
-            logging.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
-            for company in company_links:
-                symbol = company['symbol']
-                logging.info(f"--- Collecte des rapports pour {symbol} ---")
-                try:
-                    self.driver.get(company['url'])
-                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
-                    page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                    report_items = page_soup.select("table.views-table tbody tr")
-                    if not report_items:
-                        logging.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
-                        continue
-                    for item in report_items:
-                        pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
-                        if pdf_link_tag:
-                            full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
-                            if not any(r['url'] == full_url for r in all_reports[symbol]):
-                                report_data = {
-                                    'titre': " ".join(item.get_text().split()),
-                                    'url': full_url,
-                                    'date': self._extract_date_from_text(item.get_text())
-                                }
-                                all_reports[symbol].append(report_data)
-                                logging.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
-                    time.sleep(1)
-                except TimeoutException:
-                    logging.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
-                except Exception as e:
-                    logging.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
-        except Exception as e:
-            logging.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
-            return {}
-        return all_reports
-
-    def _get_symbol_from_name(self, company_name_normalized):
-        for symbol, info in self.original_societes_mapping.items():
-            for alt in info['alternatives']:
-                if alt in company_name_normalized:
-                    return symbol
-        return None
-
-    def _extract_date_from_text(self, text):
-        if not text: return datetime(1900, 1, 1)
-        year_match = re.search(r'\b(20\d{2})\b', text)
-        if not year_match: return datetime(1900, 1, 1)
-        year = int(year_match.group(1))
-        text_lower = text.lower()
-        trim_match = re.search(r't(\d)|(\d)\s*er\s*trimestre', text_lower)
-        if trim_match:
-            trimester = int(trim_match.group(1) or trim_match.group(2))
-            return datetime(year, trimester * 3, 1)
-        sem_match = re.search(r's(\d)|(\d)\s*er\s*semestre', text_lower)
-        if sem_match:
-            semester = int(sem_match.group(1) or sem_match.group(2))
-            return datetime(year, 6 if semester == 1 else 12, 1)
-        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
-        return datetime(year, 6, 15)
-
-    def process_all_companies(self):
-        all_reports = self._find_all_reports()
-        results = {}
-        if not all_reports:
-            logging.error("❌ ÉCHEC FINAL : Aucun rapport n'a pu être collecté sur le site de la BRVM.")
-            return {}
-        logging.info(f"\n✅ COLLECTE TERMINÉE : {sum(len(r) for r in all_reports.values())} rapports trouvés au total.")
-        
-        date_2024_start = datetime(2024, 1, 1)
-        date_2025_start = datetime(2025, 1, 1)
-        keywords_financiers = ['états financiers', 'etats financiers', 'certifié', 'commissaires aux comptes', 'rapport annuel']
-
-        for symbol, info in self.societes_mapping.items():
-            logging.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
-            
-            company_reports = all_reports.get(symbol, [])
-            analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
-            reports_to_analyze = []
-            
-            for report in company_reports:
-                report_date = report['date']
-                title_lower = report['titre'].lower()
-                if date_2024_start <= report_date < date_2025_start:
-                    if any(keyword in title_lower for keyword in keywords_financiers):
-                        reports_to_analyze.append(report)
-                elif report_date >= date_2025_start:
-                    reports_to_analyze.append(report)
-            
-            reports_to_analyze.sort(key=lambda x: x['date'], reverse=True)
-            
-            if not reports_to_analyze:
-                analysis_data['statut'] = 'Aucun rapport pertinent trouvé selon les critères de filtrage (date/titre).'
-                results[symbol] = analysis_data
-                continue
-            
-            logging.info(f"  -> {len(reports_to_analyze)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
-
-            for i, report in enumerate(reports_to_analyze):
-                logging.info(f"  -> Traitement rapport {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
-                
-                gemini_analysis = self._analyze_pdf_with_gemini(report['url'], symbol)
-                
-                analysis_data['rapports_analyses'].append({
-                    'titre': report['titre'], 
-                    'url': report['url'], 
-                    'date': report['date'].strftime('%Y-%m-%d'),
-                    'analyse_ia': gemini_analysis
-                })
-                
-                time.sleep(1)
-            
-            results[symbol] = analysis_data
-        
-        logging.info("\n✅ Traitement de toutes les sociétés terminé.")
-        return results
+    # ... (toutes les autres fonctions du fichier sont correctes et restent inchangées)
+    # Copiez-collez l'intégralité du reste du fichier tel qu'il était.
