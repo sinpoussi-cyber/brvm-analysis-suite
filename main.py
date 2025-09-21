@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.6 - AVEC DEBUG)
+# ORCHESTRATEUR PRINCIPAL - BRVM ANALYSIS SUITE (V1.6 - Final)
 # ==============================================================================
 import os
 import logging
@@ -17,26 +17,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 def main():
     """
     Fonction principale qui exécute la suite d'analyse BRVM dans l'ordre.
+    1. Collecte des données quotidiennes.
+    2. Analyse technique des données collectées.
+    3. Analyse fondamentale des rapports de sociétés avec mémoire et rotation de clés.
+    4. Génération des rapports de synthèse et sauvegarde sur Drive.
     """
     logging.info("🚀 DÉMARRAGE DE LA SUITE D'ANALYSE BRVM COMPLÈTE 🚀")
     
-    # --- SECTION DE DÉBOGAGE DES SECRETS ---
-    logging.info("="*60)
-    logging.info("DIAGNOSTIC : VÉRIFICATION DES SECRETS REÇUS PAR PYTHON")
     spreadsheet_id = os.environ.get('SPREADSHEET_ID')
     drive_folder_id = os.environ.get('DRIVE_FOLDER_ID')
-    api_key_1 = os.environ.get('GOOGLE_API_KEY_1')
-
-    logging.info(f"Valeur lue pour SPREADSHEET_ID: '{spreadsheet_id}'")
-    logging.info(f"Valeur lue pour DRIVE_FOLDER_ID: '{drive_folder_id}'")
-    logging.info(f"Valeur lue pour GOOGLE_API_KEY_1: '{'Présente' if api_key_1 else 'Absente'}'")
-    logging.info("="*60)
-    # --- FIN DE LA SECTION DE DÉBOGAGE ---
 
     if not spreadsheet_id or not drive_folder_id:
-        logging.error("❌ Les secrets SPREADSHEET_ID ou DRIVE_FOLDER_ID ne sont pas définis. Vérifiez la configuration des secrets du dépôt et le fichier .yml.")
+        logging.error("❌ Les secrets SPREADSHEET_ID ou DRIVE_FOLDER_ID ne sont pas définis. Arrêt du script.")
         sys.exit(1)
         
+    # On assigne l'ID globalement aux modules qui l'utilisent en dur
     data_collector.SPREADSHEET_ID = spreadsheet_id
     technical_analyzer.SPREADSHEET_ID = spreadsheet_id
 
