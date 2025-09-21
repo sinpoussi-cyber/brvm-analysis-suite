@@ -1,9 +1,7 @@
 # ==============================================================================
 # MODULE: DATA COLLECTOR (V1.2 - ROBUSTE AUX ERREURS API)
-# Description: Récupère les données quotidiennes depuis les BOC de la BRVM.
 # ==============================================================================
 
-# --- Imports ---
 import re
 import time
 import difflib
@@ -22,11 +20,11 @@ import gspread
 from google.oauth2 import service_account
 import urllib3
 
-# --- Configuration du Logging ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- Paramètres Globaux ---
-SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
+# Variable globale qui sera surchargée par main.py
+SPREADSHEET_ID = ''
+
 DEFAULT_HEADERS = ["Symbole", "Date", "Cours (F CFA)", "Volume échangé", "Valeurs échangées (F CFA)"]
 
 KEYS = {
@@ -37,7 +35,6 @@ KEYS = {
     "valeurs": ["VALEUR", "MONTANT", "VALEURS"]
 }
 
-# --- Fonctions Utilitaires ---
 def normalize_text(s):
     if s is None: return ""
     s = str(s)
@@ -51,7 +48,6 @@ def extract_date_from_filename(url):
     m = re.search(r'boc_(\d{8})', url, flags=re.IGNORECASE)
     return m.group(1) if m else None
 
-# --- Authentification via Compte de Service ---
 def authenticate_google_services():
     logging.info("Authentification via compte de service Google...")
     try:
@@ -69,7 +65,6 @@ def authenticate_google_services():
         logging.error(f"❌ Erreur d'authentification : {e}")
         return None
 
-# --- Fonctions Principales ---
 def prepare_worksheets_metadata(spreadsheet):
     ws_meta = {}
     title_to_ws = {ws.title: ws for ws in spreadsheet.worksheets()}
@@ -135,7 +130,6 @@ def prepare_worksheets_metadata(spreadsheet):
     return ws_meta, title_to_ws
 
 def get_boc_links():
-    # ... (code inchangé)
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     r = requests.get(url, verify=False, timeout=30)
     soup = BeautifulSoup(r.content, 'html.parser')
@@ -151,16 +145,13 @@ def get_boc_links():
     return sorted(list(links), key=lambda u: extract_date_from_filename(u) or '')
 
 def extract_data_from_pdf(pdf_url):
-    # ... (code inchangé)
     logging.info(f"Téléchargement et analyse du PDF: {pdf_url}")
     try:
         r = requests.get(pdf_url, verify=False, timeout=30)
         pdf_file = BytesIO(r.content)
         data = []
-
         with pdfplumber.open(pdf_file) as pdf:
             pages_to_try = [p for p in [2, 3] if p < len(pdf.pages)]
-
             for pidx in pages_to_try:
                 page = pdf.pages[pidx]
                 tables = page.extract_tables() or []
@@ -168,27 +159,20 @@ def extract_data_from_pdf(pdf_url):
                     for row in table:
                         row = [(cell.strip() if cell else "") for cell in row]
                         if len(row) < 8: continue
-                        
                         vol, val = row[-8], row[-7]
                         cours = row[-6] if len(row) >= 6 else ""
                         symbole = row[1] if len(row) > 1 and row[1] else row[0]
-
                         if re.search(r'\d', str(vol)) or re.search(r'\d', str(val)):
-                            data.append({
-                                "Symbole": symbole, "Cours (F CFA)": cours,
-                                "Volume échangé": vol, "Valeurs échangées (F CFA)": val
-                            })
+                            data.append({"Symbole": symbole, "Cours (F CFA)": cours, "Volume échangé": vol, "Valeurs échangées (F CFA)": val})
         return data
     except Exception as e:
         logging.error(f"Erreur lors de l'extraction des données du PDF {pdf_url}: {e}")
         return []
 
 def find_worksheet_title_for_symbol(raw_symbol, norm_to_title, norm_titles_list):
-    # ... (code inchangé)
     s_norm = normalize_text(raw_symbol)
     if s_norm in norm_to_title:
         return norm_to_title[s_norm]
-    
     matches = difflib.get_close_matches(s_norm, norm_titles_list, n=1, cutoff=0.7)
     return norm_to_title[matches[0]] if matches else None
 
@@ -201,34 +185,28 @@ def run_data_collection():
     if not gc:
         return
 
-    # MODIFIÉ : Ajout d'une boucle de nouvelle tentative pour l'ouverture du fichier
     spreadsheet = None
     max_retries = 3
     for attempt in range(max_retries):
         try:
             spreadsheet = gc.open_by_key(SPREADSHEET_ID)
             logging.info("✅ Fichier Google Sheet ouvert avec succès.")
-            break  # Sortir de la boucle si l'ouverture réussit
+            break
         except gspread.exceptions.APIError as e:
-            # Réessayer uniquement pour les erreurs serveur (5xx)
             if e.response.status_code >= 500:
                 wait_time = 10 * (attempt + 1)
-                logging.warning(f"Erreur 5xx de l'API Google. Le service est peut-être indisponible. Nouvelle tentative dans {wait_time} secondes... ({attempt + 1}/{max_retries})")
+                logging.warning(f"Erreur 5xx de l'API Google. Nouvelle tentative dans {wait_time} secondes... ({attempt + 1}/{max_retries})")
                 time.sleep(wait_time)
             else:
                 logging.error(f"Erreur API non récupérable : {e}")
-                raise e # Lève l'exception pour les autres erreurs (ex: 403 Forbidden)
+                raise e
     
     if not spreadsheet:
-        logging.error("❌ Impossible d'ouvrir le Google Sheet après plusieurs tentatives. Arrêt de l'étape de collecte.")
-        # Lève une exception pour que main.py puisse arrêter l'exécution complète
-        raise ConnectionError("Échec de la connexion à l'API Google Sheets.")
+        raise ConnectionError("Échec de la connexion à l'API Google Sheets après plusieurs tentatives.")
 
     ws_meta, title_to_ws = prepare_worksheets_metadata(spreadsheet)
-    
     norm_to_title = {normalize_text(title): title for title in title_to_ws.keys()}
     norm_titles_list = list(norm_to_title.keys())
-
     boc_links = get_boc_links()
     logging.info(f"{len(boc_links)} BOCs pertinents trouvés.")
     
@@ -237,8 +215,7 @@ def run_data_collection():
 
     for boc in boc_links:
         date_yyyymmdd = extract_date_from_filename(boc)
-        if not date_yyyymmdd:
-            continue
+        if not date_yyyymmdd: continue
         
         try:
             formatted_date = datetime.strptime(date_yyyymmdd, '%Y%m%d').strftime('%d/%m/%Y')
@@ -254,11 +231,10 @@ def run_data_collection():
             
             if ws_title:
                 meta = ws_meta.get(ws_title)
-                if meta and formatted_date in meta['existing_dates']:
-                    continue
+                if meta and formatted_date in meta['existing_dates']: continue
                 
                 inds = meta['indices']
-                width = max(len(meta['header']), max(inds.values()) + 1) if meta['header'] else max(inds.values()) + 1
+                width = max(len(meta['header']), max(inds.values()) + 1) if meta.get('header') else max(inds.values()) + 1
                 row = [""] * width
                 
                 row[inds['sym']] = raw_sym
