@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V2.1 - CORRECTION DRIVE PARTAGÉ)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V2.2 - GESTION INTELLIGENTE DES API)
 # ==============================================================================
 
 import gspread
@@ -24,8 +24,49 @@ class ComprehensiveReportGenerator:
         self.gemini_model = None
         self.spreadsheet = None
         self.drive_service = None
+        
+        # Propriétés pour la gestion intelligente des API
         self.api_keys = []
         self.current_key_index = 0
+        self.request_count_per_key = {}
+        self.max_requests_per_key = 48
+        self.failed_keys = set()
+        self.current_key_number = None
+
+    def _load_all_api_keys(self):
+        """Charge toutes les clés API disponibles"""
+        loaded_keys = []
+        for i in range(1, 200):
+            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
+            if key:
+                loaded_keys.append((i, key))
+                self.request_count_per_key[i] = 0
+        
+        import random
+        random.shuffle(loaded_keys)
+        
+        self.api_keys = loaded_keys
+        logging.info(f"✅ Générateur de rapport: {len(self.api_keys)} clé(s) API chargées")
+        return len(self.api_keys) > 0
+    
+    def _find_next_available_key(self):
+        """Trouve la prochaine clé API disponible"""
+        starting_index = self.current_key_index
+        
+        while True:
+            if self.current_key_index >= len(self.api_keys):
+                self.current_key_index = 0
+            
+            key_number, key_value = self.api_keys[self.current_key_index]
+            
+            if (key_number not in self.failed_keys and 
+                self.request_count_per_key.get(key_number, 0) < self.max_requests_per_key):
+                return key_number, key_value
+            
+            self.current_key_index += 1
+            
+            if self.current_key_index == starting_index:
+                return None, None
 
     def _authenticate_google_services(self):
         logging.info("Générateur de rapport: Authentification Google Services...")
@@ -48,64 +89,115 @@ class ComprehensiveReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur lors de l'authentification : {e}")
             return False
-            
+
     def _configure_gemini_with_rotation(self):
-        for i in range(1, 20):
-            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
-                self.api_keys.append(key)
-        if not self.api_keys:
-            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée.")
+        """Configure Gemini avec rotation intelligente"""
+        if not self._load_all_api_keys():
+            logging.error("❌ Générateur: Aucune clé API trouvée")
             return False
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées pour le générateur de rapport.")
+        return self._setup_next_key()
+
+    def _setup_next_key(self):
+        """Configure la prochaine clé disponible"""
+        key_number, key_value = self._find_next_available_key()
+        
+        if not key_value:
+            logging.error("❌ Générateur: Toutes les clés API épuisées")
+            return False
+        
         try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
+            genai.configure(api_key=key_value)
             self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
+            self.current_key_number = key_number
+            logging.info(f"✅ Générateur: Clé API #{key_number} configurée")
             return True
         except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
+            logging.warning(f"⚠️ Générateur: Erreur clé #{key_number}: {e}")
+            self.failed_keys.add(key_number)
+            self.current_key_index += 1
+            return self._setup_next_key()
 
     def _rotate_api_key(self):
-        self.current_key_index += 1
-        if self.current_key_index >= len(self.api_keys):
-            logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
-            return False
-        logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini reconfigurée avec succès avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
+        """Rotation vers la prochaine clé"""
+        return self._setup_next_key()
 
     def _call_gemini_with_retry(self, prompt):
+        """Appel Gemini avec gestion intelligente des erreurs"""
         if not self.gemini_model:
             return "Erreur : le modèle Gemini n'est pas initialisé."
-        max_retries = len(self.api_keys)
-        for attempt in range(max_retries):
+        
+        max_attempts = min(len(self.api_keys), 10)  # Limiter les tentatives
+        
+        for attempt in range(max_attempts):
+            # Vérifier le quota préventif
+            current_usage = self.request_count_per_key.get(self.current_key_number, 0)
+            if current_usage >= self.max_requests_per_key:
+                logging.info(f"Générateur: Quota préventif atteint pour clé #{self.current_key_number}")
+                if not self._setup_next_key():
+                    return "Erreur : Toutes les clés API ont atteint leur quota"
+                continue
+            
             try:
                 response = self.gemini_model.generate_content(prompt)
-                return response.text
+                
+                # Incrémenter le compteur
+                self.request_count_per_key[self.current_key_number] += 1
+                
+                if hasattr(response, 'text') and response.text:
+                    return response.text
+                elif response.prompt_feedback:
+                    return f"Contenu bloqué : {response.prompt_feedback.block_reason.name}"
+                else:
+                    return "Erreur : réponse vide de l'API"
+                    
             except api_exceptions.ResourceExhausted as e:
-                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. ({e})")
-                if not self._rotate_api_key():
-                    return "Erreur d'analyse : Toutes les clés API ont atteint leur quota."
+                logging.warning(f"Générateur: Quota atteint pour clé #{self.current_key_number}")
+                self.failed_keys.add(self.current_key_number)
+                if not self._setup_next_key():
+                    return "Erreur : Toutes les clés API ont atteint leur quota"
+                continue
+                
             except Exception as e:
-                logging.error(f"Erreur inattendue lors de l'appel à Gemini : {e}")
-                return f"Erreur technique lors de l'appel à l'IA : {e}"
-        return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
+                logging.error(f"Générateur: Erreur inattendue : {e}")
+                return f"Erreur technique : {str(e)}"
+        
+        return "Erreur : Échec après plusieurs tentatives"
+
+    def _upload_to_drive(self, filepath):
+        """Version corrigée pour Drive Partagé"""
+        try:
+            file_metadata = {'name': os.path.basename(filepath), 'parents': [self.drive_folder_id]}
+            media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            uploaded_file = self.drive_service.files().create(
+                body=file_metadata, 
+                media_body=media, 
+                fields='id,name', 
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            logging.info(f"✅ Fichier '{uploaded_file.get('name')}' sauvegardé sur Google Drive (ID: {uploaded_file.get('id')})")
+            return uploaded_file.get('id')
+        except Exception as e:
+            if "storageQuotaExceeded" in str(e):
+                logging.error("❌ ERREUR CRITIQUE : Vous devez utiliser un Drive Partagé (Shared Drive)")
+                logging.error("   Solution : Créez un Drive Partagé et utilisez l'ID d'un dossier à l'intérieur")
+            else:
+                logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
+            return None
 
     def _find_latest_report_in_drive(self):
+        """Version corrigée pour Drive Partagé"""
         logging.info(f"Recherche du dernier rapport dans le dossier Drive ID: {self.drive_folder_id}")
         try:
             query = f"'{self.drive_folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document' and name contains 'Rapport_Synthese_'"
             results = self.drive_service.files().list(
-                q=query, pageSize=1, fields="files(id, name)", orderBy="name desc", 
-                supportsAllDrives=True, includeItemsFromAllDrives=True
+                q=query, 
+                pageSize=1, 
+                fields="files(id, name)", 
+                orderBy="name desc",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                supportsTeamDrives=True
             ).execute()
             items = results.get('files', [])
             if not items:
@@ -119,35 +211,29 @@ class ComprehensiveReportGenerator:
             return None, None
 
     def _download_drive_file(self, file_id):
+        """Version corrigée pour Drive Partagé"""
         try:
-            request = self.drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+            request = self.drive_service.files().get_media(
+                fileId=file_id, 
+                supportsAllDrives=True
+            )
             file_bytes = BytesIO()
-            downloader = request
-            file_bytes.write(downloader.execute())
+            file_bytes.write(request.execute())
             file_bytes.seek(0)
             return file_bytes
         except Exception as e:
             logging.error(f"  -> Impossible de télécharger le fichier {file_id}: {e}")
             return None
 
-    def _upload_to_drive(self, filepath):
-        try:
-            file_metadata = {'name': os.path.basename(filepath), 'parents': [self.drive_folder_id]}
-            media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-            self.drive_service.files().create(
-                body=file_metadata, media_body=media, fields='id', supportsAllDrives=True
-            ).execute()
-            logging.info(f"✅ Fichier '{os.path.basename(filepath)}' sauvegardé sur Google Drive.")
-        except Exception as e:
-            logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
-
     def _generate_delta_report(self, new_report_path):
         latest_file_id, latest_file_name = self._find_latest_report_in_drive()
-        if not latest_file_id: return
+        if not latest_file_id: 
+            return
 
         logging.info("Génération du rapport comparatif (delta)...")
         old_file_bytes = self._download_drive_file(latest_file_id)
-        if not old_file_bytes: return
+        if not old_file_bytes: 
+            return
         
         try:
             old_doc = Document(old_file_bytes)
@@ -215,7 +301,8 @@ class ComprehensiveReportGenerator:
         try:
             worksheet = self.spreadsheet.worksheet(sheet_name)
             data = worksheet.get_all_values()
-            if len(data) < 2: return None
+            if len(data) < 2: 
+                return None
             headers = data[0]
             df = pd.DataFrame(data[1:], columns=headers)
             return df
@@ -273,6 +360,20 @@ class ComprehensiveReportGenerator:
         """
         return self._call_gemini_with_retry(prompt)
 
+    def get_usage_stats(self):
+        """Statistiques d'utilisation des API"""
+        total_requests = sum(self.request_count_per_key.values())
+        active_keys = len([k for k in self.request_count_per_key.keys() if k not in self.failed_keys])
+        failed_keys_count = len(self.failed_keys)
+        
+        return {
+            'total_keys': len(self.api_keys),
+            'active_keys': active_keys,
+            'failed_keys': failed_keys_count,
+            'total_requests': total_requests,
+            'current_key': self.current_key_number
+        }
+
     def generate_report(self, fundamental_results, new_fundamental_analyses):
         if not self._authenticate_google_services() or not self._configure_gemini_with_rotation():
             logging.error("Arrêt du générateur de rapport en raison d'un problème d'initialisation.")
@@ -292,98 +393,4 @@ class ComprehensiveReportGenerator:
             if not date_col or not price_col:
                 logging.error(f"  -> Colonnes 'Date' ou 'Cours' introuvables pour {sheet_name}. Feuille ignorée.")
                 continue
-            df[price_col] = pd.to_numeric(df[price_col], errors='coerce')
-            df.dropna(subset=[price_col], inplace=True)
-            df = df.tail(50).reset_index(drop=True)
-            if df.empty:
-                logging.warning(f"  -> Pas de données valides après nettoyage pour {sheet_name}. Feuille ignorée.")
-                continue
-
-            price_analysis = self._analyze_price_evolution(df, date_col, price_col)
-            indicator_cols = ['MM5', 'MM10', 'MM20', 'MM50', 'Bande_centrale', 'Bande_Inferieure', 'Bande_Supérieure', 'Ligne MACD', 'Ligne de signal', 'Histogramme', 'RSI', '%K', '%D']
-            df_indicators = df.loc[:, df.columns.isin(indicator_cols)].copy()
-            technical_analysis = self._analyze_technical_indicators(df_indicators)
-            fundamental_data = fundamental_results.get(sheet_name, {})
-            fundamental_summary = self._summarize_fundamental_analysis(fundamental_data)
-            
-            company_reports[sheet_name] = {
-                'price_analysis': price_analysis,
-                'technical_analysis': technical_analysis,
-                'fundamental_summary': fundamental_summary,
-                'nom_societe': fundamental_data.get('nom', sheet_name)
-            }
-            logging.info(f"  -> Analyses pour {sheet_name} terminées.")
-
-        if not company_reports:
-            logging.error("Aucune donnée n'a pu être analysée. Le rapport final ne sera pas généré.")
-            return
-            
-        main_doc_path = self._create_main_report(company_reports)
-        if main_doc_path:
-            self._upload_to_drive(main_doc_path)
-            self._generate_delta_report(main_doc_path)
-        
-        self._generate_market_events_report(new_fundamental_analyses)
-
-    def _create_main_report(self, company_reports):
-        logging.info("Création du rapport de synthèse principal...")
-        doc = Document()
-        doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
-        
-        doc.add_heading('Synthèse Globale du Marché', level=1)
-        
-        global_summary_text = "Voici un aperçu des analyses individuelles :\n\n"
-        for symbol, reports in company_reports.items():
-            nom_societe = reports.get('nom_societe') or symbol
-            global_summary_text += f"**{nom_societe} ({symbol})**\n"
-            price_first_line = reports['price_analysis'].splitlines()[0] if reports['price_analysis'] else "Non disponible."
-            fundamental_first_line = reports['fundamental_summary'].splitlines()[0] if reports['fundamental_summary'] and "Aucune analyse" not in reports['fundamental_summary'] else 'Non disponible.'
-            global_summary_text += f"- Tendance du cours: {price_first_line}\n"
-            global_summary_text += f"- Fondamentaux: {fundamental_first_line}\n\n"
-            
-        prompt_global = f"""
-        Tu es le directeur de la recherche d'une banque d'investissement. Rédige une synthèse exécutive (un "executive summary") pour un rapport de marché sur la BRVM, basé sur les résumés individuels suivants.
-        Données:
-        {global_summary_text}
-        La synthèse doit inclure:
-        1. Un paragraphe sur le sentiment général du marché.
-        2. Une liste à puces "Actions à Surveiller (Signaux Positifs)" avec une justification d'une ligne pour chacune.
-        3. Une liste à puces "Actions à Considérer avec Prudence" avec une justification d'une ligne pour chacune.
-        Sois concis et professionnel.
-        """
-        global_summary = self._call_gemini_with_retry(prompt_global)
-        doc.add_paragraph(global_summary)
-        doc.add_page_break()
-
-        for symbol, reports in company_reports.items():
-            nom_societe = reports.get('nom_societe') or symbol
-            doc.add_heading(f'Analyse Détaillée : {nom_societe} ({symbol})', level=1)
-            
-            doc.add_heading('1. Évolution du Cours (50 derniers jours)', level=2)
-            doc.add_paragraph(reports['price_analysis'])
-            
-            doc.add_heading('2. Analyse Technique des Indicateurs', level=2)
-            doc.add_paragraph(reports['technical_analysis'])
-            
-            doc.add_heading('3. Synthèse Fondamentale', level=2)
-            doc.add_paragraph(reports['fundamental_summary'])
-
-            doc.add_heading('4. Conclusion d\'Investissement', level=2)
-            prompt_conclusion = f"""
-            Synthétise les trois analyses suivantes (évolution du cours, indicateurs techniques, et fondamentaux) pour {nom_societe} en une conclusion d'investissement finale.
-            Analyse du Cours:
-            {reports['price_analysis']}
-            Analyse Technique:
-            {reports['technical_analysis']}
-            Analyse Fondamentale:
-            {reports['fundamental_summary']}
-            Rédige un paragraphe de conclusion qui combine les signaux techniques, la tendance du cours et la santé financière de l'entreprise pour donner un avis global et nuancé.
-            """
-            conclusion = self._call_gemini_with_retry(prompt_conclusion)
-            doc.add_paragraph(conclusion)
-            doc.add_page_break()
-
-        output_filename = f"Rapport_Synthese_Investissement_BRVM_{time.strftime('%Y%m%d_%H%M')}.docx"
-        doc.save(output_filename)
-        logging.info(f"🎉 Rapport de synthèse principal généré : {output_filename}")
-        return output_filename
+            df[price_col] = pd.to_numeric(df[price_
