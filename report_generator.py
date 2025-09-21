@@ -104,7 +104,8 @@ class ComprehensiveReportGenerator:
         try:
             query = f"'{self.drive_folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document' and name contains 'Rapport_Synthese_'"
             results = self.drive_service.files().list(
-                q=query, pageSize=1, fields="files(id, name)", orderBy="name desc", supportsAllDrives=True, includeItemsFromAllDrives=True
+                q=query, pageSize=1, fields="files(id, name)", orderBy="name desc", 
+                supportsAllDrives=True, includeItemsFromAllDrives=True
             ).execute()
             items = results.get('files', [])
             if not items:
@@ -300,7 +301,7 @@ class ComprehensiveReportGenerator:
 
             price_analysis = self._analyze_price_evolution(df, date_col, price_col)
             indicator_cols = ['MM5', 'MM10', 'MM20', 'MM50', 'Bande_centrale', 'Bande_Inferieure', 'Bande_Supérieure', 'Ligne MACD', 'Ligne de signal', 'Histogramme', 'RSI', '%K', '%D']
-            df_indicators = df.loc[:, indicator_cols].copy()
+            df_indicators = df.loc[:, df.columns.isin(indicator_cols)].copy()
             technical_analysis = self._analyze_technical_indicators(df_indicators)
             fundamental_data = fundamental_results.get(sheet_name, {})
             fundamental_summary = self._summarize_fundamental_analysis(fundamental_data)
