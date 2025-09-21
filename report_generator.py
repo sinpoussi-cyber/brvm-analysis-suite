@@ -334,7 +334,8 @@ class ComprehensiveReportGenerator:
         
         global_summary_text = "Voici un aperçu des analyses individuelles :\n\n"
         for symbol, reports in company_reports.items():
-            global_summary_text += f"**{reports['nom_societe']} ({symbol})**\n"
+            nom_societe = reports.get('nom_societe') or symbol
+            global_summary_text += f"**{nom_societe} ({symbol})**\n"
             price_first_line = reports['price_analysis'].splitlines()[0] if reports['price_analysis'] else "Non disponible."
             fundamental_first_line = reports['fundamental_summary'].splitlines()[0] if reports['fundamental_summary'] and "Aucune analyse" not in reports['fundamental_summary'] else 'Non disponible.'
             global_summary_text += f"- Tendance du cours: {price_first_line}\n"
@@ -355,7 +356,7 @@ class ComprehensiveReportGenerator:
         doc.add_page_break()
 
         for symbol, reports in company_reports.items():
-            nom_societe = reports['nom_societe']
+            nom_societe = reports.get('nom_societe') or symbol
             doc.add_heading(f'Analyse Détaillée : {nom_societe} ({symbol})', level=1)
             
             doc.add_heading('1. Évolution du Cours (50 derniers jours)', level=2)
