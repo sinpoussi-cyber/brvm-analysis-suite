@@ -1,7 +1,6 @@
 # ==============================================================================
 # MODULE: FUNDAMENTAL ANALYZER (V1.7 - CORRECTION UPLOAD API)
 # ==============================================================================
-
 import gspread
 import requests
 from bs4 import BeautifulSoup
@@ -85,11 +84,9 @@ class BRVMAnalyzer:
         self.original_societes_mapping = self.societes_mapping.copy()
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
-        
         self.spreadsheet = None
         self.memory_worksheet = None
         self.analysis_memory = {}
-        
         self.api_keys = []
         self.current_key_index = 0
         self.newly_analyzed_reports = []
@@ -159,7 +156,6 @@ class BRVMAnalyzer:
             logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
 
     def _configure_gemini_with_rotation(self):
-        """Charge toutes les clés API Gemini depuis les variables d'environnement."""
         for i in range(1, 20): 
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
@@ -181,7 +177,6 @@ class BRVMAnalyzer:
             return self._rotate_api_key()
 
     def _rotate_api_key(self):
-        """Passe à la clé API suivante dans la liste."""
         self.current_key_index += 1
         if self.current_key_index >= len(self.api_keys):
             logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
@@ -238,7 +233,7 @@ class BRVMAnalyzer:
                 response = self.gemini_model.generate_content([prompt, uploaded_file])
                 
                 analysis_text = ""
-                if response.parts:
+                if hasattr(response, 'text'):
                     analysis_text = response.text
                 elif response.prompt_feedback:
                     block_reason = response.prompt_feedback.block_reason.name
@@ -263,7 +258,7 @@ class BRVMAnalyzer:
             finally:
                 if uploaded_file:
                     try: genai.delete_file(uploaded_file.name)
-                    except: pass
+                    except Exception as del_e: logging.warning(f"Impossible de supprimer le fichier uploadé {uploaded_file.name}: {del_e}")
                 if os.path.exists(temp_pdf_path):
                     os.remove(temp_pdf_path)
         
