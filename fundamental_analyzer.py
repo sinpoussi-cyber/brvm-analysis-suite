@@ -7,8 +7,6 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import re
-from docx import Document
-from docx.shared import Pt
 import os
 from datetime import datetime
 import logging
