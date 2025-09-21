@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V2.0 - GOOGLE DRIVE & RAPPORTS AVANCÉS)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V2.1 - CORRECTION DRIVE PARTAGÉ)
 # ==============================================================================
 
 import gspread
@@ -104,7 +104,7 @@ class ComprehensiveReportGenerator:
         try:
             query = f"'{self.drive_folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document' and name contains 'Rapport_Synthese_'"
             results = self.drive_service.files().list(
-                q=query, pageSize=1, fields="files(id, name)", orderBy="name desc"
+                q=query, pageSize=1, fields="files(id, name)", orderBy="name desc", supportsAllDrives=True, includeItemsFromAllDrives=True
             ).execute()
             items = results.get('files', [])
             if not items:
@@ -119,7 +119,7 @@ class ComprehensiveReportGenerator:
 
     def _download_drive_file(self, file_id):
         try:
-            request = self.drive_service.files().get_media(fileId=file_id)
+            request = self.drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
             file_bytes = BytesIO()
             downloader = request
             file_bytes.write(downloader.execute())
@@ -133,7 +133,9 @@ class ComprehensiveReportGenerator:
         try:
             file_metadata = {'name': os.path.basename(filepath), 'parents': [self.drive_folder_id]}
             media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-            self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            self.drive_service.files().create(
+                body=file_metadata, media_body=media, fields='id', supportsAllDrives=True
+            ).execute()
             logging.info(f"✅ Fichier '{os.path.basename(filepath)}' sauvegardé sur Google Drive.")
         except Exception as e:
             logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
@@ -317,8 +319,8 @@ class ComprehensiveReportGenerator:
             
         main_doc_path = self._create_main_report(company_reports)
         if main_doc_path:
-            self._upload_to_drive(main_doc_path)
             self._generate_delta_report(main_doc_path)
+            self._upload_to_drive(main_doc_path)
         
         self._generate_market_events_report(new_fundamental_analyses)
 
