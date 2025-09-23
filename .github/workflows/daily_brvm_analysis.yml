@@ -1,27 +1,21 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V2.0 - Develop)
+# Workflow GitHub Actions pour la MIGRATION DE DONNÉES (À exécuter une seule fois)
 # ==============================================================================
-name: Full BRVM Analysis Suite (Develop Branch)
+name: DEV - Database Migration
 
 on:
-  # Se déclenche manuellement depuis l'onglet Actions
-  workflow_dispatch:
-  # Se déclenche aussi quand on pousse du code sur la branche 'develop'
-  push:
-    branches:
-      - develop
+  workflow_dispatch: # Permet un lancement manuel
 
 jobs:
-  run-analysis-suite:
+  run-migration:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+      - name: Checkout develop branch
         uses: actions/checkout@v4
-        # Assurez-vous qu'il récupère bien le code de la branche 'develop'
         with:
-          ref: develop
+          ref: develop # Assurez-vous que cette ligne est bien présente
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,8 +27,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # NOUVELLE ÉTAPE : Configuration de la base de données en ligne
-      - name: Setup Database
+      - name: Run Database Setup (Just in case)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -42,35 +35,16 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
         run: python database_setup.py
-        
-      # ÉTAPE SUIVANTE (à activer plus tard) : Migration des données
-      # - name: Migrate Data from GSheet to Database
-      #   env:
-      #     SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      #     GSPREAD_SERVICE_ACCOUNT_LOCAL_JSON: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      #     DB_NAME: ${{ secrets.DB_NAME }}
-      #     DB_USER: ${{ secrets.DB_USER }}
-      #     DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      #     DB_HOST: ${{ secrets.DB_HOST }}
-      #     DB_PORT: ${{ secrets.DB_PORT }}
-      #   run: python migrate_from_gsheet.py
-        
-      # ÉTAPE D'EXÉCUTION PRINCIPALE (désactivée pour le moment)
-      # - name: Run BRVM Analysis Suite
-      #   env:
-      #     GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      #     SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      #     DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-      #     GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-      #     GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-      #     # ... Ajoutez toutes vos autres clés API ici
-      #   run: python main.py
 
-      - name: Upload All Reports Artifact
-        if: always() # S'exécute toujours pour récupérer les logs même en cas d'erreur
-        uses: actions/upload-artifact@v4
-        with:
-          name: Rapports-BRVM-Analyse-(Develop)
-          path: |
-            ./Rapport_*.docx
-            ./Synthese_*.docx
+      - name: Run Data Migration Script
+        env:
+          # Secrets pour la base de données
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          # Secrets pour Google Sheets
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python migrate_from_gsheet.py
