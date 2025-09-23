@@ -1,7 +1,7 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la MIGRATION DE DONNÉES (À exécuter une seule fois)
+# FICHIER TEMPORAIRE - WORKFLOW DE MIGRATION DE DONNÉES
 # ==============================================================================
-name: DEV - Database Migration
+name: Full BRVM Analysis Suite # NE PAS CHANGER LE NOM ICI
 
 on:
   workflow_dispatch: # Permet un lancement manuel
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout develop branch
         uses: actions/checkout@v4
         with:
-          ref: develop # Assurez-vous que cette ligne est bien présente
+          ref: develop # Assure qu'on utilise le code de la branche 'develop'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,7 +27,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Database Setup (Just in case)
+      - name: Run Database Setup
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
