@@ -1,14 +1,15 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.7 - Final)
+# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V2.0 - Develop)
 # ==============================================================================
-name: Full BRVM Analysis Suite
+name: Full BRVM Analysis Suite (Develop Branch)
 
 on:
-  schedule:
-    # S'exécute tous les jours à 07h00 UTC
-    - cron: '0 7 * * *'
-  
+  # Se déclenche manuellement depuis l'onglet Actions
   workflow_dispatch:
+  # Se déclenche aussi quand on pousse du code sur la branche 'develop'
+  push:
+    branches:
+      - develop
 
 jobs:
   run-analysis-suite:
@@ -18,9 +19,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup Chrome for Selenium
-        uses: browser-actions/setup-chrome@latest
+        # Assurez-vous qu'il récupère bien le code de la branche 'develop'
+        with:
+          ref: develop
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,29 +33,44 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run BRVM Analysis Suite
+      # NOUVELLE ÉTAPE : Configuration de la base de données en ligne
+      - name: Setup Database
         env:
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-        run: python main.py
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: python database_setup.py
+        
+      # ÉTAPE SUIVANTE (à activer plus tard) : Migration des données
+      # - name: Migrate Data from GSheet to Database
+      #   env:
+      #     SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      #     GSPREAD_SERVICE_ACCOUNT_LOCAL_JSON: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+      #     DB_NAME: ${{ secrets.DB_NAME }}
+      #     DB_USER: ${{ secrets.DB_USER }}
+      #     DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      #     DB_HOST: ${{ secrets.DB_HOST }}
+      #     DB_PORT: ${{ secrets.DB_PORT }}
+      #   run: python migrate_from_gsheet.py
+        
+      # ÉTAPE D'EXÉCUTION PRINCIPALE (désactivée pour le moment)
+      # - name: Run BRVM Analysis Suite
+      #   env:
+      #     GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+      #     SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      #     DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      #     GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+      #     GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+      #     # ... Ajoutez toutes vos autres clés API ici
+      #   run: python main.py
 
       - name: Upload All Reports Artifact
-        if: always()
+        if: always() # S'exécute toujours pour récupérer les logs même en cas d'erreur
         uses: actions/upload-artifact@v4
         with:
-          name: Rapports-BRVM-Analyse
+          name: Rapports-BRVM-Analyse-(Develop)
           path: |
             ./Rapport_*.docx
             ./Synthese_*.docx
