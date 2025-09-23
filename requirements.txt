@@ -12,3 +12,5 @@ numpy
 openpyxl
 blinker==1.6.2
 google-api-python-client
+python-dotenv
+psycopg2-binary
