@@ -1,10 +1,11 @@
 # ==============================================================================
-# MODULE: MIGRATE FROM GOOGLE SHEETS TO POSTGRESQL (V1.1 - FOR GITHUB ACTIONS)
+# MODULE: MIGRATE FROM GOOGLE SHEETS TO POSTGRESQL (V1.2 - CORRIGÉ)
 # ==============================================================================
 
 import gspread
 import psycopg2
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 import logging
@@ -86,7 +87,7 @@ def migrate_data():
                 continue
 
             logging.info(f"\n--- Migration des données pour la feuille: '{sheet_name}' ---")
-            time.sleep(5)  # Pause pour respecter les limites de l'API GSheets
+            time.sleep(5) 
             data = ws.get_all_values()
 
             if not data or len(data) < 2:
@@ -96,18 +97,18 @@ def migrate_data():
             headers = data[0]
             df = pd.DataFrame(data[1:], columns=headers)
 
-            # --- 1. Insertion dans la table 'companies' ---
             cur.execute("INSERT INTO companies (symbol, name) VALUES (%s, %s) ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name RETURNING id;", (sheet_name, sheet_name))
             company_id = cur.fetchone()[0]
             logging.info(f"  -> Société '{sheet_name}' (ID: {company_id}) insérée/vérifiée.")
 
-            # --- 2. Migration des données historiques et techniques ---
             if 'Date' in df.columns and 'Cours (F CFA)' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
-                # Nettoyer les colonnes numériques
+                
                 for col in df.columns:
                     if col != 'Date' and col != 'Symbole' and 'decision' not in col.lower():
-                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
+                        # Remplacer les chaînes vides par NaN avant la conversion numérique
+                        df[col] = df[col].replace('', np.nan)
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
                 
                 df.replace({np.nan: None}, inplace=True)
 
@@ -134,7 +135,6 @@ def migrate_data():
                     ))
                 logging.info(f"  -> {len(df)} lignes de données historiques/techniques traitées.")
         
-        # --- 3. Migration de la feuille 'ANALYSIS_MEMORY' ---
         logging.info("\n--- Migration des analyses fondamentales ---")
         try:
             analysis_ws = spreadsheet.worksheet("ANALYSIS_MEMORY")
@@ -146,6 +146,7 @@ def migrate_data():
                 
                 cur.execute("SELECT id FROM companies WHERE symbol = %s;", (symbol,))
                 company_id_res = cur.fetchone()
+
                 if company_id_res:
                     cur.execute("""
                         INSERT INTO fundamental_analysis (company_id, report_url, analysis_summary)
