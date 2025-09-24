@@ -1,219 +1,194 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER (V2.5 - FINAL)
+# MODULE: TECHNICAL ANALYZER (V3.0 - POSTGRESQL)
 # ==============================================================================
-
-import gspread
-from google.oauth2 import service_account
+import psycopg2
 import pandas as pd
 import numpy as np
 import warnings
-import re
 import os
-import json
-import time
 import logging
+import time
+from dotenv import load_dotenv
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=FutureWarning)
 
-# Variable globale qui sera surchargée par main.py
-SPREADSHEET_ID = ''
+# --- Configuration ---
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
-def authenticate_gsheets():
+# --- Secrets de la base de données ---
+DB_NAME = os.environ.get('DB_NAME')
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_HOST = os.environ.get('DB_HOST')
+DB_PORT = os.environ.get('DB_PORT')
+
+def connect_to_db():
+    """Établit la connexion à la base de données PostgreSQL."""
     try:
-        logging.info("Authentification via compte de service Google...")
-        creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-        if not creds_json_str:
-            logging.error("❌ Secret GSPREAD_SERVICE_ACCOUNT introuvable.")
-            return None
-        creds_dict = json.loads(creds_json_str)
-        scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
-        logging.info("✅ Authentification Google réussie.")
-        return gc
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        logging.info("✅ Connexion à la base de données pour l'analyse technique réussie.")
+        return conn
     except Exception as e:
-        logging.error(f"❌ Erreur d'authentification : {e}")
+        logging.error(f"❌ Impossible de se connecter à la base de données : {e}")
         return None
 
-def clean_numeric_value(value):
-    if pd.isna(value) or value == '' or value is None: return np.nan
-    str_value = re.sub(r'[^\d.,\-+]', '', str(value).strip()).replace(',', '.')
-    try:
-        return float(str_value)
-    except (ValueError, TypeError):
-        return np.nan
-
-def convert_columns_to_numeric(gc, spreadsheet_id, sheet_name):
-    try:
-        spreadsheet = gc.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(sheet_name)
-        logging.info(f"Conversion des données numériques pour {sheet_name}...")
-        all_values = worksheet.get_all_values()
-
-        if len(all_values) < 2:
-            logging.warning(f"Pas assez de données dans {sheet_name}")
-            return False
-
-        headers = all_values[0]
-        data = all_values[1:]
-        
-        updates = []
-        for col_index, col_letter in [(2, 'C'), (3, 'D'), (4, 'E')]:
-            if col_index < len(headers):
-                numeric_values = [[clean_numeric_value(row[col_index]) if col_index < len(row) else ""] for row in data]
-                updates.append({'range': f'{col_letter}2:{col_letter}{len(data) + 1}', 'values': numeric_values})
-
-        if updates:
-            worksheet.batch_update(updates, value_input_option='USER_ENTERED')
-            logging.info(f"  ✓ Colonnes converties pour {sheet_name}")
-        return True
-    except Exception as e:
-        logging.error(f"  ✗ Erreur de conversion pour {sheet_name}: {e}")
-        return False
-
-def calculate_moving_averages(df, price_col):
-    df['MM5'] = df[price_col].rolling(window=5).mean()
-    df['MM10'] = df[price_col].rolling(window=10).mean()
-    df['MM20'] = df[price_col].rolling(window=20).mean()
-    df['MM50'] = df[price_col].rolling(window=50).mean()
+# ... (Les fonctions de calcul : calculate_moving_averages, calculate_bollinger_bands, etc., restent EXACTEMENT les mêmes)
+def calculate_moving_averages(df, price_col='price'):
+    df['mm5'] = df[price_col].rolling(window=5).mean()
+    df['mm10'] = df[price_col].rolling(window=10).mean()
+    df['mm20'] = df[price_col].rolling(window=20).mean()
+    df['mm50'] = df[price_col].rolling(window=50).mean()
     def mm_decision(row):
-        price, mm5, mm10, mm20, mm50 = row[price_col], row['MM5'], row['MM10'], row['MM20'], row['MM50']
+        price, mm5, mm10, mm20, mm50 = row[price_col], row['mm5'], row['mm10'], row['mm20'], row['mm50']
         if any(pd.isna(val) for val in [price, mm5, mm10, mm20, mm50]): return "Attendre"
-        if ((price > mm5) and (mm5 > mm10)) or ((mm5 > mm10) and (mm10 > mm20)) or ((mm10 > mm20) and (mm20 > mm50)):
-            return "Achat"
+        if ((price > mm5) and (mm5 > mm10)) or ((mm5 > mm10) and (mm10 > mm20)) or ((mm10 > mm20) and (mm20 > mm50)): return "Achat"
         return "Vente"
-    df['MMdecision'] = df.apply(mm_decision, axis=1)
+    df['mm_decision'] = df.apply(mm_decision, axis=1)
     return df
 
-def calculate_bollinger_bands(df, price_col, window=35, num_std=2):
-    df['Bande_centrale'] = df[price_col].rolling(window=window).mean()
+def calculate_bollinger_bands(df, price_col='price', window=35, num_std=2):
+    df['bollinger_central'] = df[price_col].rolling(window=window).mean()
     rolling_std = df[price_col].rolling(window=window).std()
-    df['Bande_Supérieure'] = df['Bande_centrale'] + (rolling_std * num_std)
-    df['Bande_Inferieure'] = df['Bande_centrale'] - (rolling_std * num_std)
+    df['bollinger_superior'] = df['bollinger_central'] + (rolling_std * num_std)
+    df['bollinger_inferior'] = df['bollinger_central'] - (rolling_std * num_std)
     def bollinger_decision(row):
-        price, lower, upper = row[price_col], row['Bande_Inferieure'], row['Bande_Supérieure']
+        price, lower, upper = row[price_col], row['bollinger_inferior'], row['bollinger_superior']
         if any(pd.isna(val) for val in [price, lower, upper]): return "Attendre"
         if price <= lower: return "Achat"
         if price >= upper: return "Vente"
         return "Neutre"
-    df['Boldecision'] = df.apply(bollinger_decision, axis=1)
+    df['bollinger_decision'] = df.apply(bollinger_decision, axis=1)
     return df
 
-def calculate_macd(df, price_col, fast=12, slow=26, signal=9):
-    df['MME_fast'] = df[price_col].ewm(span=fast, adjust=False).mean()
-    df['MME_slow'] = df[price_col].ewm(span=slow, adjust=False).mean()
-    df['Ligne MACD'] = df['MME_fast'] - df['MME_slow']
-    df['Ligne de signal'] = df['Ligne MACD'].ewm(span=signal, adjust=False).mean()
-    df['Histogramme'] = df['Ligne MACD'] - df['Ligne de signal']
-    df['prev_histo'] = df['Histogramme'].shift(1)
+def calculate_macd(df, price_col='price', fast=12, slow=26, signal=9):
+    df['macd_line'] = df[price_col].ewm(span=fast, adjust=False).mean() - df[price_col].ewm(span=slow, adjust=False).mean()
+    df['signal_line'] = df['macd_line'].ewm(span=signal, adjust=False).mean()
+    df['histogram'] = df['macd_line'] - df['signal_line']
+    df['prev_histo'] = df['histogram'].shift(1)
     def macd_decision(row):
-        if pd.isna(row['Histogramme']) or pd.isna(row['prev_histo']): return "Attendre"
-        if row['prev_histo'] <= 0 and row['Histogramme'] > 0: return "Achat (Fort)"
-        if row['prev_histo'] >= 0 and row['Histogramme'] < 0: return "Vente (Fort)"
-        if row['Histogramme'] > 0: return "Achat"
-        if row['Histogramme'] < 0: return "Vente"
+        if pd.isna(row['histogram']) or pd.isna(row['prev_histo']): return "Attendre"
+        if row['prev_histo'] <= 0 and row['histogram'] > 0: return "Achat (Fort)"
+        if row['prev_histo'] >= 0 and row['histogram'] < 0: return "Vente (Fort)"
+        if row['histogram'] > 0: return "Achat"
+        if row['histogram'] < 0: return "Vente"
         return "Neutre"
-    df['MACDdecision'] = df.apply(macd_decision, axis=1)
+    df['macd_decision'] = df.apply(macd_decision, axis=1)
     return df
 
-def calculate_rsi(df, price_col, period=20):
+def calculate_rsi(df, price_col='price', period=20):
     delta = df[price_col].diff(1)
     gain = delta.where(delta > 0, 0).ewm(alpha=1/period, adjust=False).mean()
     loss = -delta.where(delta < 0, 0).ewm(alpha=1/period, adjust=False).mean()
-    df['RS'] = gain / loss.replace(0, np.nan)
-    df['RSI'] = 100 - (100 / (1 + df['RS']))
-    df['prev_rsi'] = df['RSI'].shift(1)
+    rs = gain / loss.replace(0, np.nan)
+    df['rsi'] = 100 - (100 / (1 + rs))
+    df['prev_rsi'] = df['rsi'].shift(1)
     def rsi_decision(row):
-        if pd.isna(row['RSI']) or pd.isna(row['prev_rsi']): return "Attendre"
-        if row['prev_rsi'] <= 30 and row['RSI'] > 30: return "Achat"
-        if row['prev_rsi'] >= 70 and row['RSI'] < 70: return "Vente"
+        if pd.isna(row['rsi']) or pd.isna(row['prev_rsi']): return "Attendre"
+        if row['prev_rsi'] <= 30 and row['rsi'] > 30: return "Achat"
+        if row['prev_rsi'] >= 70 and row['rsi'] < 70: return "Vente"
         return "Neutre"
-    df['RSIdecision'] = df.apply(rsi_decision, axis=1)
+    df['rsi_decision'] = df.apply(rsi_decision, axis=1)
     return df
 
-def calculate_stochastic(df, price_col, k_period=20, d_period=5):
+def calculate_stochastic(df, price_col='price', k_period=20, d_period=5):
     rolling_high = df[price_col].rolling(window=k_period).max()
     rolling_low = df[price_col].rolling(window=k_period).min()
-    df['%K'] = 100 * ((df[price_col] - rolling_low) / (rolling_high - rolling_low).replace(0, np.nan))
-    df['%D'] = df['%K'].rolling(window=d_period).mean()
-    df['prev_%K'] = df['%K'].shift(1)
-    df['prev_%D'] = df['%D'].shift(1)
+    df['stochastic_k'] = 100 * ((df[price_col] - rolling_low) / (rolling_high - rolling_low).replace(0, np.nan))
+    df['stochastic_d'] = df['stochastic_k'].rolling(window=d_period).mean()
+    df['prev_k'] = df['stochastic_k'].shift(1)
+    df['prev_d'] = df['stochastic_d'].shift(1)
     def stochastic_decision(row):
-        if any(pd.isna(val) for val in [row['%K'], row['%D'], row['prev_%K'], row['prev_%D']]): return "Attendre"
-        if row['prev_%K'] <= row['prev_%D'] and row['%K'] > row['%D'] and row['%D'] < 20: return "Achat (Fort)"
-        if row['prev_%K'] >= row['prev_%D'] and row['%K'] < row['%D'] and row['%D'] > 80: return "Vente (Fort)"
+        if any(pd.isna(val) for val in [row['stochastic_k'], row['stochastic_d'], row['prev_k'], row['prev_d']]): return "Attendre"
+        if row['prev_k'] <= row['prev_d'] and row['stochastic_k'] > row['stochastic_d'] and row['stochastic_d'] < 20: return "Achat (Fort)"
+        if row['prev_k'] >= row['prev_d'] and row['stochastic_k'] < row['stochastic_d'] and row['stochastic_d'] > 80: return "Vente (Fort)"
         return "Neutre"
-    df['Stocdecision'] = df.apply(stochastic_decision, axis=1)
+    df['stochastic_decision'] = df.apply(stochastic_decision, axis=1)
     return df
 
-def process_single_sheet(gc, spreadsheet_id, sheet_name):
-    try:
-        spreadsheet = gc.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(sheet_name)
-        
-        all_values = worksheet.get_all_values()
-        if not all_values or len(all_values) < 2:
-            logging.warning(f"  La feuille {sheet_name} est vide ou n'a pas d'en-tête.")
-            return
+def process_company(conn, company_id, company_symbol):
+    """Récupère les données, calcule les indicateurs et met à jour la DB pour une société."""
+    logging.info(f"--- Traitement de l'analyse technique pour : {company_symbol} ---")
+    
+    # 1. Lire les données depuis PostgreSQL
+    query = "SELECT id, trade_date, price FROM historical_data WHERE company_id = %s ORDER BY trade_date;"
+    df = pd.read_sql(query, conn, params=(company_id,), index_col='id')
+    
+    if len(df) < 50:
+        logging.warning(f"  -> Pas assez de données ({len(df)} lignes) pour {company_symbol}. Analyse ignorée.")
+        return 0
 
-        headers = all_values[0]
-        df = pd.DataFrame(all_values[1:], columns=headers)
-
-        price_col = 'Cours (F CFA)'
-        if price_col not in df.columns:
-            logging.error(f"  ✗ Colonne '{price_col}' introuvable dans {sheet_name}")
-            return
-
-        df[price_col] = pd.to_numeric(df[price_col], errors='coerce')
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
-            df = df.sort_values('Date').reset_index(drop=True)
-
-        df.dropna(subset=[price_col], inplace=True)
-        if len(df) < 50:
-            logging.warning(f"  ✗ Pas assez de données ({len(df)} lignes) pour {sheet_name}.")
-            return
-
-        df = calculate_moving_averages(df, price_col)
-        df = calculate_bollinger_bands(df, price_col)
-        df = calculate_macd(df, price_col)
-        df = calculate_rsi(df, price_col)
-        df = calculate_stochastic(df, price_col)
+    # 2. Calculer tous les indicateurs
+    df = calculate_moving_averages(df)
+    df = calculate_bollinger_bands(df)
+    df = calculate_macd(df)
+    df = calculate_rsi(df)
+    df = calculate_stochastic(df)
+    
+    # 3. Préparer les données pour la mise à jour
+    df_to_update = df.drop(columns=['trade_date', 'price', 'prev_histo', 'prev_rsi', 'prev_k', 'prev_d']).reset_index()
+    df_to_update.rename(columns={'id': 'historical_data_id'}, inplace=True)
+    
+    # Remplacer les NaN par None pour la DB
+    df_to_update = df_to_update.replace({np.nan: None})
+    
+    # 4. Mettre à jour la base de données
+    cur = conn.cursor()
+    update_count = 0
+    for index, row in df_to_update.iterrows():
+        # Utiliser ON CONFLICT pour insérer ou mettre à jour les analyses
+        query = sql.SQL("""
+            INSERT INTO technical_analysis (historical_data_id, mm5, mm10, mm20, mm50, mm_decision, bollinger_central, bollinger_inferior, bollinger_superior, bollinger_decision, macd_line, signal_line, histogram, macd_decision, rsi, rsi_decision, stochastic_k, stochastic_d, stochastic_decision)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (historical_data_id) DO UPDATE SET
+                mm5 = EXCLUDED.mm5, mm10 = EXCLUDED.mm10, mm20 = EXCLUDED.mm20, mm50 = EXCLUDED.mm50, mm_decision = EXCLUDED.mm_decision,
+                bollinger_central = EXCLUDED.bollinger_central, bollinger_inferior = EXCLUDED.bollinger_inferior, bollinger_superior = EXCLUDED.bollinger_superior, bollinger_decision = EXCLUDED.bollinger_decision,
+                macd_line = EXCLUDED.macd_line, signal_line = EXCLUDED.signal_line, histogram = EXCLUDED.histogram, macd_decision = EXCLUDED.macd_decision,
+                rsi = EXCLUDED.rsi, rsi_decision = EXCLUDED.rsi_decision, stochastic_k = EXCLUDED.stochastic_k, stochastic_d = EXCLUDED.stochastic_d, stochastic_decision = EXCLUDED.stochastic_decision;
+        """)
         
-        headers_to_write = ['MM5','MM10','MM20','MM50','MMdecision','Bande_centrale','Bande_Inferieure','Bande_Supérieure','Boldecision','Ligne MACD','Ligne de signal','Histogramme','MACDdecision','RS','RSI','RSIdecision','%K','%D','Stocdecision']
-        worksheet.update('F1:X1', [headers_to_write])
+        cur.execute(query, (
+            row['historical_data_id'], row.get('mm5'), row.get('mm10'), row.get('mm20'), row.get('mm50'), row.get('mm_decision'),
+            row.get('bollinger_central'), row.get('bollinger_inferior'), row.get('bollinger_superior'), row.get('bollinger_decision'),
+            row.get('macd_line'), row.get('signal_line'), row.get('histogram'), row.get('macd_decision'),
+            row.get('rsi'), row.get('rsi_decision'), row.get('stochastic_k'), row.get('stochastic_d'), row.get('stochastic_decision')
+        ))
+        update_count += cur.rowcount
         
-        df_to_write = df[headers_to_write].copy()
-        for col in ['MM5','MM10','MM20','MM50','Bande_centrale','Bande_Supérieure','Bande_Inferieure','Ligne MACD','Ligne de signal','Histogramme','RS','RSI','%K','%D']:
-            df_to_write[col] = df_to_write[col].round(2)
-        
-        df_to_write.fillna('', inplace=True)
-        worksheet.update(f'F2:X{len(df_to_write)+1}', df_to_write.values.tolist())
-        
-        logging.info(f"  ✓ Traitement terminé pour {sheet_name}")
-    except Exception as e:
-        logging.error(f"  ✗ Erreur lors du traitement de {sheet_name}: {e}")
+    conn.commit()
+    cur.close()
+    logging.info(f"  -> Analyse technique terminée pour {company_symbol}. {update_count} enregistrements mis à jour.")
+    return update_count
 
 def run_technical_analysis():
-    gc = authenticate_gsheets()
-    if not gc: return
+    """Fonction principale pour lancer l'analyse technique sur toutes les sociétés."""
+    logging.info("="*60)
+    logging.info("ÉTAPE 2 : DÉMARRAGE DE L'ANALYSE TECHNIQUE (VERSION POSTGRESQL)")
+    logging.info("="*60)
+    
+    conn = connect_to_db()
+    if not conn: return
 
     try:
-        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        logging.info(f"Fichier ouvert: {spreadsheet.title}")
+        cur = conn.cursor()
+        cur.execute("SELECT id, symbol FROM companies;")
+        companies = cur.fetchall()
+        cur.close()
 
-        sheets_to_exclude = ["UNMATCHED", "Actions_BRVM", "ANALYSIS_MEMORY"]
-        sheet_names = [ws.title for ws in spreadsheet.worksheets() if ws.title not in sheets_to_exclude]
-        logging.info(f"Feuilles à traiter: {sheet_names}")
+        logging.info(f"{len(companies)} sociétés à analyser.")
+        
+        total_updates = 0
+        for company_id, company_symbol in companies:
+            total_updates += process_company(conn, company_id, company_symbol)
+            time.sleep(1) # Petite pause entre chaque société
 
-        for sheet_name in sheet_names:
-            logging.info(f"\n--- TRAITEMENT DE LA FEUILLE: {sheet_name} ---")
-            time.sleep(5)
-            convert_columns_to_numeric(gc, SPREADSHEET_ID, sheet_name)
-            time.sleep(5)
-            process_single_sheet(gc, SPREADSHEET_ID, sheet_name)
+        logging.info(f"✅ Analyse technique terminée pour toutes les sociétés. Total de {total_updates} mises à jour.")
 
     except Exception as e:
-        logging.error(f"Erreur générale: {e}")
-    
-    logging.info("Processus d'analyse technique terminé.")
+        logging.error(f"❌ Erreur critique lors de l'analyse technique : {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    run_technical_analysis()
