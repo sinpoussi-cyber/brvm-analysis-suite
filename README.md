@@ -68,6 +68,17 @@ Dans votre dépôt GitHub, allez dans `Settings` -> `Secrets and variables` -> `
 
 ## 🚀 Exécution
 
-Le workflow s'exécute automatiquement chaque jour. Les trois rapports générés sont disponibles dans les **Artifacts** de chaque exécution et sont sauvegardés dans votre dossier Google Drive.
+Le workflow s'exécute automatiquement chaque jour. Les trois rapports générés sont disponibles dans les **Artifacts** de chaque exécution et sont sauvegardés dans votre Google Drive.
 
 ## 📁 Structure du Projet
+
+```brvm-analysis-suite/
+│
+├── .github/workflows/daily_brvm_analysis.yml
+├── main.py
+├── data_collector.py
+├── technical_analyzer.py
+├── fundamental_analyzer.py
+├── report_generator.py
+├── requirements.txt
+└── README.md
