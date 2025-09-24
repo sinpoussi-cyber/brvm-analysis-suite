@@ -1,22 +1,23 @@
 # ==============================================================================
-# MODULE: MIGRATE FROM GOOGLE SHEETS TO POSTGRESQL (V1.2 - CORRIGÉ)
+# MODULE: MIGRATE FROM GOOGLE SHEETS TO POSTGRESQL (V1.2 - ROBUSTE)
 # ==============================================================================
 
 import gspread
 import psycopg2
 import pandas as pd
-import numpy as np
 import os
+import re # Importer le module des expressions régulières
 from datetime import datetime
 import logging
 import time
 import json
 from google.oauth2 import service_account
+import numpy as np
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
-# --- Récupération des Secrets depuis l'environnement GitHub Actions ---
+# --- Récupération des Secrets ---
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
@@ -27,13 +28,11 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 def authenticate_gsheets():
-    """S'authentifie à Google Sheets en utilisant les secrets."""
     logging.info("Authentification Google Sheets...")
     try:
         if not GSPREAD_SERVICE_ACCOUNT_JSON:
             logging.error("❌ Secret GSPREAD_SERVICE_ACCOUNT introuvable.")
             return None
-            
         creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -45,23 +44,29 @@ def authenticate_gsheets():
         return None
 
 def connect_to_db():
-    """Établit une connexion à la base de données PostgreSQL."""
     conn = None
     try:
         if not all([DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT]):
             logging.error("❌ Un ou plusieurs secrets de base de données (DB_...) sont manquants.")
             return None
         conn = psycopg2.connect(
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
         )
         logging.info(f"✅ Connecté à la base de données PostgreSQL '{DB_NAME}'.")
         return conn
     except Exception as e:
         logging.error(f"❌ Erreur de connexion à la base de données PostgreSQL : {e}")
+        return None
+
+def clean_and_convert_to_numeric(value):
+    """Nettoie une chaîne de caractères et la convertit en nombre."""
+    if value is None or value == '':
+        return None
+    # Supprimer les espaces, remplacer la virgule par un point
+    cleaned_value = re.sub(r'\s+', '', str(value)).replace(',', '.')
+    try:
+        return float(cleaned_value)
+    except (ValueError, TypeError):
         return None
 
 def migrate_data():
@@ -87,7 +92,7 @@ def migrate_data():
                 continue
 
             logging.info(f"\n--- Migration des données pour la feuille: '{sheet_name}' ---")
-            time.sleep(5) 
+            time.sleep(5)  # Pause pour respecter les limites de l'API GSheets
             data = ws.get_all_values()
 
             if not data or len(data) < 2:
@@ -97,30 +102,36 @@ def migrate_data():
             headers = data[0]
             df = pd.DataFrame(data[1:], columns=headers)
 
-            cur.execute("INSERT INTO companies (symbol, name) VALUES (%s, %s) ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name RETURNING id;", (sheet_name, sheet_name))
-            company_id = cur.fetchone()[0]
-            logging.info(f"  -> Société '{sheet_name}' (ID: {company_id}) insérée/vérifiée.")
+            cur.execute("INSERT INTO companies (symbol, name) VALUES (%s, %s) ON CONFLICT (symbol) DO NOTHING RETURNING id;", (sheet_name, sheet_name))
+            res = cur.fetchone()
+            if res:
+                company_id = res[0]
+                logging.info(f"  -> Société '{sheet_name}' (ID: {company_id}) insérée.")
+            else:
+                cur.execute("SELECT id FROM companies WHERE symbol = %s;", (sheet_name,))
+                company_id = cur.fetchone()[0]
+                logging.info(f"  -> Société '{sheet_name}' (ID: {company_id}) déjà existante.")
+
 
             if 'Date' in df.columns and 'Cours (F CFA)' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
                 
+                # Appliquer la fonction de nettoyage robuste
                 for col in df.columns:
-                    if col != 'Date' and col != 'Symbole' and 'decision' not in col.lower():
-                        # Remplacer les chaînes vides par NaN avant la conversion numérique
-                        df[col] = df[col].replace('', np.nan)
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                    if col not in ['Date', 'Symbole', 'MMdecision', 'Boldecision', 'MACDdecision', 'RSIdecision', 'Stocdecision']:
+                        df[col] = df[col].apply(clean_and_convert_to_numeric)
                 
-                df.replace({np.nan: None}, inplace=True)
+                df.replace({pd.NaT: None, np.nan: None}, inplace=True)
 
                 for index, row in df.iterrows():
-                    if pd.isna(row.get('Date')): continue
+                    if row.get('Date') is None: continue
 
                     cur.execute("""
                         INSERT INTO historical_data (company_id, trade_date, price, volume, value)
                         VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (company_id, trade_date) DO UPDATE SET price = EXCLUDED.price, volume = EXCLUDED.volume, value = EXCLUDED.value
                         RETURNING id;
-                    """, (company_id, row['Date'], row.get('Cours (F CFA)'), row.get('Volume échangé'), row.get('Valeurs échangées (F CFA)')))
+                    """, (company_id, row.get('Date'), row.get('Cours (F CFA)'), row.get('Volume échangé'), row.get('Valeurs échangées (F CFA)')))
                     historical_data_id = cur.fetchone()[0]
 
                     cur.execute("""
@@ -134,7 +145,7 @@ def migrate_data():
                         row.get('RSI'), row.get('RSIdecision'), row.get('%K'), row.get('%D'), row.get('Stocdecision')
                     ))
                 logging.info(f"  -> {len(df)} lignes de données historiques/techniques traitées.")
-        
+
         logging.info("\n--- Migration des analyses fondamentales ---")
         try:
             analysis_ws = spreadsheet.worksheet("ANALYSIS_MEMORY")
@@ -146,7 +157,6 @@ def migrate_data():
                 
                 cur.execute("SELECT id FROM companies WHERE symbol = %s;", (symbol,))
                 company_id_res = cur.fetchone()
-
                 if company_id_res:
                     cur.execute("""
                         INSERT INTO fundamental_analysis (company_id, report_url, analysis_summary)
