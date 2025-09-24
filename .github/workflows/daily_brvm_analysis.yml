@@ -1,21 +1,21 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE MIGRATION DE DONNÉES
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST POUR LE NOUVEAU DATA COLLECTOR
 # ==============================================================================
-name: Full BRVM Analysis Suite # NE PAS CHANGER LE NOM ICI
+name: Full BRVM Analysis Suite
 
 on:
-  workflow_dispatch: # Permet un lancement manuel
+  workflow_dispatch:
 
 jobs:
-  run-migration:
+  run-new-data-collector:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
 
     steps:
       - name: Checkout develop branch
         uses: actions/checkout@v4
         with:
-          ref: develop # Assure qu'on utilise le code de la branche 'develop'
+          ref: develop
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,28 +23,13 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run Database Setup
+      - name: Run New Data Collector
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-        run: python database_setup.py
-
-      - name: Run Data Migration Script
-        env:
-          # Secrets pour la base de données
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          # Secrets pour Google Sheets
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python migrate_from_gsheet.py
+        run: python data_collector.py
