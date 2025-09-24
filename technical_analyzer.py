@@ -1,19 +1,19 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER (V3.0 - POSTGRESQL)
+# MODULE: TECHNICAL ANALYZER (V3.1 - CORRECTION IMPORT)
 # ==============================================================================
 import psycopg2
+from psycopg2 import sql
 import pandas as pd
 import numpy as np
 import warnings
 import os
 import logging
 import time
-from dotenv import load_dotenv
 
+warnings.filterwarnings('ignore', category=UserWarning) # Cacher l'avertissement de pandas
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 # --- Configuration ---
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Secrets de la base de données ---
@@ -33,7 +33,6 @@ def connect_to_db():
         logging.error(f"❌ Impossible de se connecter à la base de données : {e}")
         return None
 
-# ... (Les fonctions de calcul : calculate_moving_averages, calculate_bollinger_bands, etc., restent EXACTEMENT les mêmes)
 def calculate_moving_averages(df, price_col='price'):
     df['mm5'] = df[price_col].rolling(window=5).mean()
     df['mm10'] = df[price_col].rolling(window=10).mean()
@@ -110,7 +109,6 @@ def process_company(conn, company_id, company_symbol):
     """Récupère les données, calcule les indicateurs et met à jour la DB pour une société."""
     logging.info(f"--- Traitement de l'analyse technique pour : {company_symbol} ---")
     
-    # 1. Lire les données depuis PostgreSQL
     query = "SELECT id, trade_date, price FROM historical_data WHERE company_id = %s ORDER BY trade_date;"
     df = pd.read_sql(query, conn, params=(company_id,), index_col='id')
     
@@ -118,25 +116,19 @@ def process_company(conn, company_id, company_symbol):
         logging.warning(f"  -> Pas assez de données ({len(df)} lignes) pour {company_symbol}. Analyse ignorée.")
         return 0
 
-    # 2. Calculer tous les indicateurs
     df = calculate_moving_averages(df)
     df = calculate_bollinger_bands(df)
     df = calculate_macd(df)
     df = calculate_rsi(df)
     df = calculate_stochastic(df)
     
-    # 3. Préparer les données pour la mise à jour
     df_to_update = df.drop(columns=['trade_date', 'price', 'prev_histo', 'prev_rsi', 'prev_k', 'prev_d']).reset_index()
     df_to_update.rename(columns={'id': 'historical_data_id'}, inplace=True)
-    
-    # Remplacer les NaN par None pour la DB
     df_to_update = df_to_update.replace({np.nan: None})
     
-    # 4. Mettre à jour la base de données
     cur = conn.cursor()
     update_count = 0
     for index, row in df_to_update.iterrows():
-        # Utiliser ON CONFLICT pour insérer ou mettre à jour les analyses
         query = sql.SQL("""
             INSERT INTO technical_analysis (historical_data_id, mm5, mm10, mm20, mm50, mm_decision, bollinger_central, bollinger_inferior, bollinger_superior, bollinger_decision, macd_line, signal_line, histogram, macd_decision, rsi, rsi_decision, stochastic_k, stochastic_d, stochastic_decision)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -180,7 +172,7 @@ def run_technical_analysis():
         total_updates = 0
         for company_id, company_symbol in companies:
             total_updates += process_company(conn, company_id, company_symbol)
-            time.sleep(1) # Petite pause entre chaque société
+            time.sleep(1)
 
         logging.info(f"✅ Analyse technique terminée pour toutes les sociétés. Total de {total_updates} mises à jour.")
 
