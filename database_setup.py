@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATABASE SETUP (V1.1 - POUR GITHUB ACTIONS)
+# MODULE: DATABASE SETUP (V1.2 - COMPLET)
 # ==============================================================================
 
 import psycopg2
@@ -19,9 +19,8 @@ DB_PORT = os.environ.get('DB_PORT')
 
 def setup_tables():
     """
-    Connecte à la base de données PostgreSQL en ligne et crée les tables.
+    Connecte à la base de données PostgreSQL en ligne et crée toutes les tables nécessaires.
     """
-    # Vérifier que tous les secrets sont présents
     if not all([DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT]):
         logging.error("❌ Un ou plusieurs secrets de base de données (DB_NAME, DB_USER, etc.) sont manquants.")
         return
@@ -50,8 +49,71 @@ def setup_tables():
         """)
         logging.info("Table 'companies' vérifiée/créée.")
 
-        # ... (le reste des commandes CREATE TABLE est identique à la version précédente) ...
-        # (Copiez-collez les commandes CREATE TABLE pour historical_data, technical_analysis, etc. ici)
+        # Création de la table 'historical_data'
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS historical_data (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                trade_date DATE NOT NULL,
+                price NUMERIC(10, 3),
+                volume BIGINT,
+                value NUMERIC(15, 3),
+                UNIQUE (company_id, trade_date)
+            );
+        """)
+        logging.info("Table 'historical_data' vérifiée/créée.")
+
+        # Création de la table 'technical_analysis'
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS technical_analysis (
+                id SERIAL PRIMARY KEY,
+                historical_data_id INTEGER UNIQUE NOT NULL REFERENCES historical_data(id) ON DELETE CASCADE,
+                mm5 NUMERIC(10, 3),
+                mm10 NUMERIC(10, 3),
+                mm20 NUMERIC(10, 3),
+                mm50 NUMERIC(10, 3),
+                mm_decision VARCHAR(50),
+                bollinger_central NUMERIC(10, 3),
+                bollinger_inferior NUMERIC(10, 3),
+                bollinger_superior NUMERIC(10, 3),
+                bollinger_decision VARCHAR(50),
+                macd_line NUMERIC(10, 3),
+                signal_line NUMERIC(10, 3),
+                histogram NUMERIC(10, 3),
+                macd_decision VARCHAR(50),
+                rsi NUMERIC(10, 3),
+                rsi_decision VARCHAR(50),
+                stochastic_k NUMERIC(10, 3),
+                stochastic_d NUMERIC(10, 3),
+                stochastic_decision VARCHAR(50)
+            );
+        """)
+        logging.info("Table 'technical_analysis' vérifiée/créée.")
+
+        # Création de la table 'fundamental_analysis'
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fundamental_analysis (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                report_url TEXT UNIQUE NOT NULL,
+                report_title TEXT,
+                report_date DATE,
+                analysis_summary TEXT,
+                analysis_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        logging.info("Table 'fundamental_analysis' vérifiée/créée.")
+        
+        # Création de la table 'new_market_events'
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS new_market_events (
+                id SERIAL PRIMARY KEY,
+                event_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                event_summary TEXT NOT NULL,
+                creation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        logging.info("Table 'new_market_events' vérifiée/créée.")
 
         conn.commit()
         logging.info("✅ Toutes les tables ont été vérifiées/créées avec succès.")
