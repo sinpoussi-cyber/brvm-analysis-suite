@@ -1,10 +1,10 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (COLLECTE + ANALYSES DB)
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC DÉPENDANCES SYSTÈME V2)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
-  workflow_dispatch: # Permet un lancement manuel
+  workflow_dispatch:
 
 jobs:
   run-db-modules-test:
@@ -22,10 +22,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
+      - name: Install System Dependencies for All Modules
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpq-dev build-essential
+          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
@@ -53,13 +53,11 @@ jobs:
 
       - name: Run New Fundamental Analyzer
         env:
-          # Secrets pour la base de données
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          # Secrets pour l'API Gemini (ajoutez toutes vos clés)
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
