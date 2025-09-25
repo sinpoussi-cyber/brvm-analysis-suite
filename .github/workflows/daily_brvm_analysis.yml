@@ -1,5 +1,5 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC DÉPENDANCES SYSTÈME V2)
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC DÉPENDANCES SYSTÈME V3)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
@@ -25,7 +25,7 @@ jobs:
       - name: Install System Dependencies for All Modules
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev
+          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
