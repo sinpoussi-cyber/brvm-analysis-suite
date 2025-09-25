@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V2.1 - POSTGRESQL FINAL)
+# MODULE: FUNDAMENTAL ANALYZER (V3.1 - SCRAPING COMPLET)
 # ==============================================================================
 
 import requests
@@ -132,7 +132,7 @@ class BRVMAnalyzer:
             self.db_conn.rollback()
 
     def _configure_gemini_with_rotation(self):
-        for i in range(1, 20): 
+        for i in range(1, 20):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: self.api_keys.append(key)
         if not self.api_keys:
@@ -172,8 +172,18 @@ class BRVMAnalyzer:
                 
                 uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier")
                 
-                prompt = "Tu es un analyste financier expert..." # Votre prompt complet ici
-
+                prompt = """
+                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+                Concentre-toi impérativement sur les aspects suivants :
+                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
+                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
+                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
+                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
+                """
+                
                 response = self.gemini_model.generate_content([prompt, uploaded_file])
                 analysis_text = response.text if hasattr(response, 'text') else "Analyse non générée."
 
@@ -203,6 +213,7 @@ class BRVMAnalyzer:
             logging.info("✅ Pilote Selenium (Chrome) démarré.")
         except Exception as e:
             logging.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
+            self.driver = None
 
     def _normalize_text(self, text):
         if not text: return ""
@@ -223,12 +234,77 @@ class BRVMAnalyzer:
         year_match = re.search(r'\b(20\d{2})\b', text)
         if not year_match: return datetime(1900, 1, 1).date()
         year = int(year_match.group(1))
-        # ... logique d'extraction de date ...
+        text_lower = text.lower()
+        if 't1' in text_lower or '1er trimestre' in text_lower: return datetime(year, 3, 31).date()
+        if 's1' in text_lower or '1er semestre' in text_lower: return datetime(year, 6, 30).date()
+        if 't3' in text_lower or '3eme trimestre' in text_lower: return datetime(year, 9, 30).date()
+        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31).date()
         return datetime(year, 6, 15).date()
 
     def _find_all_reports(self):
-        # ... (cette fonction reste la même) ...
-        return {}
+        if not self.driver: return {}
+        base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
+        all_reports = defaultdict(list)
+        company_links = []
+        try:
+            # Scraper les 5 premières pages de la liste des sociétés
+            for page_num in range(5): 
+                page_url = f"{base_url}?page={page_num}"
+                logging.info(f"Navigation vers la page de liste : {page_url}")
+                self.driver.get(page_url)
+                try:
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                except TimeoutException:
+                    logging.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
+                    break
+                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                table_rows = soup.select("table.views-table tbody tr")
+                if not table_rows:
+                    logging.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
+                    break
+                for row in table_rows:
+                    link_tag = row.find('a', href=True)
+                    if link_tag:
+                        company_name_normalized = self._normalize_text(link_tag.text)
+                        company_url = f"https://www.brvm.org{link_tag['href']}"
+                        symbol = self._get_symbol_from_name(company_name_normalized)
+                        if symbol:
+                            if not any(c['url'] == company_url for c in company_links):
+                                company_links.append({'symbol': symbol, 'url': company_url})
+                time.sleep(1)
+
+            logging.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
+            for company in company_links:
+                symbol = company['symbol']
+                logging.info(f"--- Collecte des rapports pour {symbol} ---")
+                try:
+                    self.driver.get(company['url'])
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                    page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                    report_items = page_soup.select("table.views-table tbody tr")
+                    if not report_items:
+                        logging.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
+                        continue
+                    for item in report_items:
+                        pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
+                        if pdf_link_tag:
+                            full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
+                            if not any(r['url'] == full_url for r in all_reports[symbol]):
+                                report_data = {
+                                    'titre': " ".join(item.get_text().split()),
+                                    'url': full_url,
+                                    'date': self._extract_date_from_text(item.get_text())
+                                }
+                                all_reports[symbol].append(report_data)
+                    time.sleep(1)
+                except TimeoutException:
+                    logging.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
+                except Exception as e:
+                    logging.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
+        except Exception as e:
+            logging.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
+        return all_reports
+
 
     def run_and_get_results(self):
         logging.info("="*60)
@@ -267,10 +343,11 @@ class BRVMAnalyzer:
             logging.info("\n✅ Traitement de toutes les sociétés terminé.")
             
             cur = self.db_conn.cursor()
-            cur.execute("SELECT c.symbol, fa.analysis_summary FROM fundamental_analysis fa JOIN companies c ON fa.company_id = c.id;")
-            final_results = defaultdict(lambda: {'rapports_analyses': []})
-            for symbol, summary in cur.fetchall():
+            cur.execute("SELECT c.symbol, fa.analysis_summary, c.name FROM fundamental_analysis fa JOIN companies c ON fa.company_id = c.id;")
+            final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
+            for symbol, summary, name in cur.fetchall():
                 final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
+                final_results[symbol]['nom'] = name
             cur.close()
             
             return (dict(final_results), self.newly_analyzed_reports)
