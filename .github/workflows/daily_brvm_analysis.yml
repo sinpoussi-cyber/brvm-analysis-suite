@@ -1,10 +1,10 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST POUR L'ANALYSE FONDAMENTALE DB
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (COLLECTE + ANALYSES DB)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Permet un lancement manuel
 
 jobs:
   run-db-modules-test:
@@ -53,11 +53,22 @@ jobs:
 
       - name: Run New Fundamental Analyzer
         env:
+          # Secrets pour la base de données
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
+          # Secrets pour l'API Gemini (ajoutez toutes vos clés)
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          # ... Ajoutez vos autres clés API ici si nécessaire
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
         run: python fundamental_analyzer.py
