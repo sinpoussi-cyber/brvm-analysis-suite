@@ -1,5 +1,5 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC DÉPENDANCES SYSTÈME V3)
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC AFFICHAGE VIRTUEL)
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
@@ -25,7 +25,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev
+          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev xvfb
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
@@ -33,31 +33,15 @@ jobs:
       - name: Setup Chrome for Selenium
         uses: browser-actions/setup-chrome@latest
 
-      - name: Run New Data Collector
+      - name: Run Analysis with Virtual Display
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-        run: python data_collector.py
-
-      - name: Run New Technical Analyzer
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-        run: python technical_analyzer.py
-
-      - name: Run New Fundamental Analyzer
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -69,4 +53,7 @@ jobs:
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
           GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-        run: python fundamental_analyzer.py
+        run: |
+          xvfb-run -a python data_collector.py
+          xvfb-run -a python technical_analyzer.py
+          xvfb-run -a python fundamental_analyzer.py
