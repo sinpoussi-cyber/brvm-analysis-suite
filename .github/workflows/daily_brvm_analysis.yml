@@ -1,5 +1,5 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST POUR LES MODULES DB
+# FICHIER TEMPORAIRE - WORKFLOW DE TEST POUR L'ANALYSE FONDAMENTALE DB
 # ==============================================================================
 name: Full BRVM Analysis Suite
 
@@ -9,7 +9,7 @@ on:
 jobs:
   run-db-modules-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout develop branch
@@ -29,6 +29,9 @@ jobs:
 
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
+      
+      - name: Setup Chrome for Selenium
+        uses: browser-actions/setup-chrome@latest
 
       - name: Run New Data Collector
         env:
@@ -47,3 +50,14 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
         run: python technical_analyzer.py
+
+      - name: Run New Fundamental Analyzer
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          # ... Ajoutez vos autres clés API ici si nécessaire
+        run: python fundamental_analyzer.py
