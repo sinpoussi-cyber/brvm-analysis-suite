@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.3 - CORRECTION SYNTAXE)
+# MODULE: FUNDAMENTAL ANALYZER (V3.2 - CORRECTION NOM MODÈLE)
 # ==============================================================================
 
 import requests
@@ -122,7 +122,7 @@ class BRVMAnalyzer:
             cur.execute("""
                 INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                 VALUES (%s, %s, %s, %s, %s) ON CONFLICT (report_url) DO NOTHING;
-            """, (company_id, report['url'], report['date'], report['titre'], summary))
+            """, (company_id, report['url'], report['titre'], report['date'], summary))
             self.db_conn.commit()
             cur.close()
             self.analysis_memory.add(report['url'])
