@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.2 - CORRECTION NOM MODÈLE)
+# MODULE: FUNDAMENTAL ANALYZER (V3.3 - CORRECTION SYNTAXE)
 # ==============================================================================
 
 import requests
@@ -122,7 +122,7 @@ class BRVMAnalyzer:
             cur.execute("""
                 INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                 VALUES (%s, %s, %s, %s, %s) ON CONFLICT (report_url) DO NOTHING;
-            """, (company_id, report['url'], report['titre'], report['date'], summary))
+            """, (company_id, report['url'], report['date'], report['titre'], summary))
             self.db_conn.commit()
             cur.close()
             self.analysis_memory.add(report['url'])
@@ -305,4 +305,58 @@ class BRVMAnalyzer:
         return all_reports
 
     def run_and_get_results(self):
-        logging.info("="*60
+        logging.info("="*60)
+        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (VERSION POSTGRESQL)")
+        logging.info("="*60)
+        
+        if not self.connect_to_db() or not self._configure_gemini_with_rotation():
+            if self.db_conn: self.db_conn.close()
+            return {}, []
+        
+        try:
+            self._load_analysis_memory_from_db()
+            self.setup_selenium()
+            if not self.driver: return {}, []
+
+            cur = self.db_conn.cursor()
+            cur.execute("SELECT symbol, id, name FROM companies")
+            companies_from_db = cur.fetchall()
+            cur.close()
+            
+            self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
+
+            all_reports = self._find_all_reports()
+            
+            for symbol, (company_id, company_name) in self.company_ids.items():
+                logging.info(f"\n📊 Traitement des rapports pour {symbol} - {company_name}")
+                company_reports = all_reports.get(symbol, [])
+                if not company_reports:
+                    logging.info(f"  -> Aucun rapport trouvé sur le site pour {symbol}.")
+                    continue
+
+                for report in company_reports:
+                    self._analyze_pdf_with_gemini(company_id, symbol, report)
+                    time.sleep(1)
+
+            logging.info("\n✅ Traitement de toutes les sociétés terminé.")
+            
+            cur = self.db_conn.cursor()
+            cur.execute("SELECT c.symbol, fa.analysis_summary, c.name FROM fundamental_analysis fa JOIN companies c ON fa.company_id = c.id;")
+            final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
+            for symbol, summary, name in cur.fetchall():
+                final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
+                final_results[symbol]['nom'] = name
+            cur.close()
+            
+            return (dict(final_results), self.newly_analyzed_reports)
+            
+        except Exception as e:
+            logging.critical(f"❌ Erreur critique : {e}", exc_info=True)
+            return {}, []
+        finally:
+            if self.driver: self.driver.quit()
+            if self.db_conn: self.db_conn.close()
+
+if __name__ == "__main__":
+    analyzer = BRVMAnalyzer()
+    analyzer.run_and_get_results()
