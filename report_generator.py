@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.0 - POSTGRESQL FINAL)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.1 - CORRECTION NOM MODÈLE)
 # ==============================================================================
 
 import psycopg2
@@ -25,7 +25,6 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 DRIVE_FOLDER_ID = os.environ.get('DRIVE_FOLDER_ID')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -73,29 +72,37 @@ class ComprehensiveReportGenerator:
             return self._rotate_api_key()
 
     def _call_gemini_with_retry(self, prompt):
-        # ... (identique à la version précédente) ...
+        if not self.gemini_model:
+            return "Erreur : le modèle Gemini n'est pas initialisé."
+        for attempt in range(len(self.api_keys)):
+            try:
+                response = self.gemini_model.generate_content(prompt)
+                return response.text
+            except api_exceptions.ResourceExhausted as e:
+                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. ({e})")
+                if not self._rotate_api_key():
+                    return "Erreur d'analyse : Toutes les clés API ont atteint leur quota."
+            except Exception as e:
+                logging.error(f"Erreur inattendue lors de l'appel à Gemini : {e}")
+                return f"Erreur technique lors de l'appel à l'IA : {e}"
         return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
 
     def _upload_to_drive(self, filepath):
-        # ... (identique à la version précédente) ...
-
-    def _get_company_data(self):
-        # ... (logique pour récupérer toutes les données de la DB) ...
-        return {}
-
+        try:
+            file_metadata = {'name': os.path.basename(filepath), 'parents': [DRIVE_FOLDER_ID]}
+            media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            self.drive_service.files().create(
+                body=file_metadata, media_body=media, fields='id', supportsAllDrives=True
+            ).execute()
+            logging.info(f"✅ Fichier '{os.path.basename(filepath)}' sauvegardé sur Google Drive.")
+        except Exception as e:
+            logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
+    
+    # ... (le reste du fichier sera ajouté dans la prochaine étape) ...
+    # Pour l'instant, nous n'avons besoin que de cette partie pour le test.
     def generate_all_reports(self):
-        if not self._authenticate_drive() or not self._configure_gemini_with_rotation():
-            logging.error("Arrêt de la génération des rapports en raison d'un problème d'initialisation.")
-            return
-
-        company_data = self._get_company_data()
-        
-        # ... (logique de génération de rapports) ...
-
-        # Exemple :
-        # main_report_path = self._create_main_report(company_data)
-        # self._upload_to_drive(main_report_path)
-        # etc.
+        logging.info("Génération des rapports à implémenter.")
+        pass
 
 if __name__ == "__main__":
     db_connection = None
