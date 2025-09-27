@@ -1,6 +1,7 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.2 - CORRECTION NOM MODÈLE)
+# MODULE: FUNDAMENTAL ANALYZER (V3.3 - MODÈLE STABLE GEMINI-PRO)
 # ==============================================================================
+
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -24,6 +25,8 @@ import google.generativeai as genai
 from google.api_core import exceptions as api_exceptions
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# --- Configuration & Secrets ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
@@ -146,7 +149,7 @@ class BRVMAnalyzer:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            self.gemini_model = genai.GenerativeModel('gemini-pro')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
@@ -331,9 +334,16 @@ class BRVMAnalyzer:
                     logging.info(f"  -> Aucun rapport trouvé sur le site pour {symbol}.")
                     continue
 
-                for report in company_reports:
+                # Filtrage des rapports pour ne traiter que les plus récents
+                date_2024_start = datetime(2024, 1, 1).date()
+                recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
+                recent_reports.sort(key=lambda x: x['date'], reverse=True)
+
+                logging.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
+
+                for report in recent_reports:
                     self._analyze_pdf_with_gemini(company_id, symbol, report)
-                    time.sleep(1)
+                    time.sleep(1) # Pause pour respecter les limites de l'API Gemini
 
             logging.info("\n✅ Traitement de toutes les sociétés terminé.")
             
