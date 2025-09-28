@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.4 - GESTION ROBUSTE DE LA CONNEXION DB)
+# MODULE: FUNDAMENTAL ANALYZER (V3.5 - MODÈLE GEMINI-PRO-VISION)
 # ==============================================================================
 
 import requests
@@ -153,7 +153,7 @@ class BRVMAnalyzer:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-pro')
+            self.gemini_model = genai.GenerativeModel('gemini-pro-vision')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
@@ -313,26 +313,24 @@ class BRVMAnalyzer:
         logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (VERSION POSTGRESQL)")
         logging.info("="*60)
         
-        conn = self.connect_to_db()
-        if not conn or not self._configure_gemini_with_rotation():
-            if conn: conn.close()
-            return {}, []
-        
+        conn = None
         try:
-            # Opérations initiales avec la base de données
-            with conn.cursor() as cur:
-                cur.execute("SELECT report_url FROM fundamental_analysis;")
-                self.analysis_memory = {row[0] for row in cur.fetchall()}
-                logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées.")
-
-                cur.execute("SELECT symbol, id, name FROM companies")
-                companies_from_db = cur.fetchall()
-                self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
-            conn.close() # Fermer la connexion avant les opérations longues
+            if not self._configure_gemini_with_rotation():
+                return {}, []
             
+            self._load_analysis_memory_from_db()
             self.setup_selenium()
             if not self.driver: return {}, []
+
+            conn = self.connect_to_db()
+            if not conn: return {}, []
+            with conn.cursor() as cur:
+                cur.execute("SELECT symbol, id, name FROM companies")
+                companies_from_db = cur.fetchall()
+            conn.close() 
             
+            self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
+
             all_reports = self._find_all_reports()
             
             for symbol, (company_id, company_name) in self.company_ids.items():
