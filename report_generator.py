@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.2 - MODÈLE STABLE)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.3 - BIBLIOTHÈQUE ET MODÈLE À JOUR)
 # ==============================================================================
 
 import psycopg2
@@ -25,7 +25,6 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 DRIVE_FOLDER_ID = os.environ.get('DRIVE_FOLDER_ID')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -65,7 +64,7 @@ class ComprehensiveReportGenerator:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-pro')
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
@@ -89,6 +88,9 @@ class ComprehensiveReportGenerator:
         return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
 
     def _upload_to_drive(self, filepath):
+        if not self.drive_service:
+            logging.error("Service Google Drive non authentifié. Impossible d'uploader.")
+            return
         try:
             file_metadata = {'name': os.path.basename(filepath), 'parents': [DRIVE_FOLDER_ID]}
             media = MediaFileUpload(filepath, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
@@ -99,10 +101,23 @@ class ComprehensiveReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
     
-    # ... (les autres fonctions seront ajoutées dans la prochaine étape) ...
+    # ... (le reste des fonctions de génération de rapport sera ajouté ici) ...
+
     def generate_all_reports(self):
-        logging.info("Génération des rapports à implémenter.")
-        pass
+        logging.info("="*60)
+        logging.info("ÉTAPE 4 : DÉMARRAGE DE LA GÉNÉRATION DES RAPPORTS (VERSION POSTGRESQL)")
+        logging.info("="*60)
+
+        if not self._authenticate_drive() or not self._configure_gemini_with_rotation():
+            logging.error("Arrêt de la génération des rapports en raison d'un problème d'initialisation.")
+            return
+
+        # Cette fonction sera complétée dans la prochaine étape
+        logging.info("Logique de génération des rapports à implémenter.")
+        # Exemple de ce qui viendra ici :
+        # company_data = self._get_all_data_from_db()
+        # main_report_path = self._create_main_report(company_data)
+        # self._upload_to_drive(main_report_path)
 
 if __name__ == "__main__":
     db_connection = None
