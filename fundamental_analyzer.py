@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.6 - MISE À JOUR LIBRAIRIE & MODÈLE STABLE)
+# MODULE: FUNDAMENTAL ANALYZER (V3.7 - BIBLIOTHÈQUE ET MODÈLE À JOUR)
 # ==============================================================================
 
 import requests
@@ -153,7 +153,7 @@ class BRVMAnalyzer:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-pro')
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
