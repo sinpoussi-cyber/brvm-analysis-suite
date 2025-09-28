@@ -6,7 +6,7 @@ beautifulsoup4
 requests
 selenium-wire
 python-docx
-google-generativeai
+google-generativeai>=0.9.0  # <--- CORRECTION IMPORTANTE ICI
 pandas
 numpy
 openpyxl
