@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.1 - CORRECTION NOM MODÈLE)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V3.2 - MODÈLE STABLE)
 # ==============================================================================
 
 import psycopg2
@@ -25,6 +25,7 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 DRIVE_FOLDER_ID = os.environ.get('DRIVE_FOLDER_ID')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
+
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -64,7 +65,7 @@ class ComprehensiveReportGenerator:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            self.gemini_model = genai.GenerativeModel('gemini-pro')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
@@ -98,8 +99,7 @@ class ComprehensiveReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
     
-    # ... (le reste du fichier sera ajouté dans la prochaine étape) ...
-    # Pour l'instant, nous n'avons besoin que de cette partie pour le test.
+    # ... (les autres fonctions seront ajoutées dans la prochaine étape) ...
     def generate_all_reports(self):
         logging.info("Génération des rapports à implémenter.")
         pass
