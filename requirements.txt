@@ -6,7 +6,7 @@ beautifulsoup4
 requests
 selenium-wire
 python-docx
-google-generativeai==0.8.5  # <--- CORRECTION : On fixe la dernière version existante
+google-generativeai>=0.5.0  # <--- CORRECTION DÉFINITIVE
 pandas
 numpy
 openpyxl
