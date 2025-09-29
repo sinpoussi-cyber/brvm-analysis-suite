@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.7 - BIBLIOTHÈQUE ET MODÈLE À JOUR)
+# MODULE: FUNDAMENTAL ANALYZER (V3.8 - TEST MODE TEXTE SIMPLE)
 # ==============================================================================
 
 import requests
@@ -25,6 +25,8 @@ import google.generativeai as genai
 from google.api_core import exceptions as api_exceptions
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# --- Configuration & Secrets ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
@@ -151,7 +153,7 @@ class BRVMAnalyzer:
         if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
         try:
             genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+            self.gemini_model = genai.GenerativeModel('gemini-pro')
             logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
             return True
         except Exception as e:
@@ -164,46 +166,24 @@ class BRVMAnalyzer:
             return
 
         for attempt in range(len(self.api_keys)):
-            temp_pdf_path = "temp_report.pdf"
-            uploaded_file = None
             try:
-                logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
-                response = self.session.get(pdf_url, timeout=45, verify=False)
-                response.raise_for_status()
-                with open(temp_pdf_path, 'wb') as f: f.write(response.content)
-                
-                uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier")
-                
-                prompt = """
-                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-                Concentre-toi impérativement sur les aspects suivants :
-                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
-                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
-                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
-                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
-                """
-                
-                response = self.gemini_model.generate_content([prompt, uploaded_file])
-                analysis_text = response.text if hasattr(response, 'text') else "Analyse non générée."
+                logging.info(f"    -> TEST TEXTE SIMPLE (clé #{self.current_key_index + 1}) : {symbol} - {os.path.basename(pdf_url)}")
+                test_prompt = f"Résume ce rapport financier pour {symbol} en une phrase."
+                response = self.gemini_model.generate_content(test_prompt)
+                analysis_text = response.text if hasattr(response, 'text') else "Analyse de test non générée."
 
-                if "erreur" not in analysis_text.lower():
-                    self._save_to_memory_db(company_id, report, analysis_text)
-                    self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+                if "Analyse de test non générée" not in analysis_text:
+                    logging.info(f"    -> VICTOIRE : L'API Gemini fonctionne en mode texte pour {symbol}!")
+                else:
+                    logging.warning(f"    -> Échec du test texte pour {symbol}, réponse vide.")
                 return
+
             except api_exceptions.ResourceExhausted as e:
                 logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
                 if not self._rotate_api_key(): return
             except Exception as e:
-                logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
+                logging.error(f"    -> ERREUR CRITIQUE DANS LE MODE TEXTE : {e}")
                 return
-            finally:
-                if uploaded_file:
-                    try: genai.delete_file(uploaded_file.name)
-                    except: pass
-                if os.path.exists(temp_pdf_path): os.remove(temp_pdf_path)
 
     def setup_selenium(self):
         chrome_options = Options()
