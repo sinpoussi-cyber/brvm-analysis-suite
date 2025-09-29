@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V4.1 - CORRECTION LOGIQUE ROTATION CLÉS)
+# MODULE: FUNDAMENTAL ANALYZER (V4.2 - GESTION DES QUOTAS)
 # ==============================================================================
 
 import requests
@@ -31,6 +31,9 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
+
+# Limite prudente pour les requêtes par minute (la limite officielle est 15)
+REQUESTS_PER_MINUTE_LIMIT = 10
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -91,6 +94,7 @@ class BRVMAnalyzer:
         self.newly_analyzed_reports = []
         self.api_keys = []
         self.current_key_index = 0
+        self.request_timestamps = []
 
     def connect_to_db(self):
         try:
@@ -148,6 +152,16 @@ class BRVMAnalyzer:
             return
 
         while self.current_key_index < len(self.api_keys):
+            # --- GESTION DES QUOTAS ---
+            now = time.time()
+            self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 61]
+            if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
+                sleep_time = 61 - (now - self.request_timestamps[0])
+                if sleep_time > 0:
+                    logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time:.1f} secondes...")
+                    time.sleep(sleep_time)
+                self.request_timestamps = [ts for ts in self.request_timestamps if time.time() - ts < 61]
+            
             api_key = self.api_keys[self.current_key_index]
             api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
             
@@ -174,6 +188,7 @@ class BRVMAnalyzer:
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}]}]
                 }
 
+                self.request_timestamps.append(time.time())
                 response = requests.post(api_url, json=request_body)
                 
                 if response.status_code == 429:
@@ -199,7 +214,6 @@ class BRVMAnalyzer:
                 return
         
         logging.error(f"Échec de l'analyse pour {pdf_url} après avoir essayé toutes les clés.")
-
 
     def setup_selenium(self):
         chrome_options = Options()
