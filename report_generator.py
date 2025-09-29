@@ -101,8 +101,7 @@ class ComprehensiveReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur lors de la sauvegarde sur Google Drive : {e}")
     
-    # ... (le reste des fonctions de génération de rapport sera ajouté ici) ...
-
+    # ... (les autres fonctions seront ajoutées dans la prochaine étape) ...
     def generate_all_reports(self):
         logging.info("="*60)
         logging.info("ÉTAPE 4 : DÉMARRAGE DE LA GÉNÉRATION DES RAPPORTS (VERSION POSTGRESQL)")
@@ -111,13 +110,9 @@ class ComprehensiveReportGenerator:
         if not self._authenticate_drive() or not self._configure_gemini_with_rotation():
             logging.error("Arrêt de la génération des rapports en raison d'un problème d'initialisation.")
             return
-
-        # Cette fonction sera complétée dans la prochaine étape
+        
         logging.info("Logique de génération des rapports à implémenter.")
-        # Exemple de ce qui viendra ici :
-        # company_data = self._get_all_data_from_db()
-        # main_report_path = self._create_main_report(company_data)
-        # self._upload_to_drive(main_report_path)
+        # Cette fonction sera complétée dans la prochaine étape.
 
 if __name__ == "__main__":
     db_connection = None
