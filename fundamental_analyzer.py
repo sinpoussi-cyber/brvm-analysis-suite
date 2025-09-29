@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V4.0 - APPEL API DIRECT)
+# MODULE: FUNDAMENTAL ANALYZER (V4.1 - CORRECTION LOGIQUE ROTATION CLÉS)
 # ==============================================================================
 
 import requests
@@ -147,11 +147,7 @@ class BRVMAnalyzer:
         if pdf_url in self.analysis_memory:
             return
 
-        for attempt in range(len(self.api_keys)):
-            if self.current_key_index >= len(self.api_keys):
-                logging.error("Toutes les clés API ont été essayées.")
-                return
-
+        while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
             api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
             
@@ -175,23 +171,18 @@ class BRVMAnalyzer:
                 """
 
                 request_body = {
-                    "contents": [{
-                        "parts": [
-                            {"text": prompt},
-                            {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}
-                        ]
-                    }]
+                    "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}]}]
                 }
 
                 response = requests.post(api_url, json=request_body)
-                response_json = response.json()
-
+                
                 if response.status_code == 429:
-                    logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
+                    logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. Passage à la suivante.")
                     self.current_key_index += 1
-                    continue # Passe à la clé suivante
+                    continue
 
                 response.raise_for_status()
+                response_json = response.json()
                 
                 analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
 
@@ -201,13 +192,14 @@ class BRVMAnalyzer:
                 return
 
             except requests.exceptions.HTTPError as e:
-                logging.error(f"    -> Erreur HTTP : {e.response.status_code} - {e.response.text}")
-                self.current_key_index += 1 # On suppose que l'erreur peut être liée à la clé
+                logging.error(f"    -> Erreur HTTP avec la clé #{self.current_key_index + 1} : {e.response.status_code} - {e.response.text}")
+                self.current_key_index += 1
             except Exception as e:
                 logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
                 return
         
-        logging.error("Toutes les clés API ont échoué pour ce rapport.")
+        logging.error(f"Échec de l'analyse pour {pdf_url} après avoir essayé toutes les clés.")
+
 
     def setup_selenium(self):
         chrome_options = Options()
