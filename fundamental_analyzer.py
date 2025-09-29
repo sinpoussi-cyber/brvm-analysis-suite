@@ -25,8 +25,6 @@ import google.generativeai as genai
 from google.api_core import exceptions as api_exceptions
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# --- Configuration & Secrets ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
