@@ -1,15 +1,19 @@
 # ==============================================================================
-# FICHIER TEMPORAIRE - WORKFLOW DE TEST COMPLET (AVEC INSTALLATION PROPRE)
+# WORKFLOW FINAL - ARCHITECTURE POSTGRESQL (V2.0)
 # ==============================================================================
-name: Full BRVM Analysis Suite
+name: Full BRVM Analysis Suite (DB Architecture)
 
 on:
-  workflow_dispatch:
+  schedule:
+    # S'exécute tous les jours à 07h00 UTC
+    - cron: '0 7 * * *'
+  
+  workflow_dispatch: # Permet le lancement manuel
 
 jobs:
-  run-db-modules-test:
+  run-full-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120 # On peut augmenter si le scraping + analyse IA est très long
 
     steps:
       - name: Checkout develop branch
@@ -27,21 +31,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev xvfb
 
-      - name: Install Python Dependencies (No Cache)
+      - name: Install Python Dependencies
         run: pip install --no-cache-dir -r requirements.txt
       
       - name: Setup Chrome for Selenium
         uses: browser-actions/setup-chrome@latest
 
-      - name: Run Analysis with Virtual Display
+      - name: Run Full Analysis Suite
         env:
+          # Secrets pour la base de données
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
+          
+          # Secrets pour les services Google
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          
+          # Secrets pour l'API Gemini
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -53,7 +62,13 @@ jobs:
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
           GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-        run: |
-          xvfb-run -a python data_collector.py
-          xvfb-run -a python technical_analyzer.py
-          xvfb-run -a python fundamental_analyzer.py
+        run: xvfb-run -a python main.py
+        
+      - name: Upload Reports Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rapports-BRVM-Analyse-DB
+          path: |
+            ./Rapport_*.docx
+            ./Synthese_*.docx
