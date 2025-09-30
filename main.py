@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - ARCHITECTURE POSTGRESQL (V2.0)
+# ORCHESTRATEUR PRINCIPAL - ARCHITECTURE POSTGRESQL (V2.0 FINAL)
 # ==============================================================================
 
 import os
@@ -34,14 +34,14 @@ def main():
         sys.exit(1)
 
     # --- Étape 3 : Analyse fondamentale ---
-    fundamental_results = {}
     new_fundamental_analyses = []
     try:
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
             logging.warning("⚠️ Aucune clé API Gemini. L'étape d'analyse fondamentale et de reporting sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer()
-            fundamental_results, new_fundamental_analyses = analyzer.run_and_get_results()
+            # On ne récupère que la liste des nouvelles analyses pour le rapport des événements
+            _, new_fundamental_analyses = analyzer.run_and_get_results()
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 3 (Analyse fondamentale): {e}", exc_info=True)
 
