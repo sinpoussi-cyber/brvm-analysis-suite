@@ -1,16 +1,11 @@
-gspread
-google-auth-oauthlib
-google-auth-httplib2
 pdfplumber
 beautifulsoup4
 requests
 selenium-wire
 python-docx
-google-generativeai>=0.5.0
 pandas
 numpy
-openpyxl
-blinker==1.6.2  # On force cette version spécifique et compatible
 google-api-python-client
-python-dotenv
+google-auth-httplib2
+google-auth-oauthlib
 psycopg2-binary
