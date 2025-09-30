@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V3.7 - BIBLIOTHÈQUE ET MODÈLE À JOUR)
+# MODULE: FUNDAMENTAL ANALYZER (V4.0 - ARCHITECTURE DB + APPEL API DIRECT)
 # ==============================================================================
 
 import requests
@@ -20,9 +20,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
-from psycopg2 import sql
-import google.generativeai as genai
-from google.api_core import exceptions as api_exceptions
+import base64
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -31,6 +29,8 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
+
+REQUESTS_PER_MINUTE_LIMIT = 10 # Limite prudente pour l'API Gemini
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -84,7 +84,6 @@ class BRVMAnalyzer:
             'SDCC': {'nom_rapport': 'SODE CI', 'alternatives': ['sode ci', 'sode']},
         }
         self.driver = None
-        self.gemini_model = None
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
         self.analysis_memory = set()
@@ -92,6 +91,7 @@ class BRVMAnalyzer:
         self.newly_analyzed_reports = []
         self.api_keys = []
         self.current_key_index = 0
+        self.request_timestamps = []
 
     def connect_to_db(self):
         try:
@@ -133,7 +133,7 @@ class BRVMAnalyzer:
         finally:
             if conn: conn.close()
 
-    def _configure_gemini_with_rotation(self):
+    def _configure_api_keys(self):
         for i in range(1, 20): 
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: self.api_keys.append(key)
@@ -141,69 +141,71 @@ class BRVMAnalyzer:
             logging.error("❌ Aucune clé API trouvée.")
             return False
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
-        return self._rotate_api_key(initial=True)
+        return True
 
-    def _rotate_api_key(self, initial=False):
-        if not initial: self.current_key_index += 1
-        if self.current_key_index >= len(self.api_keys):
-            logging.error("❌ Toutes les clés API Gemini ont été épuisées.")
-            return False
-        if not initial: logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-            logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
-
-    def _analyze_pdf_with_gemini(self, company_id, symbol, report):
+    def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
         pdf_url = report['url']
         if pdf_url in self.analysis_memory:
             return
 
-        for attempt in range(len(self.api_keys)):
-            temp_pdf_path = "temp_report.pdf"
-            uploaded_file = None
-            try:
-                logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
-                response = self.session.get(pdf_url, timeout=45, verify=False)
-                response.raise_for_status()
-                with open(temp_pdf_path, 'wb') as f: f.write(response.content)
-                
-                uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier")
-                
-                prompt = """
-                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-                Concentre-toi impérativement sur les aspects suivants :
-                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
-                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
-                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
-                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
-                """
-                
-                response = self.gemini_model.generate_content([prompt, uploaded_file])
-                analysis_text = response.text if hasattr(response, 'text') else "Analyse non générée."
+        now = time.time()
+        self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
+        if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
+            sleep_time = 60 - (now - self.request_timestamps[0])
+            logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
+            time.sleep(sleep_time + 1)
+            self.request_timestamps = []
 
-                if "erreur" not in analysis_text.lower():
-                    self._save_to_memory_db(company_id, report, analysis_text)
-                    self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+        if self.current_key_index >= len(self.api_keys):
+            logging.error("Toutes les clés API ont été épuisées. Arrêt des analyses.")
+            return
+
+        api_key = self.api_keys[self.current_key_index]
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
+        try:
+            logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
+            
+            pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
+            pdf_response.raise_for_status()
+            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
+
+            prompt = """
+            Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+            Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+            Concentre-toi impérativement sur les aspects suivants :
+            - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
+            - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+            - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
+            - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+            - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
+            Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
+            """
+
+            request_body = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}]}]}
+
+            self.request_timestamps.append(time.time())
+            response = requests.post(api_url, json=request_body, timeout=90)
+
+            if response.status_code == 429:
+                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. Passage à la suivante.")
+                self.current_key_index += 1
+                self._analyze_pdf_with_direct_api(company_id, symbol, report) # Réessayer avec la nouvelle clé
                 return
-            except api_exceptions.ResourceExhausted as e:
-                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
-                if not self._rotate_api_key(): return
-            except Exception as e:
-                logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
-                return
-            finally:
-                if uploaded_file:
-                    try: genai.delete_file(uploaded_file.name)
-                    except: pass
-                if os.path.exists(temp_pdf_path): os.remove(temp_pdf_path)
+
+            response.raise_for_status()
+            response_json = response.json()
+            
+            analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
+
+            if "erreur" not in analysis_text.lower():
+                self._save_to_memory_db(company_id, report, analysis_text)
+                self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+
+        except Exception as e:
+            logging.error(f"    -> Erreur technique avec la clé #{self.current_key_index + 1} : {e}")
+            self.current_key_index += 1 # On suppose que l'erreur est liée à la clé et on essaie la suivante
+            self._analyze_pdf_with_direct_api(company_id, symbol, report)
 
     def setup_selenium(self):
         chrome_options = Options()
@@ -313,7 +315,7 @@ class BRVMAnalyzer:
         
         conn = None
         try:
-            if not self._configure_gemini_with_rotation():
+            if not self._configure_api_keys():
                 return {}, []
             
             self._load_analysis_memory_from_db()
@@ -345,8 +347,7 @@ class BRVMAnalyzer:
                 logging.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
 
                 for report in recent_reports:
-                    self._analyze_pdf_with_gemini(company_id, symbol, report)
-                    time.sleep(1)
+                    self._analyze_pdf_with_direct_api(company_id, symbol, report)
 
             logging.info("\n✅ Traitement de toutes les sociétés terminé.")
             
