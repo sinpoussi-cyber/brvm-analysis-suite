@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.1 - FINAL SANS DRIVE)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.1 - FINAL SANS DRIVE & APPEL API DIRECT)
 # ==============================================================================
 
 import psycopg2
@@ -43,7 +43,7 @@ class ComprehensiveReportGenerator:
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
-            sleep_time = 60 - (now - self.request_timestamps[0])
+            sleep_time = 60 - (now - self.request_timestamps[0]) if self.request_timestamps else 60
             logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
             time.sleep(sleep_time + 1)
             self.request_timestamps = []
@@ -55,20 +55,16 @@ class ComprehensiveReportGenerator:
                 self.request_timestamps.append(time.time())
                 request_body = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(api_url, json=request_body, timeout=60)
-
                 if response.status_code == 429:
                     logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
                     self.current_key_index += 1
                     continue
-                
                 response.raise_for_status()
                 response_json = response.json()
                 return response_json['candidates'][0]['content']['parts'][0]['text']
-
             except Exception as e:
                 logging.error(f"Erreur avec la clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
-        
         return "Erreur d'analyse : Toutes les clés API ont échoué."
 
     def _get_all_data_from_db(self):
@@ -147,7 +143,7 @@ class ComprehensiveReportGenerator:
         logging.info(f"🎉 Rapport de synthèse principal généré : {output_filename}")
         return output_filename
 
-    def generate_all_reports(self):
+    def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*60)
         logging.info("ÉTAPE 4 : DÉMARRAGE DE LA GÉNÉRATION DES RAPPORTS")
         logging.info("="*60)
@@ -168,6 +164,7 @@ class ComprehensiveReportGenerator:
             }
 
         self._create_main_report(company_analyses)
+        # La sauvegarde sur Drive est retirée
 
 if __name__ == "__main__":
     db_conn = None
@@ -177,7 +174,7 @@ if __name__ == "__main__":
         else:
             db_conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
             report_generator = ComprehensiveReportGenerator(db_conn)
-            report_generator.generate_all_reports()
+            report_generator.generate_all_reports([])
     except Exception as e:
         logging.error(f"❌ Erreur fatale dans le générateur de rapports : {e}", exc_info=True)
     finally:
