@@ -11,3 +11,4 @@ google-auth-oauthlib
 psycopg2-binary
 blinker==1.6.2
 urllib3<2.0
+gspread # <--- RÉ-AJOUTÉ ICI
