@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - ARCHITECTURE POSTGRESQL (V2.1 FINAL)
+# ORCHESTRATEUR PRINCIPAL - ARCHITECTURE POSTGRESQL (V2.1 - CORRECTION APPEL)
 # ==============================================================================
 
 import os
@@ -34,12 +34,13 @@ def main():
         sys.exit(1)
 
     # --- Étape 3 : Analyse fondamentale ---
+    new_fundamental_analyses = []
     try:
         if not any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 20)):
-            logging.warning("⚠️ Aucune clé API Gemini. L'étape d'analyse fondamentale sera sautée.")
+            logging.warning("⚠️ Aucune clé API Gemini. L'étape d'analyse fondamentale et de reporting sera sautée.")
         else:
             analyzer = fundamental_analyzer.BRVMAnalyzer()
-            analyzer.run_and_get_results()
+            _, new_fundamental_analyses = analyzer.run_and_get_results()
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 3 (Analyse fondamentale): {e}", exc_info=True)
 
@@ -57,7 +58,9 @@ def main():
             
             db_connection = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
             final_report_generator = report_generator.ComprehensiveReportGenerator(db_connection)
-            final_report_generator.generate_all_reports()
+            
+            # CORRECTION ICI : On passe la variable 'new_fundamental_analyses'
+            final_report_generator.generate_all_reports(new_fundamental_analyses)
 
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 4 (Génération des rapports): {e}", exc_info=True)
