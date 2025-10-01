@@ -1,24 +1,13 @@
-# --- Manipulation des Données & Base de Données ---
-pandas==2.2.2
-numpy==1.26.4
-psycopg2-binary==2.9.9
-
-# --- Web Scraping & Requêtes HTTP ---
-requests==2.31.0
-beautifulsoup4==4.12.3
-selenium-wire==5.1.0
-urllib3<2.0 # Nécessaire pour la compatibilité avec selenium-wire
-
-# --- Lecture de PDF ---
-pdfplumber==0.11.0
-
-# --- Génération de Documents ---
-python-docx==1.1.2
-
-# --- APIs Google (Drive & Gemini par appel direct) ---
-google-api-python-client==2.134.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
-
-# --- Utilitaires ---
-blinker==1.6.2 # Version stable compatible avec selenium-wire
+pdfplumber
+beautifulsoup4
+requests
+selenium-wire
+python-docx
+pandas
+numpy
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+psycopg2-binary
+blinker==1.6.2
+urllib3<2.0
