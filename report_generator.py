@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.0 - ARCHITECTURE DB + APPEL API DIRECT)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.1 - RAPPORTS COMPLETS)
 # ==============================================================================
 
 import psycopg2
@@ -112,11 +112,11 @@ class ComprehensiveReportGenerator:
             ta.macd_line, ta.signal_line, ta.histogram, ta.macd_decision,
             ta.rsi, ta.rsi_decision,
             ta.stochastic_k, ta.stochastic_d, ta.stochastic_decision,
-            (SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n') FROM fundamental_analysis fa WHERE fa.company_id = c.id) as fundamental_summaries
+            (SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC) FROM fundamental_analysis fa WHERE fa.company_id = c.id) as fundamental_summaries
         FROM companies c
-        JOIN latest_historical_data lhd ON c.id = lhd.company_id
+        LEFT JOIN latest_historical_data lhd ON c.id = lhd.company_id
         LEFT JOIN technical_analysis ta ON lhd.id = ta.historical_data_id
-        WHERE lhd.rn <= 50;
+        WHERE lhd.rn <= 50 OR lhd.rn IS NULL;
         """
         df = pd.read_sql(query, self.db_conn)
         
@@ -132,13 +132,15 @@ class ComprehensiveReportGenerator:
         return company_data
 
     def _analyze_price_evolution(self, df_prices):
+        if df_prices.empty or df_prices['price'].isnull().all():
+            return "Données de prix insuffisantes pour une analyse."
         data_string = df_prices.to_csv(index=False)
         prompt = f"Analyse l'évolution du cours de cette action sur les 50 derniers jours. Tendance générale (haussière, baissière, stable)? Chiffres clés (début, fin, %, plus haut, plus bas)? Dynamique récente?\n\nDonnées:\n{data_string}"
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_technical_indicators(self, series_indicators):
         data_string = series_indicators.to_string()
-        prompt = f"Analyse ces indicateurs techniques pour le jour le plus récent. Pour chaque indicateur, donne une analyse de 2-3 phrases et un signal clair (Achat, Vente, Neutre).\n\nIndicateurs:\n{data_string}"
+        prompt = f"Analyse ces indicateurs techniques pour le jour le plus récent. Pour chaque indicateur (MM, Bollinger, MACD, RSI, Stochastique), donne une analyse de 2-3 phrases et un signal clair (Achat, Vente, Neutre).\n\nIndicateurs:\n{data_string}"
         return self._call_gemini_with_retry(prompt)
 
     def _summarize_fundamental_analysis(self, summaries):
@@ -151,7 +153,7 @@ class ComprehensiveReportGenerator:
         doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
         doc.add_paragraph(f"Généré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        for symbol, analyses in company_analyses.items():
+        for symbol, analyses in sorted(company_analyses.items()):
             nom_societe = analyses.get('nom_societe', symbol)
             doc.add_heading(f'Analyse Détaillée : {nom_societe} ({symbol})', level=1)
             
@@ -170,6 +172,82 @@ class ComprehensiveReportGenerator:
         doc.save(output_filename)
         logging.info(f"🎉 Rapport de synthèse principal généré : {output_filename}")
         return output_filename
+
+    def _generate_market_events_report(self, new_analyses):
+        if not new_analyses:
+            logging.info("Aucun nouvel événement fondamental à signaler.")
+            return
+
+        logging.info("Génération du rapport des événements marquants...")
+        full_text = "\n---\n".join(new_analyses)
+        prompt = f"""
+        Tu es un journaliste financier. Rédige un court article de synthèse sur les événements marquants du jour sur la BRVM, basé sur les analyses de rapports suivantes.
+        Structure ton article ainsi :
+        1. Un titre accrocheur.
+        2. Un paragraphe d'introduction.
+        3. Des points clés pour les 2 ou 3 annonces les plus importantes (résultats, dividendes, perspectives...).
+        4. Un court paragraphe de conclusion.
+
+        Analyses du jour :
+        {full_text}
+        """
+        market_summary = self._call_gemini_with_retry(prompt)
+        
+        doc = Document()
+        doc.add_heading("Synthèse des Événements Marquants du Marché", level=0)
+        doc.add_paragraph(f"Basé sur les rapports analysés le {datetime.now().strftime('%Y-%m-%d')}")
+        doc.add_paragraph(market_summary)
+        
+        output_filename = f"Synthese_Marche_{time.strftime('%Y%m%d_%H%M')}.docx"
+        doc.save(output_filename)
+        logging.info(f"🎉 Rapport des événements marquants généré : {output_filename}")
+        self._upload_to_drive(output_filename)
+
+    def _generate_delta_report(self, new_report_path):
+        if not self.drive_service: return
+
+        logging.info("Recherche du dernier rapport sur Drive pour comparaison...")
+        query = f"'{DRIVE_FOLDER_ID}' in parents and name contains 'Rapport_Synthese_Investissement_BRVM_' and mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'"
+        results = self.drive_service.files().list(q=query, pageSize=1, fields="files(id, name)", orderBy="createdTime desc", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+        
+        latest_file = results.get('files', [None])[0]
+        if not latest_file:
+            logging.info("  -> Aucun rapport précédent trouvé. Le rapport comparatif ne sera pas généré.")
+            return
+
+        logging.info(f"  -> Téléchargement du rapport précédent : {latest_file['name']}")
+        request = self.drive_service.files().get_media(fileId=latest_file['id'], supportsAllDrives=True)
+        old_file_bytes = BytesIO()
+        old_file_bytes.write(request.execute())
+        old_file_bytes.seek(0)
+
+        old_doc = Document(old_file_bytes)
+        new_doc = Document(new_report_path)
+        old_text = "\n".join([p.text for p in old_doc.paragraphs])
+        new_text = "\n".join([p.text for p in new_doc.paragraphs])
+
+        prompt = f"""
+        Compare les deux rapports suivants (ANCIEN et NOUVEAU) et rédige une synthèse des changements significatifs pour un investisseur.
+        Concentre-toi sur les nouvelles informations fondamentales ou les changements de signaux techniques.
+        Ignore les changements mineurs. Présente le résultat en points clés.
+
+        --- ANCIEN RAPPORT ---
+        {old_text[:15000]} 
+        --- NOUVEAU RAPPORT ---
+        {new_text[:15000]}
+        """
+        delta_summary = self._call_gemini_with_retry(prompt)
+            
+        delta_doc = Document()
+        delta_doc.add_heading(f"Analyse des Changements entre Rapports", level=0)
+        delta_doc.add_paragraph(f"Comparaison entre le rapport du jour et le rapport '{latest_file['name']}'.")
+        delta_doc.add_heading("Synthèse des Changements Significatifs", level=1)
+        delta_doc.add_paragraph(delta_summary)
+        
+        output_filename = f"Rapport_Comparatif_{time.strftime('%Y%m%d_%H%M')}.docx"
+        delta_doc.save(output_filename)
+        logging.info(f"🎉 Rapport comparatif généré : {output_filename}")
+        self._upload_to_drive(output_filename)
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*60)
@@ -194,15 +272,19 @@ class ComprehensiveReportGenerator:
         main_doc_path = self._create_main_report(company_analyses)
         if main_doc_path:
             self._upload_to_drive(main_doc_path)
+            self._generate_delta_report(main_doc_path)
         
-        # La logique pour les rapports delta et événements peut être ajoutée ici.
+        self._generate_market_events_report(new_fundamental_analyses)
 
 if __name__ == "__main__":
     db_conn = None
     try:
-        db_conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        report_generator = ComprehensiveReportGenerator(db_conn)
-        report_generator.generate_all_reports([])
+        if not all([DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DRIVE_FOLDER_ID, GSPREAD_SERVICE_ACCOUNT_JSON]):
+            logging.error("Des secrets essentiels sont manquants. Arrêt du script.")
+        else:
+            db_conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+            report_generator = ComprehensiveReportGenerator(db_conn)
+            report_generator.generate_all_reports([])
     except Exception as e:
         logging.error(f"❌ Erreur fatale dans le générateur de rapports : {e}", exc_info=True)
     finally:
