@@ -1,41 +1,50 @@
 # ==============================================================================
-# Workflow GitHub Actions pour la Suite d'Analyse BRVM Complète (V1.7 - Final)
+# WORKFLOW FINAL - ARCHITECTURE POSTGRESQL (V2.0)
 # ==============================================================================
-name: Full BRVM Analysis Suite
+name: Full BRVM Analysis Suite (DB Architecture)
 
 on:
   schedule:
     # S'exécute tous les jours à 07h00 UTC
     - cron: '0 7 * * *'
   
-  workflow_dispatch:
+  workflow_dispatch: # Permet le lancement manuel
 
 jobs:
-  run-analysis-suite:
+  run-full-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
 
     steps:
-      - name: Checkout repository
+      - name: Checkout develop branch
         uses: actions/checkout@v4
-
-      - name: Setup Chrome for Selenium
-        uses: browser-actions/setup-chrome@latest
+        with:
+          ref: develop
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install System Dependencies
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev xvfb
 
-      - name: Run BRVM Analysis Suite
+      - name: Install Python Dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+      
+      - name: Setup Chrome for Selenium
+        uses: browser-actions/setup-chrome@latest
+
+      - name: Run Full Analysis Suite
         env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
@@ -48,13 +57,13 @@ jobs:
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
           GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-        run: python main.py
-
-      - name: Upload All Reports Artifact
+        run: xvfb-run -a python main.py
+        
+      - name: Upload Reports Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Rapports-BRVM-Analyse
+          name: Rapports-BRVM-Analyse-DB
           path: |
             ./Rapport_*.docx
             ./Synthese_*.docx

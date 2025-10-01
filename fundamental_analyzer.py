@@ -1,7 +1,7 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V1.7 - CORRECTION UPLOAD API)
+# MODULE: FUNDAMENTAL ANALYZER (V4.0 - ARCHITECTURE DB + APPEL API DIRECT)
 # ==============================================================================
-import gspread
+
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -19,16 +19,21 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from google.oauth2 import service_account
-import google.generativeai as genai
-from google.api_core import exceptions as api_exceptions
+import psycopg2
+import base64
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-ANALYSIS_MEMORY_SHEET = 'ANALYSIS_MEMORY'
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+DB_NAME = os.environ.get('DB_NAME')
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_HOST = os.environ.get('DB_HOST')
+DB_PORT = os.environ.get('DB_PORT')
+
+REQUESTS_PER_MINUTE_LIMIT = 10 # Limite prudente pour l'API Gemini
 
 class BRVMAnalyzer:
-    def __init__(self, spreadsheet_id):
-        self.spreadsheet_id = spreadsheet_id
+    def __init__(self):
         self.societes_mapping = {
             'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
@@ -78,240 +83,141 @@ class BRVMAnalyzer:
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'SDCC': {'nom_rapport': 'SODE CI', 'alternatives': ['sode ci', 'sode']},
         }
-        self.gc = None
         self.driver = None
-        self.gemini_model = None
-        self.original_societes_mapping = self.societes_mapping.copy()
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
-        self.spreadsheet = None
-        self.memory_worksheet = None
-        self.analysis_memory = {}
+        self.analysis_memory = set()
+        self.company_ids = {}
+        self.newly_analyzed_reports = []
         self.api_keys = []
         self.current_key_index = 0
-        self.newly_analyzed_reports = []
+        self.request_timestamps = []
+
+    def connect_to_db(self):
+        try:
+            conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+            return conn
+        except Exception as e:
+            logging.error(f"❌ Erreur de connexion DB: {e}")
+            return None
+
+    def _load_analysis_memory_from_db(self):
+        logging.info("Chargement de la mémoire d'analyse depuis PostgreSQL...")
+        conn = self.connect_to_db()
+        if not conn: return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT report_url FROM fundamental_analysis;")
+                self.analysis_memory = {row[0] for row in cur.fetchall()}
+            logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées.")
+        except Exception as e:
+            logging.error(f"❌ Impossible de charger la mémoire d'analyse: {e}")
+        finally:
+            if conn: conn.close()
+
+    def _save_to_memory_db(self, company_id, report, summary):
+        conn = self.connect_to_db()
+        if not conn: return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
+                    VALUES (%s, %s, %s, %s, %s) ON CONFLICT (report_url) DO NOTHING;
+                """, (company_id, report['url'], report['titre'], report['date'], summary))
+                conn.commit()
+            self.analysis_memory.add(report['url'])
+            logging.info(f"    -> Analyse pour {os.path.basename(report['url'])} sauvegardée en DB.")
+        except Exception as e:
+            logging.error(f"    -> ERREUR lors de la sauvegarde en DB : {e}")
+            conn.rollback()
+        finally:
+            if conn: conn.close()
+
+    def _configure_api_keys(self):
+        for i in range(1, 20): 
+            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
+            if key: self.api_keys.append(key)
+        if not self.api_keys:
+            logging.error("❌ Aucune clé API trouvée.")
+            return False
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
+        return True
+
+    def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
+        pdf_url = report['url']
+        if pdf_url in self.analysis_memory:
+            return
+
+        now = time.time()
+        self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
+        if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
+            sleep_time = 60 - (now - self.request_timestamps[0])
+            logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
+            time.sleep(sleep_time + 1)
+            self.request_timestamps = []
+
+        if self.current_key_index >= len(self.api_keys):
+            logging.error("Toutes les clés API ont été épuisées. Arrêt des analyses.")
+            return
+
+        api_key = self.api_keys[self.current_key_index]
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
+        try:
+            logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
+            
+            pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
+            pdf_response.raise_for_status()
+            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
+
+            prompt = """
+            Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+            Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+            Concentre-toi impérativement sur les aspects suivants :
+            - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
+            - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+            - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
+            - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+            - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
+            Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
+            """
+
+            request_body = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}]}]}
+
+            self.request_timestamps.append(time.time())
+            response = requests.post(api_url, json=request_body, timeout=90)
+
+            if response.status_code == 429:
+                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. Passage à la suivante.")
+                self.current_key_index += 1
+                self._analyze_pdf_with_direct_api(company_id, symbol, report) # Réessayer avec la nouvelle clé
+                return
+
+            response.raise_for_status()
+            response_json = response.json()
+            
+            analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
+
+            if "erreur" not in analysis_text.lower():
+                self._save_to_memory_db(company_id, report, analysis_text)
+                self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+
+        except Exception as e:
+            logging.error(f"    -> Erreur technique avec la clé #{self.current_key_index + 1} : {e}")
+            self.current_key_index += 1 # On suppose que l'erreur est liée à la clé et on essaie la suivante
+            self._analyze_pdf_with_direct_api(company_id, symbol, report)
 
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument("--window-size=1920,1080")
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logging.info("✅ Pilote Selenium (Chrome) démarré.")
         except Exception as e:
             logging.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
             self.driver = None
-            
-    def authenticate_google_services(self):
-        logging.info("Authentification Google...")
-        try:
-            creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-            if not creds_json_str:
-                logging.error("❌ Secret GSPREAD_SERVICE_ACCOUNT introuvable.")
-                return False
-            creds_dict = json.loads(creds_json_str)
-            scopes = ['https://www.googleapis.com/auth/spreadsheets']
-            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            self.gc = gspread.authorize(creds)
-            logging.info("✅ Authentification Google réussie.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur d'authentification : {e}")
-            return False
-
-    def _load_analysis_memory(self):
-        logging.info("Chargement de la mémoire d'analyse...")
-        try:
-            self.memory_worksheet = self.spreadsheet.worksheet(ANALYSIS_MEMORY_SHEET)
-            logging.info(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' trouvée.")
-        except gspread.exceptions.WorksheetNotFound:
-            logging.warning(f"Feuille de mémoire '{ANALYSIS_MEMORY_SHEET}' non trouvée. Création en cours...")
-            self.memory_worksheet = self.spreadsheet.add_worksheet(title=ANALYSIS_MEMORY_SHEET, rows=2000, cols=4)
-            headers = ['URL', 'Symbol', 'Analysis_Summary', 'Analysis_Date']
-            self.memory_worksheet.update('A1:D1', [headers])
-            logging.info(f"Feuille '{ANALYSIS_MEMORY_SHEET}' créée avec les en-têtes.")
-
-        try:
-            records = self.memory_worksheet.get_all_records()
-            self.analysis_memory = {row['URL']: row['Analysis_Summary'] for row in records if row.get('URL')}
-            logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées en mémoire.")
-        except Exception as e:
-            logging.error(f"Impossible de charger les enregistrements de la mémoire : {e}")
-
-    def _save_to_memory(self, symbol, report_url, summary):
-        if not self.memory_worksheet:
-            logging.error("Impossible de sauvegarder en mémoire, la feuille n'est pas initialisée.")
-            return
-        
-        try:
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            row_to_add = [report_url, symbol, summary, timestamp]
-            self.memory_worksheet.append_row(row_to_add, value_input_option='USER_ENTERED')
-            
-            self.analysis_memory[report_url] = summary
-            logging.info(f"    -> Analyse pour {symbol} sauvegardée dans la mémoire persistante.")
-        except Exception as e:
-            logging.error(f"    -> ERREUR lors de la sauvegarde en mémoire : {e}")
-
-    def _configure_gemini_with_rotation(self):
-        for i in range(1, 20): 
-            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
-                self.api_keys.append(key)
-
-        if not self.api_keys:
-            logging.error("❌ Aucune clé API nommée 'GOOGLE_API_KEY_n' n'a été trouvée dans les secrets GitHub.")
-            return False
-            
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini ont été chargées.")
-        
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini configurée avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
-
-    def _rotate_api_key(self):
-        self.current_key_index += 1
-        if self.current_key_index >= len(self.api_keys):
-            logging.error("❌ Toutes les clés API Gemini ont été épuisées ou sont invalides.")
-            return False
-        
-        logging.warning(f"Passage à la clé API Gemini #{self.current_key_index + 1}...")
-        try:
-            genai.configure(api_key=self.api_keys[self.current_key_index])
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            logging.info(f"API Gemini reconfigurée avec succès avec la clé #{self.current_key_index + 1}.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur de configuration avec la clé #{self.current_key_index + 1}: {e}")
-            return self._rotate_api_key()
-
-    def _analyze_pdf_with_gemini(self, pdf_url, symbol):
-        if pdf_url in self.analysis_memory:
-            logging.info(f"    -> Analyse pour {pdf_url} trouvée en mémoire. Utilisation de la version en cache.")
-            return self.analysis_memory[pdf_url]
-
-        if not self.gemini_model:
-            return "Analyse IA non disponible (API non configurée)."
-        
-        max_retries = len(self.api_keys)
-        for attempt in range(max_retries):
-            temp_pdf_path = "temp_report.pdf"
-            uploaded_file = None
-            try:
-                logging.info(f"    -> Nouvelle analyse IA (clé #{self.current_key_index + 1}) : Téléchargement du PDF...")
-                response = self.session.get(pdf_url, timeout=45, verify=False)
-                response.raise_for_status()
-                pdf_content = response.content
-                if len(pdf_content) < 1024:
-                    return "Fichier PDF invalide ou vide."
-                
-                with open(temp_pdf_path, 'wb') as f:
-                    f.write(pdf_content)
-                
-                uploaded_file = genai.upload_file(path=temp_pdf_path, display_name="Rapport Financier BRVM")
-                
-                prompt = """
-                Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-                Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-                Concentre-toi impérativement sur les aspects suivants :
-                - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
-                - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-                - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
-                - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-                - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
-                Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
-                """
-                
-                logging.info("    -> Fichier envoyé. Génération de l'analyse...")
-                response = self.gemini_model.generate_content([prompt, uploaded_file])
-                
-                analysis_text = ""
-                if hasattr(response, 'text'):
-                    analysis_text = response.text
-                elif hasattr(response, 'prompt_feedback'):
-                    block_reason = response.prompt_feedback.block_reason.name
-                    analysis_text = f"Analyse bloquée par l'IA. Raison : {block_reason}."
-                else:
-                    analysis_text = "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
-                
-                if analysis_text and "erreur" not in analysis_text.lower() and "bloquée" not in analysis_text.lower():
-                    self._save_to_memory(symbol, pdf_url, analysis_text)
-                    self.newly_analyzed_reports.append(f"Rapport pour {symbol} ({os.path.basename(pdf_url)}):\n{analysis_text}\n")
-                
-                return analysis_text
-            
-            except api_exceptions.ResourceExhausted as e:
-                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. ({e})")
-                if not self._rotate_api_key():
-                    return "Erreur d'analyse : Toutes les clés API ont atteint leur quota."
-            
-            except Exception as e:
-                logging.error(f"    -> Erreur technique inattendue lors de l'analyse IA : {e}")
-                return f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
-            finally:
-                if uploaded_file:
-                    try: genai.delete_file(uploaded_file.name)
-                    except Exception as del_e: logging.warning(f"Impossible de supprimer le fichier uploadé {uploaded_file.name}: {del_e}")
-                if os.path.exists(temp_pdf_path):
-                    os.remove(temp_pdf_path)
-        
-        return "Erreur d'analyse : Échec après avoir essayé toutes les clés API."
-
-    def run_and_get_results(self):
-        logging.info("="*60)
-        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (IA)")
-        logging.info("="*60)
-        
-        analysis_results = {}
-        try:
-            if not self._configure_gemini_with_rotation(): return {}, []
-            if not self.authenticate_google_services(): return {}, []
-            
-            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
-            self._load_analysis_memory()
-
-            self.setup_selenium()
-            if not self.driver: return {}, []
-            if not self.verify_and_filter_companies(): return {}, []
-            
-            analysis_results = self.process_all_companies()
-            
-            if not analysis_results:
-                logging.warning("❌ Aucun résultat d'analyse à retourner.")
-
-        except Exception as e:
-            logging.critical(f"❌ Une erreur critique a interrompu l'analyse fondamentale: {e}", exc_info=True)
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logging.info("Navigateur Selenium fermé.")
-            logging.info("Processus d'analyse fondamentale terminé.")
-        
-        return (analysis_results, self.newly_analyzed_reports)
-
-    def verify_and_filter_companies(self):
-        try:
-            logging.info(f"Vérification des feuilles dans G-Sheet...")
-            sheets_to_exclude = ["UNMATCHED", "Actions_BRVM", "ANALYSIS_MEMORY"]
-            existing_sheets = [ws.title for ws in self.spreadsheet.worksheets() if ws.title not in sheets_to_exclude]
-            logging.info(f"Onglets trouvés : {existing_sheets}")
-            symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
-            self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
-            if not self.societes_mapping:
-                logging.error("❌ ERREUR FATALE : Aucune société à analyser.")
-                return False
-            logging.info(f"✅ {len(self.societes_mapping)} sociétés seront analysées.")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
-            return False
 
     def _normalize_text(self, text):
         if not text: return ""
@@ -319,7 +225,26 @@ class BRVMAnalyzer:
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
         text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
-    
+
+    def _get_symbol_from_name(self, company_name_normalized):
+        for symbol, info in self.societes_mapping.items():
+            if symbol in self.company_ids:
+                for alt in info['alternatives']:
+                    if alt in company_name_normalized: return symbol
+        return None
+
+    def _extract_date_from_text(self, text):
+        if not text: return datetime(1900, 1, 1).date()
+        year_match = re.search(r'\b(20\d{2})\b', text)
+        if not year_match: return datetime(1900, 1, 1).date()
+        year = int(year_match.group(1))
+        text_lower = text.lower()
+        if 't1' in text_lower or '1er trimestre' in text_lower: return datetime(year, 3, 31).date()
+        if 's1' in text_lower or '1er semestre' in text_lower: return datetime(year, 6, 30).date()
+        if 't3' in text_lower or '3eme trimestre' in text_lower: return datetime(year, 9, 30).date()
+        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31).date()
+        return datetime(year, 6, 15).date()
+
     def _find_all_reports(self):
         if not self.driver: return {}
         base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
@@ -346,10 +271,11 @@ class BRVMAnalyzer:
                         company_name_normalized = self._normalize_text(link_tag.text)
                         company_url = f"https://www.brvm.org{link_tag['href']}"
                         symbol = self._get_symbol_from_name(company_name_normalized)
-                        if symbol and symbol in self.societes_mapping:
+                        if symbol:
                             if not any(c['url'] == company_url for c in company_links):
                                 company_links.append({'symbol': symbol, 'url': company_url})
                 time.sleep(1)
+
             logging.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
             for company in company_links:
                 symbol = company['symbol']
@@ -373,7 +299,6 @@ class BRVMAnalyzer:
                                     'date': self._extract_date_from_text(item.get_text())
                                 }
                                 all_reports[symbol].append(report_data)
-                                logging.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
                     time.sleep(1)
                 except TimeoutException:
                     logging.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
@@ -381,85 +306,69 @@ class BRVMAnalyzer:
                     logging.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
         except Exception as e:
             logging.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
-            return {}
         return all_reports
 
-    def _get_symbol_from_name(self, company_name_normalized):
-        for symbol, info in self.original_societes_mapping.items():
-            for alt in info['alternatives']:
-                if alt in company_name_normalized:
-                    return symbol
-        return None
-
-    def _extract_date_from_text(self, text):
-        if not text: return datetime(1900, 1, 1)
-        year_match = re.search(r'\b(20\d{2})\b', text)
-        if not year_match: return datetime(1900, 1, 1)
-        year = int(year_match.group(1))
-        text_lower = text.lower()
-        trim_match = re.search(r't(\d)|(\d)\s*er\s*trimestre', text_lower)
-        if trim_match:
-            trimester = int(trim_match.group(1) or trim_match.group(2))
-            return datetime(year, trimester * 3, 1)
-        sem_match = re.search(r's(\d)|(\d)\s*er\s*semestre', text_lower)
-        if sem_match:
-            semester = int(sem_match.group(1) or sem_match.group(2))
-            return datetime(year, 6 if semester == 1 else 12, 1)
-        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
-        return datetime(year, 6, 15)
-
-    def process_all_companies(self):
-        all_reports = self._find_all_reports()
-        results = {}
-        if not all_reports:
-            logging.error("❌ ÉCHEC FINAL : Aucun rapport n'a pu être collecté sur le site de la BRVM.")
-            return {}
-        logging.info(f"\n✅ COLLECTE TERMINÉE : {sum(len(r) for r in all_reports.values())} rapports trouvés au total.")
+    def run_and_get_results(self):
+        logging.info("="*60)
+        logging.info("ÉTAPE 3 : DÉMARRAGE DE L'ANALYSE FONDAMENTALE (VERSION POSTGRESQL)")
+        logging.info("="*60)
         
-        date_2024_start = datetime(2024, 1, 1)
-        date_2025_start = datetime(2025, 1, 1)
-        keywords_financiers = ['états financiers', 'etats financiers', 'certifié', 'commissaires aux comptes', 'rapport annuel']
+        conn = None
+        try:
+            if not self._configure_api_keys():
+                return {}, []
+            
+            self._load_analysis_memory_from_db()
+            self.setup_selenium()
+            if not self.driver: return {}, []
 
-        for symbol, info in self.societes_mapping.items():
-            logging.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
+            conn = self.connect_to_db()
+            if not conn: return {}, []
+            with conn.cursor() as cur:
+                cur.execute("SELECT symbol, id, name FROM companies")
+                companies_from_db = cur.fetchall()
+            conn.close() 
             
-            company_reports = all_reports.get(symbol, [])
-            analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
-            reports_to_analyze = []
-            
-            for report in company_reports:
-                report_date = report['date']
-                title_lower = report['titre'].lower()
-                if date_2024_start <= report_date < date_2025_start:
-                    if any(keyword in title_lower for keyword in keywords_financiers):
-                        reports_to_analyze.append(report)
-                elif report_date >= date_2025_start:
-                    reports_to_analyze.append(report)
-            
-            reports_to_analyze.sort(key=lambda x: x['date'], reverse=True)
-            
-            if not reports_to_analyze:
-                analysis_data['statut'] = 'Aucun rapport pertinent trouvé selon les critères de filtrage (date/titre).'
-                results[symbol] = analysis_data
-                continue
-            
-            logging.info(f"  -> {len(reports_to_analyze)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
+            self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
 
-            for i, report in enumerate(reports_to_analyze):
-                logging.info(f"  -> Traitement rapport {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
-                
-                gemini_analysis = self._analyze_pdf_with_gemini(report['url'], symbol)
-                
-                analysis_data['rapports_analyses'].append({
-                    'titre': report['titre'], 
-                    'url': report['url'], 
-                    'date': report['date'].strftime('%Y-%m-%d'),
-                    'analyse_ia': gemini_analysis
-                })
-                
-                time.sleep(1)
+            all_reports = self._find_all_reports()
             
-            results[symbol] = analysis_data
-        
-        logging.info("\n✅ Traitement de toutes les sociétés terminé.")
-        return results
+            for symbol, (company_id, company_name) in self.company_ids.items():
+                logging.info(f"\n📊 Traitement des rapports pour {symbol} - {company_name}")
+                company_reports = all_reports.get(symbol, [])
+                if not company_reports:
+                    logging.info(f"  -> Aucun rapport trouvé sur le site pour {symbol}.")
+                    continue
+
+                date_2024_start = datetime(2024, 1, 1).date()
+                recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
+                recent_reports.sort(key=lambda x: x['date'], reverse=True)
+                
+                logging.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
+
+                for report in recent_reports:
+                    self._analyze_pdf_with_direct_api(company_id, symbol, report)
+
+            logging.info("\n✅ Traitement de toutes les sociétés terminé.")
+            
+            conn = self.connect_to_db()
+            if not conn: return {}, []
+            with conn.cursor() as cur:
+                cur.execute("SELECT c.symbol, fa.analysis_summary, c.name FROM fundamental_analysis fa JOIN companies c ON fa.company_id = c.id;")
+                final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
+                for symbol, summary, name in cur.fetchall():
+                    final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
+                    final_results[symbol]['nom'] = name
+            
+            return (dict(final_results), self.newly_analyzed_reports)
+            
+        except Exception as e:
+            logging.critical(f"❌ Erreur critique : {e}", exc_info=True)
+            return {}, []
+        finally:
+            if self.driver: self.driver.quit()
+            if conn and not conn.closed: conn.close()
+
+if __name__ == "__main__":
+    analyzer = BRVMAnalyzer()
+    analyzer.run_and_get_results()

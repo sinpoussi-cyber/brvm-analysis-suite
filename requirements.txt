@@ -1,14 +1,14 @@
-gspread
-google-auth-oauthlib
-google-auth-httplib2
 pdfplumber
 beautifulsoup4
 requests
 selenium-wire
 python-docx
-google-generativeai
 pandas
 numpy
-openpyxl
-blinker==1.6.2
 google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+psycopg2-binary
+blinker==1.6.2
+urllib3<2.0
+gspread # <--- RÉ-AJOUTÉ ICI
