@@ -69,7 +69,6 @@ class ComprehensiveReportGenerator:
                 logging.error(f"Erreur avec la clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
         
-        logging.error("Toutes les clés API ont échoué. L'analyse IA n'a pas pu être complétée.")
         return "Erreur d'analyse : Toutes les clés API ont échoué."
 
     def _get_all_data_from_db(self):
@@ -148,7 +147,7 @@ class ComprehensiveReportGenerator:
         logging.info(f"🎉 Rapport de synthèse principal généré : {output_filename}")
         return output_filename
 
-    def generate_all_reports(self, new_fundamental_analyses):
+    def generate_all_reports(self):
         logging.info("="*60)
         logging.info("ÉTAPE 4 : DÉMARRAGE DE LA GÉNÉRATION DES RAPPORTS")
         logging.info("="*60)
@@ -169,7 +168,6 @@ class ComprehensiveReportGenerator:
             }
 
         self._create_main_report(company_analyses)
-        # NOTE : La logique de sauvegarde sur Drive et des rapports delta est retirée pour l'instant.
 
 if __name__ == "__main__":
     db_conn = None
@@ -179,7 +177,7 @@ if __name__ == "__main__":
         else:
             db_conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
             report_generator = ComprehensiveReportGenerator(db_conn)
-            report_generator.generate_all_reports([])
+            report_generator.generate_all_reports()
     except Exception as e:
         logging.error(f"❌ Erreur fatale dans le générateur de rapports : {e}", exc_info=True)
     finally:
