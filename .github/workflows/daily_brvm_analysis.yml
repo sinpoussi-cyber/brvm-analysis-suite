@@ -1,5 +1,5 @@
 # ==============================================================================
-# WORKFLOW FINAL - ARCHITECTURE POSTGRESQL (V2.0)
+# WORKFLOW FINAL - ARCHITECTURE POSTGRESQL (V2.1 - PRODUCTION)
 # ==============================================================================
 name: Full BRVM Analysis Suite (DB Architecture)
 
@@ -16,10 +16,10 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Checkout develop branch
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: develop
+        # La section 'with: ref: develop' a été supprimée.
+        # Par défaut, l'action utilisera la branche 'main'.
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,18 +45,8 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          # ... (toutes vos clés API) ...
         run: xvfb-run -a python main.py
         
       - name: Upload Reports Artifact
