@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V2.3 - DÉTECTION AMÉLIORÉE)
+# MODULE: DATA COLLECTOR (V2.4 - CORRECTION SAUTS DE DATE)
 # ==============================================================================
 
 import re
@@ -45,7 +45,7 @@ def get_company_ids(cur):
 
 def get_boc_links():
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
-    logging.info(f"Recherche de nouveaux bulletins sur : {url}")
+    logging.info(f"Recherche de bulletins sur : {url}")
     r = requests.get(url, verify=False, timeout=30)
     soup = BeautifulSoup(r.content, 'html.parser')
     links = set()
@@ -56,7 +56,7 @@ def get_boc_links():
             links.add(full_url)
     if not links:
         logging.warning("Aucun lien de bulletin (BOC) trouvé sur la page principale.")
-    return sorted(list(links), reverse=True)[:15] # Analyser les 15 plus récents pour être sûr
+    return sorted(list(links), reverse=True)[:15]
 
 def clean_and_convert_numeric(value):
     if value is None or value == '': return None
@@ -88,7 +88,7 @@ def extract_data_from_pdf(pdf_url):
 
 def run_data_collection():
     logging.info("="*60)
-    logging.info("ÉTAPE 1 : DÉMARRAGE DE LA COLLECTE DE DONNÉES (V2.3)")
+    logging.info("ÉTAPE 1 : DÉMARRAGE DE LA COLLECTE DE DONNÉES (V2.4)")
     logging.info("="*60)
     
     conn = connect_to_db()
@@ -101,7 +101,7 @@ def run_data_collection():
         boc_links = get_boc_links()
         logging.info(f"{len(boc_links)} BOCs récents trouvés sur le site.")
         
-        new_records_count = 0
+        total_new_records = 0
         
         for boc in boc_links:
             date_match = re.search(r'(\d{8})', boc)
@@ -113,16 +113,10 @@ def run_data_collection():
             except ValueError:
                 continue
 
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
-                if cur.fetchone():
-                    logging.info(f"Les données pour la date {trade_date} existent déjà. Ignoré.")
-                    continue
-            
-            logging.info(f"Traitement des données pour la date {trade_date}...")
             rows = extract_data_from_pdf(boc)
             if not rows: continue
 
+            new_records_for_this_date = 0
             with conn.cursor() as cur:
                 for rec in rows:
                     symbol = rec.get('Symbole', '').strip()
@@ -140,13 +134,19 @@ def run_data_collection():
                             """, (company_id, trade_date, price, volume, value))
                             
                             if cur.rowcount > 0:
-                                new_records_count += 1
-                                
-                        except (ValueError, TypeError) as e:
-                            logging.warning(f"Donnée invalide pour {symbol} le {trade_date}, ignorée. Erreur: {e}")
+                                new_records_for_this_date += 1
+                        except (ValueError, TypeError):
+                            pass # Ignorer silencieusement les données invalides dans le PDF
+
+            if new_records_for_this_date > 0:
+                logging.info(f"  -> {new_records_for_this_date} nouveaux enregistrements ajoutés pour le {trade_date}.")
+                total_new_records += new_records_for_this_date
+            else:
+                logging.info(f"  -> Aucune nouvelle donnée pour le {trade_date} (déjà en base).")
+
             conn.commit()
 
-        logging.info(f"✅ {new_records_count} nouveaux enregistrements de cours ont été ajoutés à la base de données.")
+        logging.info(f"✅ Total de {total_new_records} nouveaux enregistrements ajoutés à la base de données.")
 
     except Exception as e:
         logging.error(f"❌ Erreur critique dans la collecte de données : {e}", exc_info=True)
