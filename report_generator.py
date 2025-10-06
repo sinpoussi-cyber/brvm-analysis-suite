@@ -1,10 +1,11 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.1 - FINAL SANS DRIVE & APPEL API DIRECT)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.2 - ROBUSTE AUX ERREURS IA)
 # ==============================================================================
 
 import psycopg2
 import pandas as pd
 import os
+import json
 import time
 import logging
 from docx import Document
@@ -34,12 +35,15 @@ class ComprehensiveReportGenerator:
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: self.api_keys.append(key)
         if not self.api_keys:
-            logging.error("❌ Aucune clé API trouvée.")
+            logging.warning("⚠️ Aucune clé API Gemini trouvée. Les analyses IA seront vides.")
             return False
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
         return True
 
     def _call_gemini_with_retry(self, prompt):
+        if not self.api_keys:
+            return "Analyse IA non disponible (aucune clé API configurée)."
+
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
@@ -65,7 +69,7 @@ class ComprehensiveReportGenerator:
             except Exception as e:
                 logging.error(f"Erreur avec la clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
-        return "Erreur d'analyse : Toutes les clés API ont échoué."
+        return "Erreur d'analyse : Le quota de toutes les clés API a probablement été atteint."
 
     def _get_all_data_from_db(self):
         logging.info("Récupération de toutes les données d'analyse depuis PostgreSQL...")
@@ -77,11 +81,8 @@ class ComprehensiveReportGenerator:
         SELECT
             c.symbol, c.name as company_name,
             lhd.trade_date, lhd.price,
-            ta.mm5, ta.mm10, ta.mm20, ta.mm50, ta.mm_decision,
-            ta.bollinger_central, ta.bollinger_inferior, ta.bollinger_superior, ta.bollinger_decision,
-            ta.macd_line, ta.signal_line, ta.histogram, ta.macd_decision,
-            ta.rsi, ta.rsi_decision,
-            ta.stochastic_k, ta.stochastic_d, ta.stochastic_decision,
+            ta.mm_decision, ta.bollinger_decision, ta.macd_decision,
+            ta.rsi_decision, ta.stochastic_decision,
             (SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC) FROM fundamental_analysis fa WHERE fa.company_id = c.id) as fundamental_summaries
         FROM companies c
         LEFT JOIN latest_historical_data lhd ON c.id = lhd.company_id
@@ -164,7 +165,6 @@ class ComprehensiveReportGenerator:
             }
 
         self._create_main_report(company_analyses)
-        # La sauvegarde sur Drive est retirée
 
 if __name__ == "__main__":
     db_conn = None
