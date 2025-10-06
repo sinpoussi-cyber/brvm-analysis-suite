@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V2.1 - POSTGRESQL FINAL)
+# MODULE: DATA COLLECTOR (V2.2 - PLUS ROBUSTE)
 # ==============================================================================
 
 import re
@@ -8,7 +8,7 @@ import unicodedata
 import logging
 import os
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date
 
 import pdfplumber
 import requests
@@ -36,7 +36,7 @@ def normalize_text(s):
     return s.upper()
 
 def extract_date_from_filename(url):
-    m = re.search(r'boc_(\d{8})', url, flags=re.IGNORECASE)
+    m = re.search(r'(\d{8})', url, flags=re.IGNORECASE)
     return m.group(1) if m else None
 
 def connect_to_db():
@@ -58,15 +58,20 @@ def get_company_ids(cur):
 
 def get_boc_links():
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
+    logging.info(f"Recherche de nouveaux bulletins sur : {url}")
     r = requests.get(url, verify=False, timeout=30)
     soup = BeautifulSoup(r.content, 'html.parser')
     links = set()
-    for a in soup.find_all('a', href=True):
+    # On recherche plus largement les PDF contenant "boc"
+    for a in soup.find_all('a', href=lambda href: href and 'boc' in href.lower() and href.endswith('.pdf')):
         href = a['href'].strip()
-        if re.search(r'boc_\d{8}_\d+\.pdf$', href, flags=re.IGNORECASE):
-            full_url = href if href.startswith('http') else "https://www.brvm.org" + href
-            links.add(full_url)
-    return sorted(list(links), key=lambda u: extract_date_from_filename(u) or '', reverse=True)[:5] # Traiter les 5 derniers jours pour la rapidité
+        full_url = href if href.startswith('http') else "https://www.brvm.org" + href
+        links.add(full_url)
+    
+    if not links:
+        logging.warning("Aucun lien de bulletin (BOC) trouvé sur la page principale.")
+
+    return sorted(list(links), key=lambda u: extract_date_from_filename(u) or '', reverse=True)[:10] # Traiter les 10 plus récents pour être sûr
 
 def clean_and_convert_numeric(value):
     if value is None or value == '': return None
@@ -110,7 +115,7 @@ def run_data_collection():
             company_ids = get_company_ids(cur)
         
         boc_links = get_boc_links()
-        logging.info(f"{len(boc_links)} BOCs récents à traiter.")
+        logging.info(f"{len(boc_links)} BOCs récents trouvés sur le site.")
         
         new_records_count = 0
         
@@ -153,7 +158,7 @@ def run_data_collection():
         logging.info(f"✅ {new_records_count} nouveaux enregistrements de cours ont été ajoutés à la base de données.")
 
     except Exception as e:
-        logging.error(f"Erreur critique dans la collecte de données : {e}", exc_info=True)
+        logging.error(f"❌ Erreur critique dans la collecte de données : {e}", exc_info=True)
         if conn: conn.rollback()
     finally:
         if conn: conn.close()
