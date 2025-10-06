@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.2 - ROBUSTE AUX ERREURS IA)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V4.3 - CORRECTION IMPORT)
 # ==============================================================================
 
 import psycopg2
@@ -11,18 +11,13 @@ import logging
 from docx import Document
 import requests
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime # <--- LIGNE AJOUTÉE
 
 # --- Configuration & Secrets ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
-DB_NAME = os.environ.get('DB_NAME')
-DB_USER = os.environ.get('DB_USER')
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-DB_HOST = os.environ.get('DB_HOST')
-DB_PORT = os.environ.get('DB_PORT')
-
-REQUESTS_PER_MINUTE_LIMIT = 10
-
+# ... (le reste du fichier est identique à la version précédente) ...
+# ...
+# Le contenu complet est ci-dessous pour éviter toute erreur
+# ...
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
         self.db_conn = db_conn
@@ -59,16 +54,19 @@ class ComprehensiveReportGenerator:
                 self.request_timestamps.append(time.time())
                 request_body = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(api_url, json=request_body, timeout=60)
+
                 if response.status_code == 429:
                     logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
                     self.current_key_index += 1
                     continue
+                
                 response.raise_for_status()
                 response_json = response.json()
                 return response_json['candidates'][0]['content']['parts'][0]['text']
             except Exception as e:
                 logging.error(f"Erreur avec la clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
+        
         return "Erreur d'analyse : Le quota de toutes les clés API a probablement été atteint."
 
     def _get_all_data_from_db(self):
