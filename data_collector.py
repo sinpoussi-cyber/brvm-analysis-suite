@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V2.4 - CORRECTION SAUTS DE DATE)
+# MODULE: DATA COLLECTOR (V2.5 - TRI EXPLICITE DES BOC)
 # ==============================================================================
 
 import re
@@ -43,6 +43,14 @@ def get_company_ids(cur):
         logging.error(f"❌ Erreur lors de la récupération des IDs des sociétés : {e}")
         return {}
 
+def extract_date_from_filename_for_sorting(url):
+    """Extrait une date numérique YYYYMMDD ou un timestamp pour le tri."""
+    date_match = re.search(r'(\d{8})', url)
+    if date_match:
+        return date_match.group(1) # Ex: '20251006'
+    # Si la date n'est pas dans le format YYYYMMDD, utiliser une valeur de tri faible
+    return '19000101' 
+
 def get_boc_links():
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     logging.info(f"Recherche de bulletins sur : {url}")
@@ -54,9 +62,12 @@ def get_boc_links():
         if 'boc_' in href.lower() and href.endswith('.pdf'):
             full_url = href if href.startswith('http') else "https://www.brvm.org" + href
             links.add(full_url)
+    
     if not links:
         logging.warning("Aucun lien de bulletin (BOC) trouvé sur la page principale.")
-    return sorted(list(links), reverse=True)[:15]
+
+    sorted_links = sorted(list(links), key=extract_date_from_filename_for_sorting, reverse=True)
+    return sorted_links[:15]
 
 def clean_and_convert_numeric(value):
     if value is None or value == '': return None
@@ -88,7 +99,7 @@ def extract_data_from_pdf(pdf_url):
 
 def run_data_collection():
     logging.info("="*60)
-    logging.info("ÉTAPE 1 : DÉMARRAGE DE LA COLLECTE DE DONNÉES (V2.4)")
+    logging.info("ÉTAPE 1 : DÉMARRAGE DE LA COLLECTE DE DONNÉES (V2.5)")
     logging.info("="*60)
     
     conn = connect_to_db()
@@ -113,6 +124,13 @@ def run_data_collection():
             except ValueError:
                 continue
 
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
+                if cur.fetchone():
+                    logging.info(f"Les données pour la date {trade_date} existent déjà. Ignoré.")
+                    continue
+            
+            logging.info(f"Traitement des données pour la date {trade_date}...")
             rows = extract_data_from_pdf(boc)
             if not rows: continue
 
@@ -135,6 +153,7 @@ def run_data_collection():
                             
                             if cur.rowcount > 0:
                                 new_records_for_this_date += 1
+                                
                         except (ValueError, TypeError):
                             pass # Ignorer silencieusement les données invalides dans le PDF
 
