@@ -80,6 +80,7 @@ def get_boc_links():
         
         for a in soup.find_all('a', href=True):
             href = a['href'].strip()
+            # CORRECTION : Accepter tous les PDF qui contiennent 'boc_' (avec ou sans suffixe _2)
             if 'boc_' in href.lower() and href.endswith('.pdf'):
                 full_url = href if href.startswith('http') else "https://www.brvm.org" + href
                 links.add(full_url)
@@ -88,14 +89,15 @@ def get_boc_links():
             logging.warning("⚠️ Aucun lien de bulletin (BOC) trouvé sur la page principale.")
             return []
         
-        # Tri par date décroissante (plus récent en premier)
+        # Tri par date décroissante (plus récent en premier) pour l'affichage
+        # MAIS on va inverser après pour traiter du plus ancien au plus récent
         sorted_links = sorted(list(links), key=extract_date_from_filename_for_sorting, reverse=True)
         
-        # Limiter aux 15 bulletins les plus récents
-        recent_links = sorted_links[:15]
-        logging.info(f"✅ {len(recent_links)} bulletins récents identifiés (sur {len(links)} trouvés)")
+        logging.info(f"✅ {len(sorted_links)} bulletins identifiés sur le site (incluant les versions _2)")
         
-        return recent_links
+        # Retourner TOUS les bulletins (pas de limite)
+        return sorted_links
+    
     except Exception as e:
         logging.error(f"❌ Erreur lors de la récupération des liens BOC : {e}")
         return []
@@ -187,7 +189,7 @@ def run_data_collection():
             logging.warning("⚠️ Aucun bulletin trouvé. Fin de la collecte.")
             return
         
-        logging.info(f"📋 {len(boc_links)} BOCs récents à traiter")
+        logging.info(f"✅ {len(boc_links)} BOCs identifiés et triés (du plus ancien au plus récent)")
         
         total_new_records = 0
         dates_processed = []
