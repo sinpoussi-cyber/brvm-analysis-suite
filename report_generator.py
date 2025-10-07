@@ -38,7 +38,7 @@ class ComprehensiveReportGenerator:
     
     def _configure_api_keys(self):
         """Charge les clés API Gemini depuis les variables d'environnement."""
-        for i in range(1, 20):
+        for i in range(1, 21):  # Support jusqu'à 20 clés
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
                 self.api_keys.append(key)
@@ -55,11 +55,11 @@ class ComprehensiveReportGenerator:
         if not self.api_keys:
             return "Analyse IA non disponible (aucune clé API configurée)."
         
-        # Gestion du rate limiting (10 requêtes/minute)
+        # Gestion du rate limiting (15 requêtes/minute selon les quotas Gemini)
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         
-        if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
+        if len(self.request_timestamps) >= 15:  # Limite Gemini gratuit
             sleep_time = 60 - (now - self.request_timestamps[0]) if self.request_timestamps else 60
             logging.warning(f"⏳ Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
             time.sleep(sleep_time + 1)
@@ -68,7 +68,8 @@ class ComprehensiveReportGenerator:
         # Essayer avec les clés disponibles
         while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+            # CORRECTION : URL correcte de l'API Gemini
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
             
             try:
                 self.request_timestamps.append(time.time())
