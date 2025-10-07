@@ -63,7 +63,7 @@ def export_today_data():
         )
         logging.info("✅ Connexion à PostgreSQL pour l'export réussie.")
         
-        # Récupérer les données du jour
+        # Récupérer les données du jour TRIÉES par date (plus ancien en haut)
         today_str = date.today().strftime('%Y-%m-%d')
         
         query = f"""
@@ -72,11 +72,12 @@ def export_today_data():
             TO_CHAR(hd.trade_date, 'DD/MM/YYYY') as date, 
             hd.price, 
             hd.volume,
-            hd.value
+            hd.value,
+            hd.trade_date as sort_date
         FROM historical_data hd
         JOIN companies c ON hd.company_id = c.id
         WHERE hd.trade_date = '{today_str}'
-        ORDER BY c.symbol;
+        ORDER BY c.symbol, hd.trade_date ASC;
         """
         
         df = pd.read_sql(query, conn)
@@ -106,7 +107,16 @@ def export_today_data():
                     # Ajouter les en-têtes
                     worksheet.append_row(['Symbole', 'Date', 'Prix', 'Volume', 'Valeur'], value_input_option='USER_ENTERED')
                 
-                # Préparer les données pour l'ajout
+                # Préparer les données pour l'ajout (sans la colonne sort_date)
+                rows_to_append = group[['symbol', 'date', 'price', 'volume', 'value']].values.tolist()
+                
+                # Ajouter les lignes (elles seront ajoutées en bas automatiquement)
+                # Puisque nos données sont triées par date ASC dans la requête SQL,
+                # l'historique complet sera trié du plus ancien (haut) au plus récent (bas)
+                worksheet.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+                
+                logging.info(f"  ✅ {len(rows_to_append)} ligne(s) exportée(s) vers la feuille '{symbol}'.")
+                exported_count += len(rows_to_append)# Préparer les données pour l'ajout
                 rows_to_append = group[['symbol', 'date', 'price', 'volume', 'value']].values.tolist()
                 
                 # Ajouter les lignes
