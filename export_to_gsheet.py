@@ -9,6 +9,7 @@ import pandas as pd
 import os
 import json
 import logging
+import time  # AJOUTÉ pour gérer le rate limiting
 from datetime import date
 
 # --- Configuration & Secrets ---
