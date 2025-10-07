@@ -70,6 +70,21 @@ jobs:
         GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
         GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
         GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+        GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+        GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+        GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+        GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+        GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+        GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+        GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+        GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+        GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+        GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+        GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+        GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+        GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+        GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+        GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
         
         # Secrets Google Sheets (optionnel)
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
