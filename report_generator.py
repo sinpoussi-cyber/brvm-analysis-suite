@@ -68,8 +68,8 @@ class ComprehensiveReportGenerator:
         # Essayer avec les clés disponibles
         while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
-            # CORRECTION : URL correcte de l'API Gemini
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
+            # CORRECTION FINALE : Utiliser le modèle stable sans -latest
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
             
             try:
                 self.request_timestamps.append(time.time())
