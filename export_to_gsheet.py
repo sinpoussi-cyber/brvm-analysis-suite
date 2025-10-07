@@ -36,6 +36,69 @@ def authenticate_gsheets():
         logging.error(f"❌ Erreur d'authentification Google Sheets : {e}")
         return None
 
+def clean_duplicates_in_sheet(worksheet, symbol):
+    """Nettoie les doublons dans une feuille Google Sheets."""
+    try:
+        all_data = worksheet.get_all_values()
+        
+        if len(all_data) <= 1:  # Seulement l'en-tête ou vide
+            return 0
+        
+        header = all_data[0]
+        data_rows = all_data[1:]
+        
+        # Créer un dictionnaire avec la date comme clé (colonne index 1)
+        unique_rows = {}
+        for row in data_rows:
+            if len(row) >= 2 and row[1]:  # Si la date existe
+                date_key = row[1].strip()
+                # Garder la première occurrence de chaque date
+                if date_key not in unique_rows:
+                    unique_rows[date_key] = row
+        
+        # Calculer le nombre de doublons
+        duplicates_count = len(data_rows) - len(unique_rows)
+        
+        if duplicates_count > 0:
+            logging.info(f"  🧹 {symbol} : Nettoyage de {duplicates_count} doublon(s)...")
+            
+            # Trier par date (reconvertir en date pour tri correct)
+            sorted_rows = []
+            for date_str, row in unique_rows.items():
+                try:
+                    # Parser la date DD/MM/YYYY
+                    date_parts = date_str.split('/')
+                    if len(date_parts) == 3:
+                        sort_key = f"{date_parts[2]}-{date_parts[1]}-{date_parts[0]}"
+                        sorted_rows.append((sort_key, row))
+                except:
+                    sorted_rows.append((date_str, row))
+            
+            sorted_rows.sort(key=lambda x: x[0])
+            final_rows = [row for _, row in sorted_rows]
+            
+            # Effacer tout sauf l'en-tête et réécrire
+            worksheet.clear()
+            time.sleep(2)
+            worksheet.append_row(header, value_input_option='USER_ENTERED')
+            time.sleep(2)
+            
+            # Réécrire par batch de 100 lignes pour éviter les quotas
+            batch_size = 100
+            for i in range(0, len(final_rows), batch_size):
+                batch = final_rows[i:i+batch_size]
+                worksheet.append_rows(batch, value_input_option='USER_ENTERED')
+                time.sleep(3)
+            
+            logging.info(f"  ✅ {symbol} : Nettoyage terminé. {len(final_rows)} lignes uniques conservées.")
+            return duplicates_count
+        
+        return 0
+    
+    except Exception as e:
+        logging.error(f"  ❌ Erreur lors du nettoyage de '{symbol}': {e}")
+        return 0
+
 def export_today_data():
     """Exporte les données du jour vers Google Sheets."""
     logging.info("=" * 60)
