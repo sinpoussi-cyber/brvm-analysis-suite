@@ -1,14 +1,31 @@
-pdfplumber
-beautifulsoup4
-requests
-selenium-wire
-python-docx
-pandas
-numpy
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
-psycopg2-binary
+# ==============================================================================
+# DÉPENDANCES DU PROJET BRVM ANALYSIS SUITE
+# ==============================================================================
+
+# Traitement de PDF
+pdfplumber==0.10.3
+
+# Web scraping
+beautifulsoup4==4.12.2
+requests==2.31.0
+selenium-wire==5.1.0
+
+# Traitement de documents Word
+python-docx==1.1.0
+
+# Analyse de données
+pandas==2.2.2
+numpy==1.26.4
+
+# API Google (Sheets et Gemini)
+google-api-python-client==2.108.0
+google-auth-httplib2==0.1.1
+google-auth-oauthlib==1.1.0
+gspread==5.12.0
+
+# Base de données PostgreSQL
+psycopg2-binary==2.9.9
+
+# Utilitaires
 blinker==1.6.2
 urllib3<2.0
-gspread # <--- RÉ-AJOUTÉ ICI
