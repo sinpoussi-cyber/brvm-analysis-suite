@@ -1,59 +1,83 @@
-# ==============================================================================
-# WORKFLOW FINAL - ARCHITECTURE POSTGRESQL (V2.1 - PRODUCTION)
-# ==============================================================================
-name: Full BRVM Analysis Suite (DB Architecture)
+name: Analyse Quotidienne BRVM
 
 on:
   schedule:
-    # S'exécute tous les jours à 07h00 UTC
-    - cron: '0 7 * * *'
-  
-  workflow_dispatch: # Permet le lancement manuel
+    # Exécution du lundi au vendredi à 20h00 UTC (20h GMT, 21h Paris hiver)
+    - cron: '0 20 * * 1-5'
+  workflow_dispatch:  # Permet le déclenchement manuel
 
 jobs:
-  run-full-suite:
+  analyze-brvm:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+    timeout-minutes: 360  # 6 heures max
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        # La section 'with: ref: develop' a été supprimée.
-        # Par défaut, l'action utilisera la branche 'main'.
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev build-essential libssl-dev libffi-dev python3-dev libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev xvfb
-
-      - name: Install Python Dependencies
-        run: pip install --no-cache-dir -r requirements.txt
-      
-      - name: Setup Chrome for Selenium
-        uses: browser-actions/setup-chrome@latest
-
-      - name: Run Full Analysis Suite
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          # ... (toutes vos clés API) ...
-        run: xvfb-run -a python main.py
+    - name: Checkout du code
+      uses: actions/checkout@v4
+    
+    - name: Configuration Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Installation de Chrome et ChromeDriver
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser chromium-chromedriver
+        chromium-browser --version
+        chromedriver --version
+    
+    - name: Installation des dépendances Python
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Vérification des secrets
+      run: |
+        echo "✅ Vérification des variables d'environnement..."
+        if [ -z "${{ secrets.DB_NAME }}" ]; then echo "❌ DB_NAME manquant"; exit 1; fi
+        if [ -z "${{ secrets.DB_USER }}" ]; then echo "❌ DB_USER manquant"; exit 1; fi
+        if [ -z "${{ secrets.DB_PASSWORD }}" ]; then echo "❌ DB_PASSWORD manquant"; exit 1; fi
+        if [ -z "${{ secrets.DB_HOST }}" ]; then echo "❌ DB_HOST manquant"; exit 1; fi
+        echo "✅ Secrets de base de données OK"
+    
+    - name: Exécution de l'analyse complète BRVM
+      env:
+        # Secrets de base de données PostgreSQL
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
         
-      - name: Upload Reports Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Rapports-BRVM-Analyse-DB
-          path: |
-            ./Rapport_*.docx
-            ./Synthese_*.docx
+        # Clés API Google Gemini (pour analyse IA)
+        GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+        GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+        GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+        GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+        GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+        
+        # Secrets Google Sheets (optionnel)
+        GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+        SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      run: |
+        echo "🚀 Démarrage de l'analyse BRVM..."
+        python main.py
+    
+    - name: Upload des rapports générés
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: rapports-brvm-${{ github.run_number }}
+        path: |
+          *.docx
+        retention-days: 30
+        if-no-files-found: warn
+    
+    - name: Résumé de l'exécution
+      if: always()
+      run: |
+        echo "📊 Exécution terminée"
+        echo "Date: $(date)"
+        echo "Statut: ${{ job.status }}"
