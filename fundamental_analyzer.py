@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V5.0 - GEMINI 2.0 FLASH)
+# MODULE: FUNDAMENTAL ANALYZER (V5.0 - 22 CLÉS + ANALYSIS_MEMORY GSHEET)
 # ==============================================================================
 
 import requests
@@ -21,20 +21,23 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
 import base64
+import gspread
+from google.oauth2 import service_account
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
-# Configuration de la base de données
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
+GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
-# Configuration pour Gemini 2.0 Flash
-GEMINI_MODEL = "gemini-2.0-flash-exp"
-REQUESTS_PER_MINUTE_LIMIT = 15  # Limite pour Gemini 2.0 Flash
+# Configuration pour Gemini 1.5 Flash (Version Stable)
+GEMINI_MODEL = "gemini-1.5-flash"
+REQUESTS_PER_MINUTE_LIMIT = 15
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -89,13 +92,15 @@ class BRVMAnalyzer:
         }
         self.driver = None
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
+        self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         self.analysis_memory = set()
         self.company_ids = {}
         self.newly_analyzed_reports = []
         self.api_keys = []
         self.current_key_index = 0
         self.request_timestamps = []
+        self.gc = None
+        self.spreadsheet = None
 
     def connect_to_db(self):
         try:
@@ -105,21 +110,59 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur de connexion DB: {e}")
             return None
 
+    def authenticate_gsheets(self):
+        try:
+            creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
+            scopes = ['https://www.googleapis.com/auth/spreadsheets']
+            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+            self.gc = gspread.authorize(creds)
+            self.spreadsheet = self.gc.open_by_key(SPREADSHEET_ID)
+            logging.info("✅ Authentification Google Sheets réussie.")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Erreur d'authentification Google Sheets : {e}")
+            return False
+
     def _load_analysis_memory_from_db(self):
-        logging.info("Chargement de la mémoire d'analyse depuis PostgreSQL...")
+        """Charge la mémoire depuis PostgreSQL."""
+        logging.info("Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
         if not conn: return
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
-                self.analysis_memory = {row[0] for row in cur.fetchall()}
-            logging.info(f"{len(self.analysis_memory)} analyses pré-existantes chargées.")
+                db_memory = {row[0] for row in cur.fetchall()}
+            logging.info(f"  {len(db_memory)} analyses en PostgreSQL")
+            self.analysis_memory.update(db_memory)
         except Exception as e:
-            logging.error(f"❌ Impossible de charger la mémoire d'analyse: {e}")
+            logging.error(f"❌ Erreur chargement mémoire DB: {e}")
         finally:
             if conn: conn.close()
 
+    def _load_analysis_memory_from_gsheet(self):
+        """Charge la mémoire depuis Google Sheets (feuille ANALYSIS_MEMORY)."""
+        if not self.spreadsheet:
+            return
+        
+        try:
+            memory_sheet = self.spreadsheet.worksheet('ANALYSIS_MEMORY')
+            all_urls = memory_sheet.col_values(1)[1:]  # Colonne A, skip header
+            gsheet_memory = set(url for url in all_urls if url.strip())
+            logging.info(f"  {len(gsheet_memory)} analyses en Google Sheets")
+            self.analysis_memory.update(gsheet_memory)
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning("⚠️ Feuille ANALYSIS_MEMORY non trouvée, création...")
+            try:
+                memory_sheet = self.spreadsheet.add_worksheet(title='ANALYSIS_MEMORY', rows=1000, cols=5)
+                memory_sheet.update('A1', [['report_url', 'symbol', 'report_title', 'analysis_date', 'status']])
+                logging.info("✅ Feuille ANALYSIS_MEMORY créée")
+            except Exception as e:
+                logging.error(f"❌ Erreur création ANALYSIS_MEMORY: {e}")
+        except Exception as e:
+            logging.error(f"❌ Erreur chargement mémoire GSheet: {e}")
+
     def _save_to_memory_db(self, company_id, report, summary):
+        """Sauvegarde dans PostgreSQL."""
         conn = self.connect_to_db()
         if not conn: return
         try:
@@ -130,21 +173,44 @@ class BRVMAnalyzer:
                 """, (company_id, report['url'], report['titre'], report['date'], summary))
                 conn.commit()
             self.analysis_memory.add(report['url'])
-            logging.info(f"    -> Analyse pour {os.path.basename(report['url'])} sauvegardée en DB.")
         except Exception as e:
-            logging.error(f"    -> ERREUR lors de la sauvegarde en DB : {e}")
+            logging.error(f"❌ Erreur sauvegarde DB : {e}")
             conn.rollback()
         finally:
             if conn: conn.close()
 
+    def _save_to_memory_gsheet(self, symbol, report):
+        """Sauvegarde dans Google Sheets (feuille ANALYSIS_MEMORY)."""
+        if not self.spreadsheet:
+            return
+        
+        try:
+            memory_sheet = self.spreadsheet.worksheet('ANALYSIS_MEMORY')
+            new_row = [
+                report['url'],
+                symbol,
+                report['titre'],
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'Analyzed'
+            ]
+            memory_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+            self.analysis_memory.add(report['url'])
+            logging.info(f"    -> Sauvegardé dans ANALYSIS_MEMORY (GSheet)")
+        except Exception as e:
+            logging.error(f"❌ Erreur sauvegarde ANALYSIS_MEMORY: {e}")
+
     def _configure_api_keys(self):
-        for i in range(1, 20): 
+        """Charge jusqu'à 22 clés API."""
+        for i in range(1, 23):  # 1 à 22
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key: self.api_keys.append(key)
+            if key: 
+                self.api_keys.append(key)
+        
         if not self.api_keys:
             logging.error("❌ Aucune clé API trouvée.")
             return False
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini 2.0 Flash chargées.")
+        
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
         return True
 
     def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
@@ -156,46 +222,39 @@ class BRVMAnalyzer:
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
             sleep_time = 60 - (now - self.request_timestamps[0])
-            logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
+            logging.warning(f"Limite requêtes/minute. Pause de {sleep_time + 1:.1f}s...")
             time.sleep(sleep_time + 1)
             self.request_timestamps = []
 
         if self.current_key_index >= len(self.api_keys):
-            logging.error("Toutes les clés API ont été épuisées. Arrêt des analyses.")
+            logging.error("Toutes les clés API épuisées.")
             return
 
         api_key = self.api_keys[self.current_key_index]
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
-            logging.info(f"    -> Nouvelle analyse IA Gemini 2.0 Flash (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
+            logging.info(f"    -> Analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
             
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
             pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
 
-            prompt = """
-            Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-            Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-            Concentre-toi impérativement sur les aspects suivants :
-            - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
-            - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-            - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
-            - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-            - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
-            Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
-            """
+            prompt = """Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
+Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
+Concentre-toi impérativement sur les aspects suivants :
+- **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible.
+- **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
+- **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives.
+- **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
+- **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur.
+Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et base tes conclusions uniquement sur le document."""
 
             request_body = {
                 "contents": [{
                     "parts": [
                         {"text": prompt}, 
-                        {
-                            "inline_data": {
-                                "mime_type": "application/pdf", 
-                                "data": pdf_data
-                            }
-                        }
+                        {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}
                     ]
                 }],
                 "generationConfig": {
@@ -210,7 +269,7 @@ class BRVMAnalyzer:
             response = requests.post(api_url, json=request_body, timeout=120)
 
             if response.status_code == 429:
-                logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}. Passage à la suivante.")
+                logging.warning(f"Quota atteint pour clé #{self.current_key_index + 1}. Suivante...")
                 self.current_key_index += 1
                 self._analyze_pdf_with_direct_api(company_id, symbol, report)
                 return
@@ -222,12 +281,14 @@ class BRVMAnalyzer:
 
             if "erreur" not in analysis_text.lower():
                 self._save_to_memory_db(company_id, report, analysis_text)
+                self._save_to_memory_gsheet(symbol, report)
                 self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
 
         except Exception as e:
-            logging.error(f"    -> Erreur technique avec la clé #{self.current_key_index + 1} : {e}")
+            logging.error(f"    -> Erreur clé #{self.current_key_index + 1} : {e}")
             self.current_key_index += 1
-            self._analyze_pdf_with_direct_api(company_id, symbol, report)
+            if self.current_key_index < len(self.api_keys):
+                self._analyze_pdf_with_direct_api(company_id, symbol, report)
 
     def setup_selenium(self):
         chrome_options = Options()
@@ -236,9 +297,9 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--disable-dev-shm-usage')
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
-            logging.info("✅ Pilote Selenium (Chrome) démarré.")
+            logging.info("✅ Pilote Selenium démarré.")
         except Exception as e:
-            logging.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
+            logging.error(f"❌ Impossible de démarrer Selenium: {e}")
             self.driver = None
 
     def _normalize_text(self, text):
@@ -264,7 +325,7 @@ class BRVMAnalyzer:
         if 't1' in text_lower or '1er trimestre' in text_lower: return datetime(year, 3, 31).date()
         if 's1' in text_lower or '1er semestre' in text_lower: return datetime(year, 6, 30).date()
         if 't3' in text_lower or '3eme trimestre' in text_lower: return datetime(year, 9, 30).date()
-        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31).date()
+        if 'annuel' in text_lower: return datetime(year, 12, 31).date()
         return datetime(year, 6, 15).date()
 
     def _find_all_reports(self):
@@ -272,21 +333,25 @@ class BRVMAnalyzer:
         base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
         company_links = []
+        
         try:
-            for page_num in range(5): 
+            for page_num in range(5):
                 page_url = f"{base_url}?page={page_num}"
-                logging.info(f"Navigation vers la page de liste : {page_url}")
+                logging.info(f"Navigation page {page_num}...")
                 self.driver.get(page_url)
                 try:
                     WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                 except TimeoutException:
-                    logging.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
+                    logging.info(f"Page {page_num} sans tableau. Fin pagination.")
                     break
+                
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 table_rows = soup.select("table.views-table tbody tr")
+                
                 if not table_rows:
-                    logging.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
+                    logging.info(f"Aucune société page {page_num}. Fin pagination.")
                     break
+                
                 for row in table_rows:
                     link_tag = row.find('a', href=True)
                     if link_tag:
@@ -298,18 +363,21 @@ class BRVMAnalyzer:
                                 company_links.append({'symbol': symbol, 'url': company_url})
                 time.sleep(1)
 
-            logging.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
+            logging.info(f"{len(company_links)} pages de sociétés à visiter.")
+            
             for company in company_links:
                 symbol = company['symbol']
-                logging.info(f"--- Collecte des rapports pour {symbol} ---")
+                logging.info(f"--- Collecte rapports pour {symbol} ---")
                 try:
                     self.driver.get(company['url'])
                     WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                     page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                     report_items = page_soup.select("table.views-table tbody tr")
+                    
                     if not report_items:
-                        logging.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
+                        logging.warning(f"  -> Aucun rapport pour {symbol}.")
                         continue
+                    
                     for item in report_items:
                         pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
                         if pdf_link_tag:
@@ -323,24 +391,34 @@ class BRVMAnalyzer:
                                 all_reports[symbol].append(report_data)
                     time.sleep(1)
                 except TimeoutException:
-                    logging.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
+                    logging.error(f"  -> Timeout {symbol}.")
                 except Exception as e:
-                    logging.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
+                    logging.error(f"  -> Erreur {symbol}: {e}")
         except Exception as e:
-            logging.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
+            logging.error(f"Erreur critique scraping : {e}", exc_info=True)
+        
         return all_reports
 
     def run_and_get_results(self):
-        logging.info("="*60)
-        logging.info("ÉTAPE 3 : ANALYSE FONDAMENTALE (GEMINI 2.0 FLASH)")
-        logging.info("="*60)
+        logging.info("="*80)
+        logging.info("ÉTAPE 3 : ANALYSE FONDAMENTALE (22 CLÉS + ANALYSIS_MEMORY)")
+        logging.info("="*80)
         
         conn = None
         try:
             if not self._configure_api_keys():
                 return {}, []
             
+            # Authentifier Google Sheets
+            if not self.authenticate_gsheets():
+                logging.warning("⚠️ Google Sheets non disponible, utilisation PostgreSQL uniquement")
+            
+            # Charger la mémoire des deux sources
             self._load_analysis_memory_from_db()
+            self._load_analysis_memory_from_gsheet()
+            
+            logging.info(f"✅ Mémoire totale: {len(self.analysis_memory)} analyses déjà faites")
+            
             self.setup_selenium()
             if not self.driver: return {}, []
 
@@ -356,22 +434,22 @@ class BRVMAnalyzer:
             all_reports = self._find_all_reports()
             
             for symbol, (company_id, company_name) in self.company_ids.items():
-                logging.info(f"\n📊 Traitement des rapports pour {symbol} - {company_name}")
+                logging.info(f"\n📊 Traitement {symbol} - {company_name}")
                 company_reports = all_reports.get(symbol, [])
                 if not company_reports:
-                    logging.info(f"  -> Aucun rapport trouvé sur le site pour {symbol}.")
+                    logging.info(f"  -> Aucun rapport pour {symbol}.")
                     continue
 
                 date_2024_start = datetime(2024, 1, 1).date()
                 recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
                 recent_reports.sort(key=lambda x: x['date'], reverse=True)
                 
-                logging.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) après filtrage.")
+                logging.info(f"  -> {len(recent_reports)} rapport(s) récent(s)")
 
                 for report in recent_reports:
                     self._analyze_pdf_with_direct_api(company_id, symbol, report)
 
-            logging.info("\n✅ Traitement de toutes les sociétés terminé.")
+            logging.info("\n✅ Traitement terminé.")
             
             conn = self.connect_to_db()
             if not conn: return {}, []
