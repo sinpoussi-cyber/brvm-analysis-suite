@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER (V4.0 - SYNCHRONISATION AUTOMATIQUE)
+# MODULE: TECHNICAL ANALYZER (V5.0 - BATCH PROCESSING OPTIMISÉ)
 # ==============================================================================
 import psycopg2
 from psycopg2 import sql
@@ -10,7 +10,7 @@ import os
 import logging
 import time
 
-# Import du gestionnaire de synchronisation
+# Import du gestionnaire de synchronisation optimisé
 from sync_data_manager import SyncDataManager
 
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -109,7 +109,7 @@ def calculate_stochastic(df, price_col='price', k_period=20, d_period=5):
     return df
 
 def process_company(conn, sync_manager, company_id, company_symbol):
-    """Récupère les données, calcule les indicateurs et synchronise avec Supabase + GSheet."""
+    """Récupère les données, calcule les indicateurs et ajoute au batch."""
     logging.info(f"--- Traitement de l'analyse technique pour : {company_symbol} ---")
     
     query = "SELECT id, trade_date, price FROM historical_data WHERE company_id = %s ORDER BY trade_date;"
@@ -129,50 +129,43 @@ def process_company(conn, sync_manager, company_id, company_symbol):
     df_to_update.rename(columns={'id': 'historical_data_id'}, inplace=True)
     df_to_update = df_to_update.replace({np.nan: None})
     
-    sync_count = 0
+    # AJOUT AU BATCH au lieu d'écriture immédiate
     for index, row in df_to_update.iterrows():
-        try:
-            # Préparer les données d'analyse
-            analysis_data = {
-                'mm5': row.get('mm5'),
-                'mm10': row.get('mm10'),
-                'mm20': row.get('mm20'),
-                'mm50': row.get('mm50'),
-                'mm_decision': row.get('mm_decision'),
-                'bollinger_central': row.get('bollinger_central'),
-                'bollinger_inferior': row.get('bollinger_inferior'),
-                'bollinger_superior': row.get('bollinger_superior'),
-                'bollinger_decision': row.get('bollinger_decision'),
-                'macd_line': row.get('macd_line'),
-                'signal_line': row.get('signal_line'),
-                'histogram': row.get('histogram'),
-                'macd_decision': row.get('macd_decision'),
-                'rsi': row.get('rsi'),
-                'rsi_decision': row.get('rsi_decision'),
-                'stochastic_k': row.get('stochastic_k'),
-                'stochastic_d': row.get('stochastic_d'),
-                'stochastic_decision': row.get('stochastic_decision')
-            }
-            
-            # SYNCHRONISATION AUTOMATIQUE SUPABASE + GOOGLE SHEETS
-            sync_manager.sync_technical_analysis(
-                historical_data_id=row['historical_data_id'],
-                symbol=company_symbol,
-                analysis_data=analysis_data
-            )
-            
-            sync_count += 1
-            
-        except Exception as e:
-            logging.error(f"  -> Erreur synchronisation analyse technique pour {company_symbol}: {e}")
+        analysis_data = {
+            'mm5': row.get('mm5'),
+            'mm10': row.get('mm10'),
+            'mm20': row.get('mm20'),
+            'mm50': row.get('mm50'),
+            'mm_decision': row.get('mm_decision'),
+            'bollinger_central': row.get('bollinger_central'),
+            'bollinger_inferior': row.get('bollinger_inferior'),
+            'bollinger_superior': row.get('bollinger_superior'),
+            'bollinger_decision': row.get('bollinger_decision'),
+            'macd_line': row.get('macd_line'),
+            'signal_line': row.get('signal_line'),
+            'histogram': row.get('histogram'),
+            'macd_decision': row.get('macd_decision'),
+            'rsi': row.get('rsi'),
+            'rsi_decision': row.get('rsi_decision'),
+            'stochastic_k': row.get('stochastic_k'),
+            'stochastic_d': row.get('stochastic_d'),
+            'stochastic_decision': row.get('stochastic_decision')
+        }
         
-    logging.info(f"  -> Analyse technique terminée pour {company_symbol}. {sync_count} enregistrements synchronisés.")
-    return sync_count
+        # Ajouter au batch (pas d'écriture immédiate)
+        sync_manager.add_to_technical_batch(
+            symbol=company_symbol,
+            historical_data_id=row['historical_data_id'],
+            analysis_data=analysis_data
+        )
+    
+    logging.info(f"  -> {len(df_to_update)} analyses ajoutées au batch pour {company_symbol}.")
+    return len(df_to_update)
 
 def run_technical_analysis():
     """Fonction principale pour lancer l'analyse technique sur toutes les sociétés."""
     logging.info("="*60)
-    logging.info("ÉTAPE 2 : DÉMARRAGE DE L'ANALYSE TECHNIQUE (SYNCHRONISATION AUTO)")
+    logging.info("ÉTAPE 2 : DÉMARRAGE DE L'ANALYSE TECHNIQUE (BATCH PROCESSING)")
     logging.info("="*60)
     
     conn = connect_to_db()
@@ -189,19 +182,10 @@ def run_technical_analysis():
 
         logging.info(f"{len(companies)} sociétés à analyser.")
         
-        total_syncs = 0
+        total_analyses = 0
         for company_id, company_symbol in companies:
-            total_syncs += process_company(conn, sync_manager, company_id, company_symbol)
-            time.sleep(1)
-
-        logging.info(f"✅ Analyse technique terminée. {total_syncs} analyses synchronisées (Supabase + Google Sheets).")
-
-    except Exception as e:
-        logging.error(f"❌ Erreur critique lors de l'analyse technique : {e}", exc_info=True)
-    finally:
-        if conn:
-            conn.close()
-        sync_manager.close()
-
-if __name__ == "__main__":
-    run_technical_analysis()
+            analyses_count = process_company(conn, sync_manager, company_id, company_symbol)
+            total_analyses += analyses_count
+            
+            # FLUSH le batch après chaque société pour éviter trop de données en mémoire
+            try
