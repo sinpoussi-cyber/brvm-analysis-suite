@@ -1,5 +1,5 @@
 # ==============================================================================
-# FICHIER 1: report_generator.py (V5.0 - GEMINI 2.0 FLASH)
+# MODULE: COMPREHENSIVE REPORT GENERATOR (V5.0 - GEMINI 2.0 FLASH)
 # ==============================================================================
 
 import psycopg2
@@ -182,7 +182,7 @@ Analyses:
         doc = Document()
         doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
         doc.add_paragraph(f"Généré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        doc.add_paragraph(f"Propulsé par Gemini {GEMINI_MODEL}")
+        doc.add_paragraph(f"Propulsé par {GEMINI_MODEL}")
         
         for symbol, analyses in sorted(company_analyses.items()):
             nom_societe = analyses.get('nom_societe', symbol)
@@ -248,63 +248,3 @@ if __name__ == "__main__":
     finally:
         if db_conn:
             db_conn.close()
-
-
-# ==============================================================================
-# FICHIER 2: fundamental_analyzer.py (V5.0 - GEMINI 2.0 FLASH)
-# ==============================================================================
-# Section critique à modifier dans fundamental_analyzer.py
-
-# Ligne 18 - Ajouter la configuration du modèle
-GEMINI_MODEL = "gemini-2.0-flash-exp"
-REQUESTS_PER_MINUTE_LIMIT = 15  # Limite pour Gemini 2.0 Flash
-
-# Dans la classe BRVMAnalyzer, méthode _analyze_pdf_with_direct_api
-# Ligne ~140 - Remplacer l'URL de l'API par :
-
-def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
-    # ... (code existant jusqu'à la définition de api_url) ...
-    
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
-    
-    try:
-        logging.info(f"    -> Nouvelle analyse IA Gemini 2.0 Flash : {os.path.basename(pdf_url)}")
-        
-        # ... (lecture du PDF) ...
-        
-        prompt = """
-        Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-        Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-        Concentre-toi impérativement sur les aspects suivants :
-        - **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible. Mentionne les raisons de cette évolution.
-        - **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-        - **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives de distribution.
-        - **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-        - **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur (endettement, investissements majeurs, perspectives, etc.).
-        Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
-        """
-
-        request_body = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt}, 
-                    {
-                        "inline_data": {
-                            "mime_type": "application/pdf", 
-                            "data": pdf_data
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.7,
-                "topK": 40,
-                "topP": 0.95,
-                "maxOutputTokens": 2048,
-            }
-        }
-
-        self.request_timestamps.append(time.time())
-        response = requests.post(api_url, json=request_body, timeout=120)  # Timeout augmenté
-
-        # ... (reste du code de gestion des erreurs) ...
