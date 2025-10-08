@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V3.1 - SYNC COMPLÈTE + COLONNE E VALEUR)
+# MODULE: DATA COLLECTOR (V3.2 - ORDRE CHRONOLOGIQUE + COLONNE E)
 # ==============================================================================
 
 import re
@@ -68,7 +68,6 @@ def extract_date_from_filename(url):
 def get_all_boc_links():
     """
     Récupère TOUS les liens de BOC disponibles sur le site BRVM.
-    Parcourt toutes les pages jusqu'à épuisement.
     """
     base_url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     logging.info(f"🔍 Recherche de TOUS les bulletins sur : {base_url}")
@@ -77,7 +76,7 @@ def get_all_boc_links():
     page = 0
     consecutive_empty = 0
     
-    while consecutive_empty < 3:  # S'arrête après 3 pages vides consécutives
+    while consecutive_empty < 3:
         try:
             page_url = f"{base_url}?page={page}" if page > 0 else base_url
             logging.info(f"  Exploration de la page {page}...")
@@ -102,14 +101,15 @@ def get_all_boc_links():
                 logging.info(f"  Page {page} : {links_found} nouveau(x) BOC(s) trouvé(s)")
             
             page += 1
-            time.sleep(1)  # Pause entre les pages
+            time.sleep(1)
             
         except Exception as e:
             logging.error(f"  Erreur sur la page {page}: {e}")
             consecutive_empty += 1
     
-    sorted_links = sorted(list(all_links), key=extract_date_from_filename, reverse=True)
-    logging.info(f"✅ Total de {len(sorted_links)} BOCs trouvés sur TOUT le site")
+    # Trier du PLUS ANCIEN au PLUS RÉCENT (ordre chronologique)
+    sorted_links = sorted(list(all_links), key=extract_date_from_filename, reverse=False)
+    logging.info(f"✅ Total de {len(sorted_links)} BOCs trouvés (triés du plus ancien au plus récent)")
     return sorted_links
 
 def clean_and_convert_numeric(value):
@@ -152,15 +152,18 @@ def check_date_exists_in_db(cur, trade_date):
     cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
     return cur.fetchone() is not None
 
-def check_date_exists_in_gsheet(worksheet, trade_date):
-    """Vérifie si la date existe déjà dans Google Sheet."""
+def get_last_date_in_gsheet(worksheet):
+    """Récupère la dernière date dans Google Sheet pour savoir où insérer."""
     try:
-        date_str = trade_date.strftime('%d/%m/%Y')
-        all_dates = worksheet.col_values(2)  # Colonne B = Date
-        return date_str in all_dates
+        all_dates = worksheet.col_values(2)[1:]  # Colonne B, skip header
+        if not all_dates:
+            return None
+        # Dernière date dans la feuille
+        last_date_str = all_dates[-1]
+        return datetime.strptime(last_date_str, '%d/%m/%Y').date()
     except Exception as e:
-        logging.error(f"  ❌ Erreur vérification date dans GSheet: {e}")
-        return False
+        logging.error(f"  ❌ Erreur lecture dernière date GSheet: {e}")
+        return None
 
 def insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
     """Insère les données dans PostgreSQL."""
@@ -181,18 +184,19 @@ def insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume,
 
 def insert_data_to_gsheet(spreadsheet, symbol, trade_date, price, volume, value):
     """
-    Insère les données dans Google Sheet.
-    Colonnes: A=Symbol, B=Date, C=Price, D=Volume, E=Valeur (F CFA)
+    Insère les données dans Google Sheet EN BAS (ordre chronologique).
+    Colonnes: A=Symbol, B=Date, C=Price, D=Volume, E=Valeur (FCFA)
     """
     try:
         worksheet = spreadsheet.worksheet(symbol)
         date_str = trade_date.strftime('%d/%m/%Y')
         
         # Vérifier si la date existe déjà
-        if check_date_exists_in_gsheet(worksheet, trade_date):
+        all_dates = worksheet.col_values(2)[1:]  # Colonne B, skip header
+        if date_str in all_dates:
             return False
         
-        # Ajouter la ligne : [Symbol, Date, Price, Volume, Valeur]
+        # Ajouter EN BAS (append_row ajoute toujours en bas)
         new_row = [symbol, date_str, price, volume, value]
         worksheet.append_row(new_row, value_input_option='USER_ENTERED')
         return True
@@ -206,7 +210,7 @@ def insert_data_to_gsheet(spreadsheet, symbol, trade_date, price, volume, value)
 
 def run_data_collection():
     logging.info("="*80)
-    logging.info("ÉTAPE 1 : COLLECTE DE DONNÉES (V3.1 - TOUS LES BOCs)")
+    logging.info("ÉTAPE 1 : COLLECTE DE DONNÉES (V3.2 - ORDRE CHRONOLOGIQUE)")
     logging.info("="*80)
     
     conn = connect_to_db()
@@ -230,7 +234,7 @@ def run_data_collection():
             company_ids = get_company_ids(cur)
             logging.info(f"✅ {len(company_ids)} sociétés chargées depuis la DB")
         
-        # Récupérer TOUS les BOCs du site (toutes les pages)
+        # Récupérer TOUS les BOCs triés du PLUS ANCIEN au PLUS RÉCENT
         all_boc_links = get_all_boc_links()
         
         total_new_db = 0
@@ -239,14 +243,14 @@ def run_data_collection():
         bocs_skipped = 0
         
         logging.info(f"\n{'='*80}")
-        logging.info(f"📊 Traitement de {len(all_boc_links)} BOCs")
+        logging.info(f"📊 Traitement de {len(all_boc_links)} BOCs (ordre chronologique)")
         logging.info(f"{'='*80}\n")
         
         for idx, boc_url in enumerate(all_boc_links, 1):
-            # Extraire la date du nom du fichier
+            # Extraire la date
             date_match = re.search(r'(\d{8})', boc_url)
             if not date_match:
-                logging.warning(f"⚠️ [{idx}/{len(all_boc_links)}] Impossible d'extraire la date de: {os.path.basename(boc_url)}")
+                logging.warning(f"⚠️ [{idx}/{len(all_boc_links)}] Impossible d'extraire la date")
                 continue
             
             date_yyyymmdd = date_match.group(1)
@@ -259,32 +263,34 @@ def run_data_collection():
             with conn.cursor() as cur:
                 db_exists = check_date_exists_in_db(cur, trade_date)
             
-            # Vérifier dans GSheet (première société comme référence)
+            # Vérifier dans GSheet
             gsheet_exists = False
             if spreadsheet:
                 first_symbol = list(company_ids.keys())[0] if company_ids else None
                 if first_symbol:
                     try:
                         worksheet = spreadsheet.worksheet(first_symbol)
-                        gsheet_exists = check_date_exists_in_gsheet(worksheet, trade_date)
+                        last_date = get_last_date_in_gsheet(worksheet)
+                        if last_date and trade_date <= last_date:
+                            gsheet_exists = True
                     except:
                         pass
             
-            # Si existe dans les DEUX bases, on skip
+            # Si existe dans les DEUX, skip
             if db_exists and gsheet_exists:
                 bocs_skipped += 1
                 if bocs_skipped % 50 == 0:
-                    logging.info(f"  ⏭️  [{idx}/{len(all_boc_links)}] {bocs_skipped} BOCs déjà présents (skippés)")
+                    logging.info(f"  ⏭️  [{idx}/{len(all_boc_links)}] {bocs_skipped} BOCs déjà présents")
                 continue
             
-            # Sinon, on traite ce BOC
+            # Traiter ce BOC
             logging.info(f"\n{'─'*80}")
             logging.info(f"📊 [{idx}/{len(all_boc_links)}] BOC du {trade_date} - {os.path.basename(boc_url)}")
             logging.info(f"{'─'*80}")
             
             rows = extract_data_from_pdf(boc_url)
             if not rows:
-                logging.warning(f"  ⚠️ Aucune donnée extraite du PDF")
+                logging.warning(f"  ⚠️ Aucune donnée extraite")
                 bocs_skipped += 1
                 continue
             
@@ -302,17 +308,17 @@ def run_data_collection():
                         volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
                         value = clean_and_convert_numeric(rec.get('Valeur'))
                         
-                        # Insertion PostgreSQL
+                        # PostgreSQL
                         if not db_exists:
                             if insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
                                 new_records_db += 1
                         
-                        # Insertion Google Sheets
+                        # Google Sheets (EN BAS = ordre chronologique)
                         if spreadsheet and not gsheet_exists:
                             if insert_data_to_gsheet(spreadsheet, symbol, trade_date, price, volume, value):
                                 new_records_gsheet += 1
                         
-                    except (ValueError, TypeError) as e:
+                    except (ValueError, TypeError):
                         continue
             
             conn.commit()
@@ -325,12 +331,12 @@ def run_data_collection():
             else:
                 bocs_skipped += 1
             
-            time.sleep(0.5)  # Pause pour éviter surcharge API Google Sheets
+            time.sleep(0.5)
         
         logging.info("\n" + "="*80)
-        logging.info("📊 RÉSUMÉ DE LA COLLECTE COMPLÈTE")
+        logging.info("📊 RÉSUMÉ DE LA COLLECTE (ORDRE CHRONOLOGIQUE)")
         logging.info("="*80)
-        logging.info(f"  Total BOCs sur le site      : {len(all_boc_links)}")
+        logging.info(f"  Total BOCs                  : {len(all_boc_links)}")
         logging.info(f"  BOCs traités (nouveaux)     : {bocs_processed}")
         logging.info(f"  BOCs skippés (déjà présents): {bocs_skipped}")
         logging.info(f"  Nouveaux enregistrements DB : {total_new_db}")
@@ -343,7 +349,7 @@ def run_data_collection():
     finally:
         if conn: conn.close()
     
-    logging.info("✅ Processus de collecte de TOUS les BOCs terminé.")
+    logging.info("✅ Collecte terminée (ordre chronologique respecté).")
 
 if __name__ == "__main__":
     run_data_collection()
