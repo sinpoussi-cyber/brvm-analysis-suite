@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER (V5.0 - 22 CLÉS + ANALYSIS_MEMORY GSHEET)
+# MODULE: FUNDAMENTAL ANALYZER (V5.1 - DB PRIORITAIRE + GSHEET COPIE)
 # ==============================================================================
 
 import requests
@@ -111,76 +111,62 @@ class BRVMAnalyzer:
             return None
 
     def authenticate_gsheets(self):
+        """Authentification Google Sheets (optionnelle, pour copie uniquement)"""
         try:
             creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
             scopes = ['https://www.googleapis.com/auth/spreadsheets']
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
             self.gc = gspread.authorize(creds)
             self.spreadsheet = self.gc.open_by_key(SPREADSHEET_ID)
-            logging.info("✅ Authentification Google Sheets réussie.")
+            logging.info("✅ Authentification Google Sheets réussie (pour copie).")
             return True
         except Exception as e:
-            logging.error(f"❌ Erreur d'authentification Google Sheets : {e}")
+            logging.warning(f"⚠️  Google Sheets non disponible (continuera sans copie) : {e}")
             return False
 
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL."""
-        logging.info("Chargement mémoire depuis PostgreSQL...")
+        """Charge la mémoire UNIQUEMENT depuis PostgreSQL (source de vérité)"""
+        logging.info("Chargement mémoire depuis PostgreSQL (source unique)...")
         conn = self.connect_to_db()
         if not conn: return
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
-                db_memory = {row[0] for row in cur.fetchall()}
-            logging.info(f"  {len(db_memory)} analyses en PostgreSQL")
-            self.analysis_memory.update(db_memory)
+                self.analysis_memory = {row[0] for row in cur.fetchall()}
+            logging.info(f"  ✅ {len(self.analysis_memory)} analyses chargées depuis DB")
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire DB: {e}")
         finally:
             if conn: conn.close()
 
-    def _load_analysis_memory_from_gsheet(self):
-        """Charge la mémoire depuis Google Sheets (feuille ANALYSIS_MEMORY)."""
-        if not self.spreadsheet:
-            return
-        
-        try:
-            memory_sheet = self.spreadsheet.worksheet('ANALYSIS_MEMORY')
-            all_urls = memory_sheet.col_values(1)[1:]  # Colonne A, skip header
-            gsheet_memory = set(url for url in all_urls if url.strip())
-            logging.info(f"  {len(gsheet_memory)} analyses en Google Sheets")
-            self.analysis_memory.update(gsheet_memory)
-        except gspread.exceptions.WorksheetNotFound:
-            logging.warning("⚠️ Feuille ANALYSIS_MEMORY non trouvée, création...")
-            try:
-                memory_sheet = self.spreadsheet.add_worksheet(title='ANALYSIS_MEMORY', rows=1000, cols=5)
-                memory_sheet.update('A1', [['report_url', 'symbol', 'report_title', 'analysis_date', 'status']])
-                logging.info("✅ Feuille ANALYSIS_MEMORY créée")
-            except Exception as e:
-                logging.error(f"❌ Erreur création ANALYSIS_MEMORY: {e}")
-        except Exception as e:
-            logging.error(f"❌ Erreur chargement mémoire GSheet: {e}")
-
     def _save_to_memory_db(self, company_id, report, summary):
-        """Sauvegarde dans PostgreSQL."""
+        """Sauvegarde dans PostgreSQL (prioritaire)"""
         conn = self.connect_to_db()
-        if not conn: return
+        if not conn: return False
         try:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
-                    VALUES (%s, %s, %s, %s, %s) ON CONFLICT (report_url) DO NOTHING;
+                    VALUES (%s, %s, %s, %s, %s) 
+                    ON CONFLICT (report_url) DO NOTHING;
                 """, (company_id, report['url'], report['titre'], report['date'], summary))
                 conn.commit()
-            self.analysis_memory.add(report['url'])
+                inserted = cur.rowcount > 0
+            
+            if inserted:
+                self.analysis_memory.add(report['url'])
+                logging.info(f"    -> ✅ Sauvegardé dans PostgreSQL (DB)")
+                return True
+            return False
         except Exception as e:
             logging.error(f"❌ Erreur sauvegarde DB : {e}")
             conn.rollback()
+            return False
         finally:
             if conn: conn.close()
 
     def _save_to_memory_gsheet(self, symbol, report):
-        """Sauvegarde dans Google Sheets (feuille ANALYSIS_MEMORY)."""
+        """Sauvegarde dans Google Sheets (COPIE pour consultation rapide)"""
         if not self.spreadsheet:
             return
         
@@ -194,10 +180,11 @@ class BRVMAnalyzer:
                 'Analyzed'
             ]
             memory_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            self.analysis_memory.add(report['url'])
-            logging.info(f"    -> Sauvegardé dans ANALYSIS_MEMORY (GSheet)")
+            logging.info(f"    -> 📋 Copié dans ANALYSIS_MEMORY (GSheet pour consultation)")
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning("⚠️  Feuille ANALYSIS_MEMORY non trouvée (copie ignorée)")
         except Exception as e:
-            logging.error(f"❌ Erreur sauvegarde ANALYSIS_MEMORY: {e}")
+            logging.error(f"❌ Erreur copie ANALYSIS_MEMORY: {e}")
 
     def _configure_api_keys(self):
         """Charge jusqu'à 22 clés API."""
@@ -215,6 +202,8 @@ class BRVMAnalyzer:
 
     def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
         pdf_url = report['url']
+        
+        # Vérifier dans la mémoire DB (source unique de vérité)
         if pdf_url in self.analysis_memory:
             return
 
@@ -234,7 +223,7 @@ class BRVMAnalyzer:
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
-            logging.info(f"    -> Analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
+            logging.info(f"    -> 🤖 Analyse IA (clé #{self.current_key_index + 1}) : {os.path.basename(pdf_url)}")
             
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
@@ -280,12 +269,14 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
 
             if "erreur" not in analysis_text.lower():
-                self._save_to_memory_db(company_id, report, analysis_text)
-                self._save_to_memory_gsheet(symbol, report)
-                self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+                # Sauvegarder dans PostgreSQL (PRIORITAIRE)
+                if self._save_to_memory_db(company_id, report, analysis_text):
+                    # Copier dans Google Sheets (optionnel)
+                    self._save_to_memory_gsheet(symbol, report)
+                    self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
 
         except Exception as e:
-            logging.error(f"    -> Erreur clé #{self.current_key_index + 1} : {e}")
+            logging.error(f"    -> ❌ Erreur clé #{self.current_key_index + 1} : {e}")
             self.current_key_index += 1
             if self.current_key_index < len(self.api_keys):
                 self._analyze_pdf_with_direct_api(company_id, symbol, report)
@@ -401,7 +392,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
 
     def run_and_get_results(self):
         logging.info("="*80)
-        logging.info("ÉTAPE 3 : ANALYSE FONDAMENTALE (22 CLÉS + ANALYSIS_MEMORY)")
+        logging.info("ÉTAPE 3 : ANALYSE FONDAMENTALE (DB PRIORITAIRE, 22 CLÉS)")
         logging.info("="*80)
         
         conn = None
@@ -409,15 +400,11 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if not self._configure_api_keys():
                 return {}, []
             
-            # Authentifier Google Sheets
-            if not self.authenticate_gsheets():
-                logging.warning("⚠️ Google Sheets non disponible, utilisation PostgreSQL uniquement")
+            # Authentifier Google Sheets (optionnel, pour copie uniquement)
+            self.authenticate_gsheets()
             
-            # Charger la mémoire des deux sources
+            # Charger la mémoire UNIQUEMENT depuis PostgreSQL (source de vérité)
             self._load_analysis_memory_from_db()
-            self._load_analysis_memory_from_gsheet()
-            
-            logging.info(f"✅ Mémoire totale: {len(self.analysis_memory)} analyses déjà faites")
             
             self.setup_selenium()
             if not self.driver: return {}, []
@@ -451,6 +438,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
 
             logging.info("\n✅ Traitement terminé.")
             
+            # Récupérer les résultats UNIQUEMENT depuis PostgreSQL
             conn = self.connect_to_db()
             if not conn: return {}, []
             with conn.cursor() as cur:
@@ -460,6 +448,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                     final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
                     final_results[symbol]['nom'] = name
             
+            logging.info(f"📊 Résultats chargés depuis PostgreSQL: {len(final_results)} sociétés")
             return (dict(final_results), self.newly_analyzed_reports)
             
         except Exception as e:
