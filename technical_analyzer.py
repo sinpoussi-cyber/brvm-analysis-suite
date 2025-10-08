@@ -188,4 +188,26 @@ def run_technical_analysis():
             total_analyses += analyses_count
             
             # FLUSH le batch après chaque société pour éviter trop de données en mémoire
-            try
+            try:
+                logging.info(f"🚀 Flush du batch pour {company_symbol}...")
+                sync_manager.flush_technical_batch()
+                logging.info(f"✅ Batch pour {company_symbol} synchronisé avec succès.")
+            except Exception as e:
+                logging.error(f"❌ Erreur lors du flush du batch pour {company_symbol}: {e}")
+                # Continuer avec la société suivante
+                continue
+            
+            # Pause entre les sociétés pour respecter les quotas
+            time.sleep(2)
+
+        logging.info(f"✅ Analyse technique terminée. {total_analyses} analyses traitées au total.")
+
+    except Exception as e:
+        logging.error(f"❌ Erreur critique lors de l'analyse technique : {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+        sync_manager.close()
+
+if __name__ == "__main__":
+    run_technical_analysis()
