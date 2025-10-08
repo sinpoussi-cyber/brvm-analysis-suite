@@ -1,81 +1,54 @@
-name: BRVM Analysis Suite
+name: BRVM Analysis Suite - Complet
 
 on:
   schedule:
-    - cron: '0 18 * * 1-5'
-  workflow_dispatch:
+    - cron: '0 18 * * 1-5'  # Lundi à Vendredi à 18h UTC (19h GMT+1)
+  workflow_dispatch:  # Permet lancement manuel
 
 jobs:
-  analyze:
+  brvm-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 120  # 2 heures max
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v3
       
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: 🐍 Configuration Python 3.11
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: Install Dependencies
+      - name: 📦 Installation des dépendances
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Install Chrome and ChromeDriver
+      - name: 🌐 Installation et configuration Chrome/Chromedriver
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip
           
-          # Installation de Chrome stable
+          # Installation de Chrome
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
           
-          # Récupération de la version de Chrome installée
+          # Installation de Chromedriver
           CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d'.' -f1)
-          echo "Chrome version: $CHROME_VERSION"
-          
-          # Installation du ChromeDriver correspondant
-          CHROMEDRIVER_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_VERSION}")
-          echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
-          
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip"
-          unzip chromedriver-linux64.zip
-          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}")
+          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
+          unzip chromedriver_linux64.zip
+          sudo mv chromedriver /usr/local/bin/
           sudo chmod +x /usr/local/bin/chromedriver
           
-          echo "✅ Chrome et ChromeDriver installés"
+          echo "✅ Chrome et Chromedriver installés"
           google-chrome --version
           chromedriver --version
       
-      - name: Collecte Donnees
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python data_collector.py
-      
-      - name: Analyse Technique
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python technical_analyzer.py
-      
-      - name: Analyse Fondamentale
+      - name: 🔐 Configuration des secrets
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -106,9 +79,76 @@ jobs:
           GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
           GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
           GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-        run: python fundamental_analyzer.py
+        run: |
+          echo "✅ Secrets configurés"
+          echo "DB_HOST: $DB_HOST"
+          echo "Nombre de clés API Gemini: 22"
       
-      - name: Generation Rapports
+      - name: 📊 ÉTAPE 1 - Collecte de Données (TOUS les BOCs)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          echo "🚀 Démarrage de la collecte de TOUS les BOCs..."
+          python data_collector.py
+          echo "✅ Collecte terminée"
+      
+      - name: 📈 ÉTAPE 2 - Analyse Technique
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: |
+          echo "🚀 Démarrage de l'analyse technique..."
+          python technical_analyzer.py
+          echo "✅ Analyse technique terminée"
+      
+      - name: 📄 ÉTAPE 3 - Analyse Fondamentale (22 clés API)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
+          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
+          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+        run: |
+          echo "🚀 Démarrage de l'analyse fondamentale..."
+          python fundamental_analyzer.py
+          echo "✅ Analyse fondamentale terminée"
+      
+      - name: 📝 ÉTAPE 4 - Génération des Rapports
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -137,107 +177,34 @@ jobs:
           GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
           GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
           GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-        run: python main.py
+        run: |
+          echo "🚀 Démarrage de la génération des rapports..."
+          python main.py
+          echo "✅ Rapports générés"
       
-      - name: Upload Rapports
+      - name: 📤 Upload des Rapports générés
         uses: actions/upload-artifact@v4
-        if: success()
         with:
-          name: rapports-brvm
-          path: Rapport_*.docx
+          name: rapports-brvm-${{ github.run_number }}
+          path: |
+            Rapport_*.docx
           retention-days: 90
-
       
-      - name: Collecte Donnees
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python data_collector.py
-      
-      - name: Analyse Technique
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: python technical_analyzer.py
-      
-      - name: Analyse Fondamentale
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
-          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
-          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
-          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
-          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
-          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
-          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
-          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
-          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
-          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
-          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-        run: python fundamental_analyzer.py
-      
-      - name: Generation Rapports
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
-          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
-          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
-          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
-          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
-          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
-          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
-          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
-          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
-          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
-          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-        run: python main.py
-      
-      - name: Upload Rapports
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: rapports-brvm
-          path: Rapport_*.docx
-          retention-days: 90
+      - name: 📊 Résumé de l'exécution
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🏁 RÉSUMÉ DE L'EXÉCUTION"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Date: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "Run #: ${{ github.run_number }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ -f "Rapport_Synthese_Investissement_BRVM_"*.docx ]; then
+            echo "✅ Rapports générés avec succès"
+            ls -lh Rapport_*.docx
+          else
+            echo "⚠️  Aucun rapport trouvé"
+          fi
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
