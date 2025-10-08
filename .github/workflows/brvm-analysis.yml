@@ -25,14 +25,128 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Install Chrome
+      - name: Install Chrome and ChromeDriver
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip google-chrome-stable
-          wget -q https://chromedriver.storage.googleapis.com/114.0.5735.90/chromedriver_linux64.zip
-          unzip chromedriver_linux64.zip
-          sudo mv chromedriver /usr/local/bin/
+          sudo apt-get install -y wget unzip
+          
+          # Installation de Chrome stable
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          
+          # Récupération de la version de Chrome installée
+          CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d'.' -f1)
+          echo "Chrome version: $CHROME_VERSION"
+          
+          # Installation du ChromeDriver correspondant
+          CHROMEDRIVER_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_VERSION}")
+          echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
+          
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip"
+          unzip chromedriver-linux64.zip
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
           sudo chmod +x /usr/local/bin/chromedriver
+          
+          echo "✅ Chrome et ChromeDriver installés"
+          google-chrome --version
+          chromedriver --version
+      
+      - name: Collecte Donnees
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python data_collector.py
+      
+      - name: Analyse Technique
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python technical_analyzer.py
+      
+      - name: Analyse Fondamentale
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
+          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
+          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+        run: python fundamental_analyzer.py
+      
+      - name: Generation Rapports
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
+          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
+          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+        run: python main.py
+      
+      - name: Upload Rapports
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: rapports-brvm
+          path: Rapport_*.docx
+          retention-days: 90
+
       
       - name: Collecte Donnees
         env:
