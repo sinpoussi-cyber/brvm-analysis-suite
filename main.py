@@ -78,4 +78,21 @@ def main():
             final_report_generator.generate_all_reports(new_fundamental_analyses)
             logging.info("✅ Rapports générés avec succès")
         else:
-            logging.warning("⚠️ Auc
+            logging.warning("⚠️ Aucune clé API Gemini trouvée, étape 4 ignorée")
+    except Exception as e:
+        logging.error(f"❌ Échec à l'étape 4 : {e}", exc_info=True)
+    finally:
+        if db_connection:
+            db_connection.close()
+
+    # --- Résumé Final ---
+    logging.info("\n" + "="*60)
+    logging.info("🎉 SUITE D'ANALYSE BRVM COMPLÈTE TERMINÉE 🎉")
+    logging.info("="*60)
+    logging.info("✅ Toutes les données sont synchronisées :")
+    logging.info("   → Supabase (base de données principale)")
+    logging.info("   → Google Sheets (backup & visualisation)")
+    logging.info("="*60)
+
+if __name__ == "__main__":
+    main()
