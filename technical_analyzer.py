@@ -257,4 +257,108 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
     # Calcul des indicateurs
     df = calculate_moving_averages(df)
     df = calculate_bollinger_bands(df)
-    df
+    df = calculate_macd(df)
+    df = calculate_rsi(df)
+    df = calculate_stochastic(df)
+    
+    # Préparer les données pour PostgreSQL
+    df_to_update = df.drop(columns=['prev_histo', 'prev_rsi', 'prev_k', 'prev_d'], errors='ignore').reset_index()
+    df_to_update.rename(columns={'id': 'historical_data_id'}, inplace=True)
+    df_to_update = df_to_update.replace({np.nan: None})
+    
+    # 1️⃣ ÉCRITURE DANS POSTGRESQL
+    cur = conn.cursor()
+    update_count = 0
+    
+    for index, row in df_to_update.iterrows():
+        query = sql.SQL("""
+            INSERT INTO technical_analysis (
+                historical_data_id, mm5, mm10, mm20, mm50, mm_decision, 
+                bollinger_central, bollinger_inferior, bollinger_superior, bollinger_decision, 
+                macd_line, signal_line, histogram, macd_decision, 
+                rsi, rsi_decision, stochastic_k, stochastic_d, stochastic_decision
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (historical_data_id) DO UPDATE SET
+                mm5 = EXCLUDED.mm5, mm10 = EXCLUDED.mm10, mm20 = EXCLUDED.mm20, mm50 = EXCLUDED.mm50, 
+                mm_decision = EXCLUDED.mm_decision,
+                bollinger_central = EXCLUDED.bollinger_central, bollinger_inferior = EXCLUDED.bollinger_inferior, 
+                bollinger_superior = EXCLUDED.bollinger_superior, bollinger_decision = EXCLUDED.bollinger_decision,
+                macd_line = EXCLUDED.macd_line, signal_line = EXCLUDED.signal_line, histogram = EXCLUDED.histogram, 
+                macd_decision = EXCLUDED.macd_decision,
+                rsi = EXCLUDED.rsi, rsi_decision = EXCLUDED.rsi_decision, 
+                stochastic_k = EXCLUDED.stochastic_k, stochastic_d = EXCLUDED.stochastic_d, 
+                stochastic_decision = EXCLUDED.stochastic_decision;
+        """)
+        
+        cur.execute(query, (
+            row['historical_data_id'], row.get('mm5'), row.get('mm10'), row.get('mm20'), row.get('mm50'), 
+            row.get('mm_decision'),
+            row.get('bollinger_central'), row.get('bollinger_inferior'), row.get('bollinger_superior'), 
+            row.get('bollinger_decision'),
+            row.get('macd_line'), row.get('signal_line'), row.get('histogram'), row.get('macd_decision'),
+            row.get('rsi'), row.get('rsi_decision'), 
+            row.get('stochastic_k'), row.get('stochastic_d'), row.get('stochastic_decision')
+        ))
+        update_count += cur.rowcount
+    
+    conn.commit()
+    cur.close()
+    logging.info(f"   ✅ PostgreSQL: {update_count} enregistrements")
+    
+    # 2️⃣ ÉCRITURE DANS GOOGLE SHEETS (colonnes F-X)
+    if gc and spreadsheet:
+        if write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
+            logging.info(f"   ✅ Google Sheets: colonnes F-X mises à jour")
+    
+    time.sleep(0.3)
+    return update_count
+
+# --- Fonction principale ---
+def run_technical_analysis():
+    logging.info("="*80)
+    logging.info("📈 ÉTAPE 2: ANALYSE TECHNIQUE (V7.0 - COLONNES F-X)")
+    logging.info("="*80)
+    
+    start_time = time.time()
+    conn = connect_to_db()
+    if not conn: 
+        return
+    
+    gc = authenticate_gsheets()
+    spreadsheet = None
+    
+    if gc:
+        try:
+            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        except Exception as e:
+            logging.error(f"❌ Erreur ouverture spreadsheet: {e}")
+    else:
+        logging.warning("⚠️  Google Sheets non disponible, PostgreSQL uniquement")
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, symbol FROM companies;")
+        companies = cur.fetchall()
+        cur.close()
+        
+        logging.info(f"📊 {len(companies)} société(s) à analyser")
+        
+        total_updates = 0
+        for company_id, company_symbol in companies:
+            total_updates += process_company(conn, gc, spreadsheet, company_id, company_symbol)
+        
+        elapsed = time.time() - start_time
+        logging.info("\n" + "="*80)
+        logging.info(f"✅ Analyse technique terminée en {elapsed:.2f}s")
+        logging.info(f"📊 Total: {total_updates} mises à jour")
+        logging.info("="*80)
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur critique: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    run_technical_analysis()
