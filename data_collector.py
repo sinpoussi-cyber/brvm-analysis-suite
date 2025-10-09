@@ -1,13 +1,16 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V3.3 - INSERTION ORDONNÉE PAR SYMBOLE)
+# MODULE: DATA COLLECTOR (V3.1 - ÉCRITURE SIMULTANÉE DB + GOOGLE SHEETS)
 # ==============================================================================
 
 import re
 import time
+import unicodedata
 import logging
 import os
+import json
 from io import BytesIO
 from datetime import datetime
+
 import pdfplumber
 import requests
 from bs4 import BeautifulSoup
@@ -15,12 +18,12 @@ import psycopg2
 import urllib3
 import gspread
 from google.oauth2 import service_account
-import json
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- Configuration & Secrets ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
@@ -29,97 +32,97 @@ DB_PORT = os.environ.get('DB_PORT')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
+# --- Connexion PostgreSQL ---
 def connect_to_db():
     try:
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        logging.info("✅ Connexion à PostgreSQL réussie.")
+        conn = psycopg2.connect(
+            dbname=DB_NAME, 
+            user=DB_USER, 
+            password=DB_PASSWORD, 
+            host=DB_HOST, 
+            port=DB_PORT
+        )
+        logging.info("✅ Connexion à la base de données PostgreSQL réussie.")
         return conn
     except Exception as e:
-        logging.error(f"❌ Impossible de se connecter à PostgreSQL: {e}")
+        logging.error(f"❌ Impossible de se connecter à la DB: {e}")
         return None
 
+# --- Authentification Google Sheets ---
 def authenticate_gsheets():
     try:
-        creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
+        creds_json = GSPREAD_SERVICE_ACCOUNT_JSON
+        
+        if not creds_json:
+            logging.warning("⚠️  GSPREAD_SERVICE_ACCOUNT non défini, Google Sheets sera ignoré")
+            return None
+        
+        if not creds_json.strip().startswith('{'):
+            logging.error("❌ GSPREAD_SERVICE_ACCOUNT ne contient pas un JSON valide")
+            return None
+        
+        creds_dict = json.loads(creds_json)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(creds)
         logging.info("✅ Authentification Google Sheets réussie.")
         return gc
+    except json.JSONDecodeError as e:
+        logging.error(f"❌ Erreur de parsing JSON : {e}")
+        return None
     except Exception as e:
         logging.error(f"❌ Erreur d'authentification Google Sheets : {e}")
         return None
 
+# --- Récupération des IDs des sociétés ---
 def get_company_ids(cur):
     try:
-        cur.execute("SELECT symbol, id FROM companies ORDER BY symbol;")
+        cur.execute("SELECT symbol, id FROM companies;")
         return {row[0]: row[1] for row in cur.fetchall()}
     except Exception as e:
-        logging.error(f"❌ Erreur récupération IDs sociétés : {e}")
+        logging.error(f"❌ Erreur lors de la récupération des IDs des sociétés : {e}")
         return {}
 
-def extract_date_from_filename(url):
-    """Extrait une date YYYYMMDD pour le tri."""
+# --- Extraction de date depuis nom de fichier ---
+def extract_date_from_filename_for_sorting(url):
     date_match = re.search(r'(\d{8})', url)
     if date_match:
         return date_match.group(1)
     return '19000101'
 
-def get_all_boc_links():
-    """Récupère TOUS les liens de BOC du site BRVM."""
-    base_url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
-    logging.info(f"🔍 Recherche de TOUS les bulletins sur : {base_url}")
+# --- Récupération des liens BOC ---
+def get_boc_links():
+    url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
+    logging.info(f"Recherche de bulletins sur : {url}")
+    r = requests.get(url, verify=False, timeout=30)
+    soup = BeautifulSoup(r.content, 'html.parser')
+    links = set()
     
-    all_links = set()
-    page = 0
-    consecutive_empty = 0
+    for a in soup.find_all('a', href=True):
+        href = a['href'].strip()
+        if 'boc_' in href.lower() and href.endswith('.pdf'):
+            full_url = href if href.startswith('http') else "https://www.brvm.org" + href
+            links.add(full_url)
     
-    while consecutive_empty < 3:
-        try:
-            page_url = f"{base_url}?page={page}" if page > 0 else base_url
-            logging.info(f"  Exploration de la page {page}...")
-            
-            r = requests.get(page_url, verify=False, timeout=30)
-            soup = BeautifulSoup(r.content, 'html.parser')
-            
-            links_found = 0
-            for a in soup.find_all('a', href=True):
-                href = a['href'].strip()
-                if 'boc_' in href.lower() and href.endswith('.pdf'):
-                    full_url = href if href.startswith('http') else "https://www.brvm.org" + href
-                    if full_url not in all_links:
-                        all_links.add(full_url)
-                        links_found += 1
-            
-            if links_found == 0:
-                consecutive_empty += 1
-                logging.info(f"  Page {page} : 0 nouveau BOC (vide #{consecutive_empty})")
-            else:
-                consecutive_empty = 0
-                logging.info(f"  Page {page} : {links_found} nouveau(x) BOC(s) trouvé(s)")
-            
-            page += 1
-            time.sleep(1)
-            
-        except Exception as e:
-            logging.error(f"  Erreur sur la page {page}: {e}")
-            consecutive_empty += 1
-    
-    # Trier du PLUS ANCIEN au PLUS RÉCENT
-    sorted_links = sorted(list(all_links), key=extract_date_from_filename, reverse=False)
-    logging.info(f"✅ Total de {len(sorted_links)} BOCs trouvés (triés chronologiquement)")
-    return sorted_links
+    if not links:
+        logging.warning("Aucun lien de bulletin (BOC) trouvé sur la page principale.")
 
+    sorted_links = sorted(list(links), key=extract_date_from_filename_for_sorting, reverse=True)
+    return sorted_links[:15]
+
+# --- Nettoyage et conversion numérique ---
 def clean_and_convert_numeric(value):
-    if value is None or value == '': return None
+    if value is None or value == '': 
+        return None
     cleaned_value = re.sub(r'\s+', '', str(value)).replace(',', '.')
     try: 
         return float(cleaned_value)
     except (ValueError, TypeError): 
         return None
 
+# --- Extraction des données depuis PDF ---
 def extract_data_from_pdf(pdf_url):
-    """Extrait les données d'un PDF."""
+    logging.info(f"Analyse du PDF : {pdf_url}")
     data = []
     try:
         r = requests.get(pdf_url, verify=False, timeout=30)
@@ -130,7 +133,8 @@ def extract_data_from_pdf(pdf_url):
                 for table in tables:
                     for row in table:
                         row = [(cell.strip() if cell else "") for cell in row]
-                        if len(row) < 8: continue
+                        if len(row) < 8: 
+                            continue
                         vol, val = row[-8], row[-7]
                         cours = row[-6] if len(row) >= 6 else ""
                         symbole = row[1] if len(row) > 1 and row[1] and len(row[1]) <= 5 else row[0]
@@ -142,227 +146,154 @@ def extract_data_from_pdf(pdf_url):
                                 "Valeur": val
                             })
     except Exception as e:
-        logging.error(f"  ❌ Erreur extraction PDF : {e}")
+        logging.error(f"Erreur lors de l'extraction des données du PDF {pdf_url}: {e}")
     return data
 
-def check_date_exists_in_db(cur, trade_date):
-    """Vérifie si la date existe déjà dans PostgreSQL."""
-    cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
-    return cur.fetchone() is not None
-
-def check_date_exists_in_gsheet(worksheet, trade_date):
-    """Vérifie si la date existe déjà dans une feuille Google Sheet."""
-    try:
-        date_str = trade_date.strftime('%d/%m/%Y')
-        all_dates = worksheet.col_values(2)[1:]  # Colonne B, skip header
-        return date_str in all_dates
-    except Exception as e:
-        return False
-
-def insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
-    """Insère les données dans PostgreSQL."""
-    if symbol not in company_ids:
+# --- Écriture dans Google Sheets ---
+def write_to_gsheet(gc, symbol, trade_date, price, volume):
+    """Écrit une ligne dans Google Sheets pour un symbole donné."""
+    if not gc or not SPREADSHEET_ID:
         return False
     
-    company_id = company_ids[symbol]
     try:
-        cur.execute("""
-            INSERT INTO historical_data (company_id, trade_date, price, volume, value)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (company_id, trade_date) DO NOTHING;
-        """, (company_id, trade_date, price, volume, value))
-        return cur.rowcount > 0
-    except Exception as e:
-        logging.error(f"  ❌ Erreur insertion DB pour {symbol}: {e}")
-        return False
-
-def insert_data_to_gsheet_batch(spreadsheet, data_by_symbol):
-    """
-    Insère les données dans Google Sheets PAR LOT et PAR SYMBOLE.
-    data_by_symbol: {symbol: [(date, price, volume, value), ...]}
-    Les données pour chaque symbole sont déjà triées chronologiquement.
-    """
-    total_inserted = 0
-    
-    for symbol, rows in data_by_symbol.items():
-        if not rows:
-            continue
-            
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        
         try:
             worksheet = spreadsheet.worksheet(symbol)
-            
-            # Vérifier quelles dates existent déjà
-            existing_dates = set(worksheet.col_values(2)[1:])  # Colonne B, skip header
-            
-            # Filtrer les nouvelles lignes
-            new_rows = []
-            for trade_date, price, volume, value in rows:
-                date_str = trade_date.strftime('%d/%m/%Y')
-                if date_str not in existing_dates:
-                    new_rows.append([symbol, date_str, price, volume, value])
-            
-            if new_rows:
-                # Insérer toutes les nouvelles lignes en une seule fois
-                worksheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-                total_inserted += len(new_rows)
-                logging.info(f"  ✅ GSheet {symbol}: {len(new_rows)} ligne(s) ajoutée(s)")
-            
         except gspread.exceptions.WorksheetNotFound:
-            logging.warning(f"  ⚠️ Feuille '{symbol}' non trouvée")
-        except Exception as e:
-            logging.error(f"  ❌ Erreur GSheet pour {symbol}: {e}")
-    
-    return total_inserted
+            # Créer la feuille si elle n'existe pas
+            worksheet = spreadsheet.add_worksheet(title=symbol, rows=1000, cols=10)
+            worksheet.update([['Symbol', 'Date', 'Price', 'Volume']])
+            logging.info(f"  📄 Feuille '{symbol}' créée dans Google Sheets")
+        
+        # Vérifier si la date existe déjà
+        existing_data = worksheet.get_all_values()
+        date_str = trade_date.strftime('%d/%m/%Y')
+        
+        for row in existing_data[1:]:  # Ignorer l'en-tête
+            if len(row) > 1 and row[1] == date_str:
+                return True  # Déjà présent, pas besoin d'ajouter
+        
+        # Ajouter la nouvelle ligne
+        worksheet.append_row([
+            symbol,
+            date_str,
+            price if price else '',
+            volume if volume else ''
+        ], value_input_option='USER_ENTERED')
+        
+        return True
+    except Exception as e:
+        logging.error(f"  ❌ Erreur Google Sheets pour {symbol}: {e}")
+        return False
 
+# --- Fonction principale de collecte ---
 def run_data_collection():
-    logging.info("="*80)
-    logging.info("ÉTAPE 1 : COLLECTE DE DONNÉES (V3.3 - INSERTION ORDONNÉE)")
-    logging.info("="*80)
+    logging.info("="*60)
+    logging.info("ÉTAPE 1 : DÉMARRAGE DE LA COLLECTE DE DONNÉES (V3.0)")
+    logging.info("ÉCRITURE SIMULTANÉE : PostgreSQL + Google Sheets")
+    logging.info("="*60)
     
     conn = connect_to_db()
-    gc = authenticate_gsheets()
-    
-    if not conn:
-        logging.error("❌ Impossible de continuer sans connexion PostgreSQL")
+    if not conn: 
         return
     
-    spreadsheet = None
-    if gc:
-        try:
-            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-            logging.info(f"✅ Google Sheet ouvert: {spreadsheet.title}")
-        except Exception as e:
-            logging.error(f"❌ Impossible d'ouvrir le Google Sheet: {e}")
-            logging.warning("⚠️ Continuation sans Google Sheets")
+    gc = authenticate_gsheets()
+    if not gc:
+        logging.warning("⚠️  Google Sheets non disponible, seule PostgreSQL sera utilisée")
     
     try:
         with conn.cursor() as cur:
             company_ids = get_company_ids(cur)
-            logging.info(f"✅ {len(company_ids)} sociétés chargées depuis la DB")
         
-        # Récupérer TOUS les BOCs triés chronologiquement
-        all_boc_links = get_all_boc_links()
+        boc_links = get_boc_links()
+        logging.info(f"{len(boc_links)} BOCs récents trouvés sur le site.")
         
-        total_new_db = 0
-        total_new_gsheet = 0
-        bocs_processed = 0
-        bocs_skipped = 0
+        total_new_records_db = 0
+        total_new_records_gsheet = 0
         
-        logging.info(f"\n{'='*80}")
-        logging.info(f"📊 Traitement de {len(all_boc_links)} BOCs")
-        logging.info(f"{'='*80}\n")
-        
-        for idx, boc_url in enumerate(all_boc_links, 1):
-            # Extraire la date
-            date_match = re.search(r'(\d{8})', boc_url)
-            if not date_match:
+        for boc in boc_links:
+            date_match = re.search(r'(\d{8})', boc)
+            if not date_match: 
                 continue
-            
             date_yyyymmdd = date_match.group(1)
+
             try:
                 trade_date = datetime.strptime(date_yyyymmdd, '%Y%m%d').date()
             except ValueError:
                 continue
-            
-            # Vérifier si cette date existe dans DB
+
+            # Vérifier si les données existent déjà en DB
             with conn.cursor() as cur:
-                db_exists = check_date_exists_in_db(cur, trade_date)
+                cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
+                if cur.fetchone():
+                    logging.info(f"Les données pour la date {trade_date} existent déjà. Ignoré.")
+                    continue
             
-            # Vérifier dans GSheet (première société comme référence)
-            gsheet_exists = False
-            if spreadsheet:
-                first_symbol = list(company_ids.keys())[0] if company_ids else None
-                if first_symbol:
-                    try:
-                        worksheet = spreadsheet.worksheet(first_symbol)
-                        gsheet_exists = check_date_exists_in_gsheet(worksheet, trade_date)
-                    except:
-                        pass
-            
-            # Si existe dans les DEUX, skip
-            if db_exists and gsheet_exists:
-                bocs_skipped += 1
-                if bocs_skipped % 50 == 0:
-                    logging.info(f"  ⏭️  [{idx}/{len(all_boc_links)}] {bocs_skipped} BOCs déjà présents")
+            logging.info(f"📅 Traitement des données pour la date {trade_date}...")
+            rows = extract_data_from_pdf(boc)
+            if not rows: 
                 continue
-            
-            # Traiter ce BOC
-            logging.info(f"\n{'─'*80}")
-            logging.info(f"📊 [{idx}/{len(all_boc_links)}] BOC du {trade_date} - {os.path.basename(boc_url)}")
-            logging.info(f"{'─'*80}")
-            
-            rows = extract_data_from_pdf(boc_url)
-            if not rows:
-                logging.warning(f"  ⚠️ Aucune donnée extraite")
-                bocs_skipped += 1
-                continue
-            
-            # Organiser les données PAR SYMBOLE (pour insertion ordonnée)
-            data_by_symbol = {}
-            
-            new_records_db = 0
+
+            new_records_for_this_date_db = 0
+            new_records_for_this_date_gsheet = 0
             
             with conn.cursor() as cur:
-                # Trier les données par symbole pour l'ordre alphabétique
-                sorted_rows = sorted(rows, key=lambda x: x.get('Symbole', ''))
-                
-                for rec in sorted_rows:
+                for rec in rows:
                     symbol = rec.get('Symbole', '').strip()
-                    if symbol not in company_ids:
-                        continue
-                    
-                    try:
-                        price = clean_and_convert_numeric(rec.get('Cours'))
-                        volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
-                        value = clean_and_convert_numeric(rec.get('Valeur'))
-                        
-                        # PostgreSQL
-                        if not db_exists:
-                            if insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
-                                new_records_db += 1
-                        
-                        # Préparer pour Google Sheets
-                        if spreadsheet and not gsheet_exists:
-                            if symbol not in data_by_symbol:
-                                data_by_symbol[symbol] = []
-                            data_by_symbol[symbol].append((trade_date, price, volume, value))
-                        
-                    except (ValueError, TypeError):
-                        continue
-            
-            conn.commit()
-            
-            # Insérer dans Google Sheets PAR LOT (déjà dans l'ordre)
-            if spreadsheet and data_by_symbol:
-                new_records_gsheet = insert_data_to_gsheet_batch(spreadsheet, data_by_symbol)
-                total_new_gsheet += new_records_gsheet
-            
-            if new_records_db > 0 or (spreadsheet and data_by_symbol):
-                logging.info(f"  ✅ PostgreSQL: {new_records_db}")
-                total_new_db += new_records_db
-                bocs_processed += 1
+                    if symbol in company_ids:
+                        company_id = company_ids[symbol]
+                        try:
+                            price = clean_and_convert_numeric(rec.get('Cours'))
+                            volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
+                            value = clean_and_convert_numeric(rec.get('Valeur'))
+                            
+                            # 1️⃣ ÉCRITURE DANS POSTGRESQL
+                            cur.execute("""
+                                INSERT INTO historical_data (company_id, trade_date, price, volume, value)
+                                VALUES (%s, %s, %s, %s, %s)
+                                ON CONFLICT (company_id, trade_date) DO NOTHING;
+                            """, (company_id, trade_date, price, volume, value))
+                            
+                            if cur.rowcount > 0:
+                                new_records_for_this_date_db += 1
+                                
+                                # 2️⃣ ÉCRITURE DANS GOOGLE SHEETS (simultanée)
+                                if gc:
+                                    if write_to_gsheet(gc, symbol, trade_date, price, volume):
+                                        new_records_for_this_date_gsheet += 1
+                                
+                        except (ValueError, TypeError):
+                            pass  # Ignorer les données invalides
+
+            if new_records_for_this_date_db > 0 or new_records_for_this_date_gsheet > 0:
+                logging.info(f"  ✅ {trade_date}:")
+                logging.info(f"     • PostgreSQL: {new_records_for_this_date_db} enregistrements")
+                if gc:
+                    logging.info(f"     • Google Sheets: {new_records_for_this_date_gsheet} enregistrements")
+                total_new_records_db += new_records_for_this_date_db
+                total_new_records_gsheet += new_records_for_this_date_gsheet
             else:
-                bocs_skipped += 1
-            
-            time.sleep(0.5)
-        
-        logging.info("\n" + "="*80)
-        logging.info("📊 RÉSUMÉ DE LA COLLECTE")
-        logging.info("="*80)
-        logging.info(f"  Total BOCs                  : {len(all_boc_links)}")
-        logging.info(f"  BOCs traités (nouveaux)     : {bocs_processed}")
-        logging.info(f"  BOCs skippés (déjà présents): {bocs_skipped}")
-        logging.info(f"  Nouveaux enregistrements DB : {total_new_db}")
-        logging.info(f"  Nouveaux enregistrements GS : {total_new_gsheet}")
-        logging.info("="*80)
-        
+                logging.info(f"  -> Aucune nouvelle donnée pour le {trade_date}")
+
+            conn.commit()
+
+        logging.info("\n" + "="*60)
+        logging.info(f"✅ COLLECTE TERMINÉE")
+        logging.info(f"   📊 PostgreSQL: {total_new_records_db} nouveaux enregistrements")
+        if gc:
+            logging.info(f"   📊 Google Sheets: {total_new_records_gsheet} nouveaux enregistrements")
+        logging.info("="*60)
+
     except Exception as e:
-        logging.error(f"❌ Erreur critique: {e}", exc_info=True)
-        if conn: conn.rollback()
+        logging.error(f"❌ Erreur critique dans la collecte de données : {e}", exc_info=True)
+        if conn: 
+            conn.rollback()
     finally:
-        if conn: conn.close()
+        if conn: 
+            conn.close()
     
-    logging.info("✅ Collecte terminée (données insérées dans l'ordre chronologique).")
+    logging.info("Processus de collecte de données terminé.")
 
 if __name__ == "__main__":
     run_data_collection()
