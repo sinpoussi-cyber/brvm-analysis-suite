@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR (V3.2 - ORDRE CHRONOLOGIQUE + COLONNE E)
+# MODULE: DATA COLLECTOR (V3.3 - INSERTION ORDONNÉE PAR SYMBOLE)
 # ==============================================================================
 
 import re
@@ -52,7 +52,7 @@ def authenticate_gsheets():
 
 def get_company_ids(cur):
     try:
-        cur.execute("SELECT symbol, id FROM companies;")
+        cur.execute("SELECT symbol, id FROM companies ORDER BY symbol;")
         return {row[0]: row[1] for row in cur.fetchall()}
     except Exception as e:
         logging.error(f"❌ Erreur récupération IDs sociétés : {e}")
@@ -66,9 +66,7 @@ def extract_date_from_filename(url):
     return '19000101'
 
 def get_all_boc_links():
-    """
-    Récupère TOUS les liens de BOC disponibles sur le site BRVM.
-    """
+    """Récupère TOUS les liens de BOC du site BRVM."""
     base_url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     logging.info(f"🔍 Recherche de TOUS les bulletins sur : {base_url}")
     
@@ -107,9 +105,9 @@ def get_all_boc_links():
             logging.error(f"  Erreur sur la page {page}: {e}")
             consecutive_empty += 1
     
-    # Trier du PLUS ANCIEN au PLUS RÉCENT (ordre chronologique)
+    # Trier du PLUS ANCIEN au PLUS RÉCENT
     sorted_links = sorted(list(all_links), key=extract_date_from_filename, reverse=False)
-    logging.info(f"✅ Total de {len(sorted_links)} BOCs trouvés (triés du plus ancien au plus récent)")
+    logging.info(f"✅ Total de {len(sorted_links)} BOCs trouvés (triés chronologiquement)")
     return sorted_links
 
 def clean_and_convert_numeric(value):
@@ -152,18 +150,14 @@ def check_date_exists_in_db(cur, trade_date):
     cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
     return cur.fetchone() is not None
 
-def get_last_date_in_gsheet(worksheet):
-    """Récupère la dernière date dans Google Sheet pour savoir où insérer."""
+def check_date_exists_in_gsheet(worksheet, trade_date):
+    """Vérifie si la date existe déjà dans une feuille Google Sheet."""
     try:
+        date_str = trade_date.strftime('%d/%m/%Y')
         all_dates = worksheet.col_values(2)[1:]  # Colonne B, skip header
-        if not all_dates:
-            return None
-        # Dernière date dans la feuille
-        last_date_str = all_dates[-1]
-        return datetime.strptime(last_date_str, '%d/%m/%Y').date()
+        return date_str in all_dates
     except Exception as e:
-        logging.error(f"  ❌ Erreur lecture dernière date GSheet: {e}")
-        return None
+        return False
 
 def insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
     """Insère les données dans PostgreSQL."""
@@ -182,35 +176,47 @@ def insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume,
         logging.error(f"  ❌ Erreur insertion DB pour {symbol}: {e}")
         return False
 
-def insert_data_to_gsheet(spreadsheet, symbol, trade_date, price, volume, value):
+def insert_data_to_gsheet_batch(spreadsheet, data_by_symbol):
     """
-    Insère les données dans Google Sheet EN BAS (ordre chronologique).
-    Colonnes: A=Symbol, B=Date, C=Price, D=Volume, E=Valeur (FCFA)
+    Insère les données dans Google Sheets PAR LOT et PAR SYMBOLE.
+    data_by_symbol: {symbol: [(date, price, volume, value), ...]}
+    Les données pour chaque symbole sont déjà triées chronologiquement.
     """
-    try:
-        worksheet = spreadsheet.worksheet(symbol)
-        date_str = trade_date.strftime('%d/%m/%Y')
-        
-        # Vérifier si la date existe déjà
-        all_dates = worksheet.col_values(2)[1:]  # Colonne B, skip header
-        if date_str in all_dates:
-            return False
-        
-        # Ajouter EN BAS (append_row ajoute toujours en bas)
-        new_row = [symbol, date_str, price, volume, value]
-        worksheet.append_row(new_row, value_input_option='USER_ENTERED')
-        return True
-        
-    except gspread.exceptions.WorksheetNotFound:
-        logging.warning(f"  ⚠️ Feuille '{symbol}' non trouvée dans Google Sheets")
-        return False
-    except Exception as e:
-        logging.error(f"  ❌ Erreur insertion GSheet pour {symbol}: {e}")
-        return False
+    total_inserted = 0
+    
+    for symbol, rows in data_by_symbol.items():
+        if not rows:
+            continue
+            
+        try:
+            worksheet = spreadsheet.worksheet(symbol)
+            
+            # Vérifier quelles dates existent déjà
+            existing_dates = set(worksheet.col_values(2)[1:])  # Colonne B, skip header
+            
+            # Filtrer les nouvelles lignes
+            new_rows = []
+            for trade_date, price, volume, value in rows:
+                date_str = trade_date.strftime('%d/%m/%Y')
+                if date_str not in existing_dates:
+                    new_rows.append([symbol, date_str, price, volume, value])
+            
+            if new_rows:
+                # Insérer toutes les nouvelles lignes en une seule fois
+                worksheet.append_rows(new_rows, value_input_option='USER_ENTERED')
+                total_inserted += len(new_rows)
+                logging.info(f"  ✅ GSheet {symbol}: {len(new_rows)} ligne(s) ajoutée(s)")
+            
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning(f"  ⚠️ Feuille '{symbol}' non trouvée")
+        except Exception as e:
+            logging.error(f"  ❌ Erreur GSheet pour {symbol}: {e}")
+    
+    return total_inserted
 
 def run_data_collection():
     logging.info("="*80)
-    logging.info("ÉTAPE 1 : COLLECTE DE DONNÉES (V3.2 - ORDRE CHRONOLOGIQUE)")
+    logging.info("ÉTAPE 1 : COLLECTE DE DONNÉES (V3.3 - INSERTION ORDONNÉE)")
     logging.info("="*80)
     
     conn = connect_to_db()
@@ -234,7 +240,7 @@ def run_data_collection():
             company_ids = get_company_ids(cur)
             logging.info(f"✅ {len(company_ids)} sociétés chargées depuis la DB")
         
-        # Récupérer TOUS les BOCs triés du PLUS ANCIEN au PLUS RÉCENT
+        # Récupérer TOUS les BOCs triés chronologiquement
         all_boc_links = get_all_boc_links()
         
         total_new_db = 0
@@ -243,36 +249,33 @@ def run_data_collection():
         bocs_skipped = 0
         
         logging.info(f"\n{'='*80}")
-        logging.info(f"📊 Traitement de {len(all_boc_links)} BOCs (ordre chronologique)")
+        logging.info(f"📊 Traitement de {len(all_boc_links)} BOCs")
         logging.info(f"{'='*80}\n")
         
         for idx, boc_url in enumerate(all_boc_links, 1):
             # Extraire la date
             date_match = re.search(r'(\d{8})', boc_url)
             if not date_match:
-                logging.warning(f"⚠️ [{idx}/{len(all_boc_links)}] Impossible d'extraire la date")
                 continue
             
             date_yyyymmdd = date_match.group(1)
             try:
                 trade_date = datetime.strptime(date_yyyymmdd, '%Y%m%d').date()
             except ValueError:
-                logging.warning(f"⚠️ [{idx}/{len(all_boc_links)}] Date invalide: {date_yyyymmdd}")
                 continue
             
+            # Vérifier si cette date existe dans DB
             with conn.cursor() as cur:
                 db_exists = check_date_exists_in_db(cur, trade_date)
             
-            # Vérifier dans GSheet
+            # Vérifier dans GSheet (première société comme référence)
             gsheet_exists = False
             if spreadsheet:
                 first_symbol = list(company_ids.keys())[0] if company_ids else None
                 if first_symbol:
                     try:
                         worksheet = spreadsheet.worksheet(first_symbol)
-                        last_date = get_last_date_in_gsheet(worksheet)
-                        if last_date and trade_date <= last_date:
-                            gsheet_exists = True
+                        gsheet_exists = check_date_exists_in_gsheet(worksheet, trade_date)
                     except:
                         pass
             
@@ -294,11 +297,16 @@ def run_data_collection():
                 bocs_skipped += 1
                 continue
             
+            # Organiser les données PAR SYMBOLE (pour insertion ordonnée)
+            data_by_symbol = {}
+            
             new_records_db = 0
-            new_records_gsheet = 0
             
             with conn.cursor() as cur:
-                for rec in rows:
+                # Trier les données par symbole pour l'ordre alphabétique
+                sorted_rows = sorted(rows, key=lambda x: x.get('Symbole', ''))
+                
+                for rec in sorted_rows:
                     symbol = rec.get('Symbole', '').strip()
                     if symbol not in company_ids:
                         continue
@@ -313,20 +321,25 @@ def run_data_collection():
                             if insert_data_to_db(conn, cur, company_ids, symbol, trade_date, price, volume, value):
                                 new_records_db += 1
                         
-                        # Google Sheets (EN BAS = ordre chronologique)
+                        # Préparer pour Google Sheets
                         if spreadsheet and not gsheet_exists:
-                            if insert_data_to_gsheet(spreadsheet, symbol, trade_date, price, volume, value):
-                                new_records_gsheet += 1
+                            if symbol not in data_by_symbol:
+                                data_by_symbol[symbol] = []
+                            data_by_symbol[symbol].append((trade_date, price, volume, value))
                         
                     except (ValueError, TypeError):
                         continue
             
             conn.commit()
             
-            if new_records_db > 0 or new_records_gsheet > 0:
-                logging.info(f"  ✅ PostgreSQL: {new_records_db} | Google Sheets: {new_records_gsheet}")
-                total_new_db += new_records_db
+            # Insérer dans Google Sheets PAR LOT (déjà dans l'ordre)
+            if spreadsheet and data_by_symbol:
+                new_records_gsheet = insert_data_to_gsheet_batch(spreadsheet, data_by_symbol)
                 total_new_gsheet += new_records_gsheet
+            
+            if new_records_db > 0 or (spreadsheet and data_by_symbol):
+                logging.info(f"  ✅ PostgreSQL: {new_records_db}")
+                total_new_db += new_records_db
                 bocs_processed += 1
             else:
                 bocs_skipped += 1
@@ -334,7 +347,7 @@ def run_data_collection():
             time.sleep(0.5)
         
         logging.info("\n" + "="*80)
-        logging.info("📊 RÉSUMÉ DE LA COLLECTE (ORDRE CHRONOLOGIQUE)")
+        logging.info("📊 RÉSUMÉ DE LA COLLECTE")
         logging.info("="*80)
         logging.info(f"  Total BOCs                  : {len(all_boc_links)}")
         logging.info(f"  BOCs traités (nouveaux)     : {bocs_processed}")
@@ -349,7 +362,7 @@ def run_data_collection():
     finally:
         if conn: conn.close()
     
-    logging.info("✅ Collecte terminée (ordre chronologique respecté).")
+    logging.info("✅ Collecte terminée (données insérées dans l'ordre chronologique).")
 
 if __name__ == "__main__":
     run_data_collection()
