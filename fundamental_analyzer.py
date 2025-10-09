@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V6.0 - SAUVEGARDE SUPABASE + ANALYSIS_MEMORY
+# MODULE: FUNDAMENTAL ANALYZER V6.0 - SAUVEGARDE DB + ANALYSIS_MEMORY
 # ==============================================================================
 
 import requests
@@ -12,6 +12,7 @@ import logging
 import unicodedata
 import urllib3
 import json
+import base64
 from collections import defaultdict
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -20,7 +21,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
-import base64
 import gspread
 from google.oauth2 import service_account
 
@@ -91,7 +91,6 @@ class BRVMAnalyzer:
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'SDCC': {'nom_rapport': 'SODE CI', 'alternatives': ['sode ci', 'sode']},
         }
-        
         self.driver = None
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
@@ -103,22 +102,24 @@ class BRVMAnalyzer:
         self.request_timestamps = []
         self.gc = None
         self.spreadsheet = None
-    
+
     def connect_to_db(self):
-        """Connexion à Supabase"""
         try:
             conn = psycopg2.connect(
-                dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
+                dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
                 host=DB_HOST, port=DB_PORT
             )
             return conn
         except Exception as e:
             logging.error(f"❌ Erreur connexion DB: {e}")
             return None
-    
+
     def authenticate_gsheets(self):
         """Authentification Google Sheets"""
         try:
+            if not GSPREAD_SERVICE_ACCOUNT_JSON:
+                return False
+            
             creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
             scopes = ['https://www.googleapis.com/auth/spreadsheets']
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -129,61 +130,58 @@ class BRVMAnalyzer:
         except Exception as e:
             logging.warning(f"⚠️  Google Sheets non disponible: {e}")
             return False
-    
+
     def _load_analysis_memory_from_db(self):
         """Charge la mémoire depuis PostgreSQL"""
-        logging.info("📚 Chargement mémoire depuis PostgreSQL...")
+        logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
-        if not conn:
+        if not conn: 
             return
         
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
                 self.analysis_memory = {row[0] for row in cur.fetchall()}
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) déjà en mémoire")
+            logging.info(f"   ✅ {len(self.analysis_memory)} analyses chargées depuis DB")
         except Exception as e:
-            logging.error(f"❌ Erreur chargement mémoire: {e}")
+            logging.error(f"❌ Erreur chargement mémoire DB: {e}")
         finally:
-            if conn:
+            if conn: 
                 conn.close()
-    
-    def _save_to_supabase(self, company_id, report, summary):
-        """Sauvegarde dans Supabase"""
+
+    def _save_to_db(self, company_id, report, summary):
+        """Sauvegarde dans PostgreSQL"""
         conn = self.connect_to_db()
-        if not conn:
+        if not conn: 
             return False
         
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO fundamental_analysis 
-                    (company_id, report_url, report_title, report_date, analysis_summary)
+                    INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                     VALUES (%s, %s, %s, %s, %s) 
-                    ON CONFLICT (report_url) DO NOTHING;
+                    ON CONFLICT (report_url) DO UPDATE SET
+                        analysis_summary = EXCLUDED.analysis_summary,
+                        updated_at = CURRENT_TIMESTAMP;
                 """, (company_id, report['url'], report['titre'], report['date'], summary))
-                
                 conn.commit()
                 inserted = cur.rowcount > 0
             
             if inserted:
                 self.analysis_memory.add(report['url'])
-                logging.info(f"      ✅ Sauvegardé dans Supabase")
+                logging.info(f"    ✅ Sauvegardé dans PostgreSQL")
                 return True
-            
             return False
-        
         except Exception as e:
-            logging.error(f"❌ Erreur sauvegarde Supabase: {e}")
+            logging.error(f"❌ Erreur sauvegarde DB: {e}")
             conn.rollback()
             return False
-        
         finally:
-            if conn:
+            if conn: 
                 conn.close()
-    
+
     def _save_to_analysis_memory_sheet(self, symbol, report):
-        """Copie dans ANALYSIS_MEMORY (Google Sheets)"""
+        """Sauvegarde dans la feuille ANALYSIS_MEMORY"""
         if not self.spreadsheet:
             return
         
@@ -199,19 +197,32 @@ class BRVMAnalyzer:
             ]
             
             memory_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            logging.info(f"      📋 Copié dans ANALYSIS_MEMORY")
+            logging.info(f"    ✅ Ajouté à ANALYSIS_MEMORY")
         
         except gspread.exceptions.WorksheetNotFound:
-            logging.warning("⚠️  Feuille ANALYSIS_MEMORY non trouvée")
+            logging.warning("⚠️  Feuille ANALYSIS_MEMORY non trouvée, création...")
+            try:
+                memory_sheet = self.spreadsheet.add_worksheet(title='ANALYSIS_MEMORY', rows=1000, cols=5)
+                memory_sheet.append_row(['URL', 'Symbole', 'Titre', 'Date Analyse', 'Statut'])
+                memory_sheet.append_row([
+                    report['url'],
+                    symbol,
+                    report['titre'],
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'Analyzed'
+                ])
+                logging.info("    ✅ ANALYSIS_MEMORY créée et remplie")
+            except Exception as e:
+                logging.error(f"❌ Erreur création ANALYSIS_MEMORY: {e}")
         
         except Exception as e:
-            logging.error(f"❌ Erreur copie ANALYSIS_MEMORY: {e}")
-    
+            logging.error(f"❌ Erreur ANALYSIS_MEMORY: {e}")
+
     def _configure_api_keys(self):
         """Charge jusqu'à 22 clés API"""
         for i in range(1, 23):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
+            if key: 
                 self.api_keys.append(key)
         
         if not self.api_keys:
@@ -220,22 +231,22 @@ class BRVMAnalyzer:
         
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées")
         return True
-    
-    def _analyze_pdf_with_gemini(self, company_id, symbol, report):
-        """Analyse un PDF avec Gemini API"""
+
+    def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
+        """Analyse un PDF avec l'API Gemini"""
         pdf_url = report['url']
         
-        # Vérifier si déjà analysé
+        # Vérifier dans la mémoire
         if pdf_url in self.analysis_memory:
             return
         
-        # Rate limiting
+        # Gestion rate limit
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
             sleep_time = 60 - (now - self.request_timestamps[0])
-            logging.warning(f"⏸️  Pause {sleep_time + 1:.1f}s (rate limit)...")
+            logging.warning(f"⏸️  Pause rate limit: {sleep_time + 1:.1f}s")
             time.sleep(sleep_time + 1)
             self.request_timestamps = []
         
@@ -247,14 +258,13 @@ class BRVMAnalyzer:
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
-            logging.info(f"      🤖 Analyse IA (clé #{self.current_key_index + 1})")
+            logging.info(f"    🤖 Analyse IA (clé #{self.current_key_index + 1}): {os.path.basename(pdf_url)}")
             
             # Télécharger le PDF
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
             pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
             
-            # Prompt d'analyse
             prompt = """Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
 Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
 Concentre-toi impérativement sur les aspects suivants :
@@ -268,7 +278,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             request_body = {
                 "contents": [{
                     "parts": [
-                        {"text": prompt},
+                        {"text": prompt}, 
                         {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}
                     ]
                 }],
@@ -286,7 +296,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if response.status_code == 429:
                 logging.warning(f"⚠️  Quota atteint pour clé #{self.current_key_index + 1}")
                 self.current_key_index += 1
-                self._analyze_pdf_with_gemini(company_id, symbol, report)
+                self._analyze_pdf_with_direct_api(company_id, symbol, report)
                 return
             
             response.raise_for_status()
@@ -295,21 +305,20 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
             
             if "erreur" not in analysis_text.lower():
-                # Sauvegarder dans Supabase
-                if self._save_to_supabase(company_id, report, analysis_text):
-                    # Copier dans ANALYSIS_MEMORY (optionnel)
+                # Sauvegarder dans PostgreSQL
+                if self._save_to_db(company_id, report, analysis_text):
+                    # Sauvegarder dans ANALYSIS_MEMORY
                     self._save_to_analysis_memory_sheet(symbol, report)
                     self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
         
         except Exception as e:
-            logging.error(f"      ❌ Erreur clé #{self.current_key_index + 1}: {e}")
+            logging.error(f"    ❌ Erreur clé #{self.current_key_index + 1}: {e}")
             self.current_key_index += 1
-            
             if self.current_key_index < len(self.api_keys):
-                self._analyze_pdf_with_gemini(company_id, symbol, report)
-    
+                self._analyze_pdf_with_direct_api(company_id, symbol, report)
+
     def setup_selenium(self):
-        """Initialise le driver Selenium"""
+        """Configuration Selenium"""
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -321,51 +330,51 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
         except Exception as e:
             logging.error(f"❌ Impossible de démarrer Selenium: {e}")
             self.driver = None
-    
+
     def _normalize_text(self, text):
-        """Normalise le texte pour comparaison"""
-        if not text:
+        """Normalise le texte pour la comparaison"""
+        if not text: 
             return ""
         text = text.replace('-', ' ')
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
         text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
-    
+
     def _get_symbol_from_name(self, company_name_normalized):
-        """Trouve le symbole à partir du nom normalisé"""
+        """Trouve le symbole depuis le nom normalisé"""
         for symbol, info in self.societes_mapping.items():
             if symbol in self.company_ids:
                 for alt in info['alternatives']:
-                    if alt in company_name_normalized:
+                    if alt in company_name_normalized: 
                         return symbol
         return None
-    
+
     def _extract_date_from_text(self, text):
-        """Extrait la date depuis le texte du rapport"""
-        if not text:
+        """Extrait la date depuis le texte"""
+        if not text: 
             return datetime(1900, 1, 1).date()
         
         year_match = re.search(r'\b(20\d{2})\b', text)
-        if not year_match:
+        if not year_match: 
             return datetime(1900, 1, 1).date()
         
         year = int(year_match.group(1))
         text_lower = text.lower()
         
-        if 't1' in text_lower or '1er trimestre' in text_lower:
+        if 't1' in text_lower or '1er trimestre' in text_lower: 
             return datetime(year, 3, 31).date()
-        if 's1' in text_lower or '1er semestre' in text_lower:
+        if 's1' in text_lower or '1er semestre' in text_lower: 
             return datetime(year, 6, 30).date()
-        if 't3' in text_lower or '3eme trimestre' in text_lower:
+        if 't3' in text_lower or '3eme trimestre' in text_lower: 
             return datetime(year, 9, 30).date()
-        if 'annuel' in text_lower:
+        if 'annuel' in text_lower: 
             return datetime(year, 12, 31).date()
         
         return datetime(year, 6, 15).date()
-    
+
     def _find_all_reports(self):
         """Trouve tous les rapports sur le site BRVM"""
-        if not self.driver:
+        if not self.driver: 
             return {}
         
         base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
@@ -373,11 +382,10 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
         company_links = []
         
         try:
-            # Parcourir les pages de sociétés
+            # Parcourir les pages
             for page_num in range(5):
                 page_url = f"{base_url}?page={page_num}"
-                logging.info(f"📄 Navigation page {page_num}...")
-                
+                logging.info(f"🔍 Navigation page {page_num}...")
                 self.driver.get(page_url)
                 
                 try:
@@ -385,18 +393,18 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                         EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table"))
                     )
                 except TimeoutException:
-                    logging.info(f"   ⏭️  Page {page_num} vide, fin pagination")
+                    logging.info(f"   ⏭️  Page {page_num} sans tableau, fin pagination")
                     break
                 
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 table_rows = soup.select("table.views-table tbody tr")
                 
                 if not table_rows:
+                    logging.info(f"   ⏭️  Aucune société page {page_num}, fin pagination")
                     break
                 
                 for row in table_rows:
                     link_tag = row.find('a', href=True)
-                    
                     if link_tag:
                         company_name_normalized = self._normalize_text(link_tag.text)
                         company_url = f"https://www.brvm.org{link_tag['href']}"
@@ -408,19 +416,18 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                 
                 time.sleep(1)
             
-            logging.info(f"📊 {len(company_links)} sociétés trouvées")
+            logging.info(f"📊 {len(company_links)} page(s) de sociétés à visiter")
             
-            # Parcourir chaque page société
+            # Visiter chaque page de société
             for company in company_links:
                 symbol = company['symbol']
-                logging.info(f"\n--- Collecte rapports: {symbol} ---")
+                logging.info(f"--- Collecte rapports pour {symbol} ---")
                 
                 try:
                     self.driver.get(company['url'])
                     WebDriverWait(self.driver, 15).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table"))
                     )
-                    
                     page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                     report_items = page_soup.select("table.views-table tbody tr")
                     
@@ -430,7 +437,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                     
                     for item in report_items:
                         pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
-                        
                         if pdf_link_tag:
                             full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
                             
@@ -445,4 +451,103 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                     time.sleep(1)
                 
                 except TimeoutException:
-                    logging.error(f"   ⏱️  Timeout {symbol}
+                    logging.error(f"   ❌ Timeout {symbol}")
+                except Exception as e:
+                    logging.error(f"   ❌ Erreur {symbol}: {e}")
+        
+        except Exception as e:
+            logging.error(f"❌ Erreur critique scraping: {e}", exc_info=True)
+        
+        return all_reports
+
+    def run_and_get_results(self):
+        """Fonction principale"""
+        logging.info("="*80)
+        logging.info("📄 ÉTAPE 3: ANALYSE FONDAMENTALE (V6.0)")
+        logging.info("="*80)
+        
+        conn = None
+        try:
+            if not self._configure_api_keys():
+                return {}, []
+            
+            # Authentifier Google Sheets
+            self.authenticate_gsheets()
+            
+            # Charger la mémoire depuis PostgreSQL
+            self._load_analysis_memory_from_db()
+            
+            # Démarrer Selenium
+            self.setup_selenium()
+            if not self.driver: 
+                return {}, []
+            
+            # Charger les IDs des sociétés
+            conn = self.connect_to_db()
+            if not conn: 
+                return {}, []
+            
+            with conn.cursor() as cur:
+                cur.execute("SELECT symbol, id, name FROM companies")
+                companies_from_db = cur.fetchall()
+            conn.close()
+            
+            self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
+            
+            # Trouver tous les rapports
+            all_reports = self._find_all_reports()
+            
+            # Traiter chaque société
+            for symbol, (company_id, company_name) in self.company_ids.items():
+                logging.info(f"\n📊 Traitement {symbol} - {company_name}")
+                company_reports = all_reports.get(symbol, [])
+                
+                if not company_reports:
+                    logging.info(f"   ⏭️  Aucun rapport pour {symbol}")
+                    continue
+                
+                # Filtrer les rapports récents (depuis 2024)
+                date_2024_start = datetime(2024, 1, 1).date()
+                recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
+                recent_reports.sort(key=lambda x: x['date'], reverse=True)
+                
+                logging.info(f"   📂 {len(recent_reports)} rapport(s) récent(s)")
+                
+                for report in recent_reports:
+                    self._analyze_pdf_with_direct_api(company_id, symbol, report)
+            
+            logging.info("\n✅ Traitement terminé")
+            
+            # Récupérer les résultats depuis PostgreSQL
+            conn = self.connect_to_db()
+            if not conn: 
+                return {}, []
+            
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT c.symbol, fa.analysis_summary, c.name 
+                    FROM fundamental_analysis fa 
+                    JOIN companies c ON fa.company_id = c.id
+                """)
+                final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
+                
+                for symbol, summary, name in cur.fetchall():
+                    final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
+                    final_results[symbol]['nom'] = name
+            
+            logging.info(f"📊 Résultats: {len(final_results)} société(s)")
+            return (dict(final_results), self.newly_analyzed_reports)
+        
+        except Exception as e:
+            logging.critical(f"❌ Erreur critique: {e}", exc_info=True)
+            return {}, []
+        
+        finally:
+            if self.driver: 
+                self.driver.quit()
+            if conn and not conn.closed: 
+                conn.close()
+
+if __name__ == "__main__":
+    analyzer = BRVMAnalyzer()
+    analyzer.run_and_get_results()
