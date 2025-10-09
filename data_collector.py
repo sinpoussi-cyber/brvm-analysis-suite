@@ -1,30 +1,25 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V6.0 - SAUVEGARDE SUPABASE + ANALYSIS_MEMORY
+# MODULE: DATA COLLECTOR V4.0 - COLLECTE COMPLÈTE SANS DOUBLONS
 # ==============================================================================
 
+import re
+import time
+import logging
+import os
+import json
+from io import BytesIO
+from datetime import datetime, timedelta
+
+import pdfplumber
 import requests
 from bs4 import BeautifulSoup
-import time
-import re
-import os
-from datetime import datetime
-import logging
-import unicodedata
-import urllib3
-import json
-from collections import defaultdict
-from seleniumwire import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
-import base64
+import urllib3
 import gspread
 from google.oauth2 import service_account
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Secrets ---
@@ -36,413 +31,377 @@ DB_PORT = os.environ.get('DB_PORT')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
-# Configuration Gemini
-GEMINI_MODEL = "gemini-1.5-flash"
-REQUESTS_PER_MINUTE_LIMIT = 15
+# --- Connexion DB ---
+def connect_to_db():
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
+            host=DB_HOST, port=DB_PORT
+        )
+        logging.info("✅ Connexion PostgreSQL réussie.")
+        return conn
+    except Exception as e:
+        logging.error(f"❌ Erreur connexion DB: {e}")
+        return None
 
-class BRVMAnalyzer:
-    def __init__(self):
-        self.societes_mapping = {
-            'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
-            'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
-            'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total ci']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal', 'total senegal']},
-            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ['ecobank cote d ivoire', 'ecobank ci']},
-            'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci', 'nsbc']},
-            'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci', 'sgb ci']},
-            'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel bf', 'moov africa']},
-            'ORAC': {'nom_rapport': 'ORANGE COTE D\'IVOIRE', 'alternatives': ['orange ci', "orange cote d ivoire"]},
-            'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel', 'sonatel']},
-            'SCRC': {'nom_rapport': 'SUCRIVOIRE', 'alternatives': ['sucrivoire']},
-            'SICC': {'nom_rapport': 'SICOR CI', 'alternatives': ['sicor ci', 'sicor']},
-            'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra ci', 'solibra']},
-            'SOGC': {'nom_rapport': 'SOGB CI', 'alternatives': ['sogb ci', 'sogb']},
-            'SPHC': {'nom_rapport': 'SAPH CI', 'alternatives': ['saph ci', 'saph']},
-            'STBC': {'nom_rapport': 'SITAB CI', 'alternatives': ['sitab ci', 'sitab']},
-            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci']},
-            'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair abidjan ci', 'servair']},
-            'BNBC': {'nom_rapport': 'BERNABE CI', 'alternatives': ['bernabe ci']},
-            'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
-            'LNBB': {'nom_rapport': 'LOTERIE NATIONALE BN', 'alternatives': ['loterie nationale bn', 'lonab']},
-            'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei-ceda ci']},
-            'PRSC': {'nom_rapport': 'TRACTAFRIC MOTORS CI', 'alternatives': ['tractafric motors ci', 'tractafric']},
-            'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax ci']},
-            'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy ci']},
-            'SMBC': {'nom_rapport': 'SMB CI', 'alternatives': ['smb ci']},
-            'BICB': {'nom_rapport': 'BICI BN', 'alternatives': ['bici bn', 'bicib']},
-            'BICC': {'nom_rapport': 'BICI CI', 'alternatives': ['bici ci']},
-            'BOAB': {'nom_rapport': 'BANK OF AFRICA BN', 'alternatives': ['bank of africa bn']},
-            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
-            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['bank of africa ci']},
-            'BOAM': {'nom_rapport': 'BANK OF AFRICA ML', 'alternatives': ['bank of africa ml']},
-            'BOAN': {'nom_rapport': 'BANK OF AFRICA NG', 'alternatives': ['bank of africa ng']},
-            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn']},
-            'CBIBF': {'nom_rapport': 'CORIS BANKING INTERNATIONAL', 'alternatives': ['coris bank international', 'coris bank']},
-            'ETIT': {'nom_rapport': 'ECOBANK TRANSNATIONAL INCORPORATED', 'alternatives': ['ecobank trans', 'ecobank tg']},
-            'ORGT': {'nom_rapport': 'ORAGROUP TOGO', 'alternatives': ['oragroup tg', 'oragroup']},
-            'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca ci']},
-            'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque', 'sib']},
-            'CABC': {'nom_rapport': 'SICABLE CI', 'alternatives': ['sicable ci', 'sicable']},
-            'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
-            'SDSC': {'nom_rapport': 'AFRICA GLOBAL LOGISTICS', 'alternatives': ['africa global logistics', 'agl']},
-            'SEMC': {'nom_rapport': 'EVIOSYS PACKAGING', 'alternatives': ['eviosys packaging', 'seme']},
-            'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
-            'STAC': {'nom_rapport': 'SETAO CI', 'alternatives': ['setao ci']},
-            'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
-            'SDCC': {'nom_rapport': 'SODE CI', 'alternatives': ['sode ci', 'sode']},
-        }
-        
-        self.driver = None
-        self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-        self.analysis_memory = set()
-        self.company_ids = {}
-        self.newly_analyzed_reports = []
-        self.api_keys = []
-        self.current_key_index = 0
-        self.request_timestamps = []
-        self.gc = None
-        self.spreadsheet = None
-    
-    def connect_to_db(self):
-        """Connexion à Supabase"""
-        try:
-            conn = psycopg2.connect(
-                dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
-                host=DB_HOST, port=DB_PORT
-            )
-            return conn
-        except Exception as e:
-            logging.error(f"❌ Erreur connexion DB: {e}")
+# --- Authentification Google Sheets ---
+def authenticate_gsheets():
+    try:
+        if not GSPREAD_SERVICE_ACCOUNT_JSON:
+            logging.warning("⚠️  GSPREAD_SERVICE_ACCOUNT non défini")
             return None
+        
+        creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
+        scopes = ['https://www.googleapis.com/auth/spreadsheets']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        gc = gspread.authorize(creds)
+        logging.info("✅ Authentification Google Sheets réussie.")
+        return gc
+    except Exception as e:
+        logging.error(f"❌ Erreur authentification Google Sheets: {e}")
+        return None
+
+# --- Récupération des IDs sociétés ---
+def get_company_ids(cur):
+    try:
+        cur.execute("SELECT symbol, id FROM companies;")
+        return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        logging.error(f"❌ Erreur récupération IDs sociétés: {e}")
+        return {}
+
+# --- Extraction date depuis URL ---
+def extract_date_from_url(url):
+    """Extrait la date au format YYYYMMDD depuis l'URL"""
+    date_match = re.search(r'boc_(\d{8})', url)
+    if date_match:
+        return date_match.group(1)
+    return None
+
+# --- Récupération TOUS les BOCs disponibles ---
+def get_all_boc_links():
+    """Récupère tous les BOCs disponibles sur le site"""
+    url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
+    logging.info(f"🔍 Recherche de TOUS les BOCs sur : {url}")
     
-    def authenticate_gsheets(self):
-        """Authentification Google Sheets"""
-        try:
-            creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
-            scopes = ['https://www.googleapis.com/auth/spreadsheets']
-            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            self.gc = gspread.authorize(creds)
-            self.spreadsheet = self.gc.open_by_key(SPREADSHEET_ID)
-            logging.info("✅ Authentification Google Sheets réussie.")
+    try:
+        r = requests.get(url, verify=False, timeout=30)
+        soup = BeautifulSoup(r.content, 'html.parser')
+        links = set()
+        
+        for a in soup.find_all('a', href=True):
+            href = a['href'].strip()
+            if 'boc_' in href.lower() and href.endswith('.pdf'):
+                full_url = href if href.startswith('http') else "https://www.brvm.org" + href
+                links.add(full_url)
+        
+        if not links:
+            logging.warning("⚠️  Aucun BOC trouvé sur la page")
+            return []
+        
+        # Trier par date (du plus ancien au plus récent)
+        sorted_links = sorted(list(links), key=lambda x: extract_date_from_url(x) or '19000101')
+        
+        logging.info(f"✅ {len(sorted_links)} BOC(s) trouvé(s)")
+        for link in sorted_links:
+            date_str = extract_date_from_url(link)
+            logging.info(f"   • BOC du {date_str}")
+        
+        return sorted_links
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur récupération BOCs: {e}")
+        return []
+
+# --- Vérification existence date dans DB ---
+def date_exists_in_db(conn, trade_date):
+    """Vérifie si des données existent déjà pour cette date"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
+            return cur.fetchone() is not None
+    except Exception as e:
+        logging.error(f"❌ Erreur vérification date DB: {e}")
+        return False
+
+# --- Vérification existence date dans Google Sheets ---
+def date_exists_in_gsheet(worksheet, trade_date):
+    """Vérifie si des données existent déjà pour cette date dans la feuille"""
+    try:
+        date_str = trade_date.strftime('%d/%m/%Y')
+        all_values = worksheet.col_values(2)  # Colonne B = Date
+        return date_str in all_values
+    except Exception as e:
+        logging.error(f"❌ Erreur vérification date GSheet: {e}")
+        return False
+
+# --- Nettoyage valeurs numériques ---
+def clean_and_convert_numeric(value):
+    if value is None or value == '': 
+        return None
+    cleaned_value = re.sub(r'\s+', '', str(value)).replace(',', '.')
+    try: 
+        return float(cleaned_value)
+    except (ValueError, TypeError): 
+        return None
+
+# --- Extraction données depuis PDF ---
+def extract_data_from_pdf(pdf_url):
+    """Extrait les données du BOC PDF"""
+    logging.info(f"📄 Analyse du PDF: {os.path.basename(pdf_url)}")
+    data = []
+    
+    try:
+        r = requests.get(pdf_url, verify=False, timeout=30)
+        pdf_file = BytesIO(r.content)
+        
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables() or []
+                for table in tables:
+                    for row in table:
+                        row = [(cell.strip() if cell else "") for cell in row]
+                        if len(row) < 8: 
+                            continue
+                        
+                        vol = row[-8]
+                        val = row[-7]
+                        cours = row[-6] if len(row) >= 6 else ""
+                        symbole = row[1] if len(row) > 1 and row[1] and len(row[1]) <= 5 else row[0]
+                        
+                        if re.search(r'\d', str(vol)) or re.search(r'\d', str(val)):
+                            data.append({
+                                "Symbole": symbole, 
+                                "Cours": cours, 
+                                "Volume": vol, 
+                                "Valeur": val
+                            })
+        
+        logging.info(f"   ✓ {len(data)} ligne(s) extraite(s)")
+        return data
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur extraction PDF: {e}")
+        return []
+
+# --- Insertion dans DB ---
+def insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
+    """Insert les données dans PostgreSQL"""
+    if symbol not in company_ids:
+        return False
+    
+    company_id = company_ids[symbol]
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO historical_data (company_id, trade_date, price, volume, value)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (company_id, trade_date) DO NOTHING;
+            """, (company_id, trade_date, price, volume, value))
+            
+            conn.commit()
+            return cur.rowcount > 0
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur insertion DB pour {symbol}: {e}")
+        conn.rollback()
+        return False
+
+# --- Insertion dans Google Sheets ---
+def insert_into_gsheet(gc, spreadsheet, symbol, trade_date, price, volume, value):
+    """Insert les données dans Google Sheets à la bonne position chronologique"""
+    try:
+        worksheet = spreadsheet.worksheet(symbol)
+        
+        # Préparer les données
+        date_str = trade_date.strftime('%d/%m/%Y')
+        new_row = [symbol, date_str, price if price else '', volume if volume else '', value if value else '']
+        
+        # Récupérer toutes les dates existantes
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) <= 1:  # Seulement l'en-tête ou vide
+            worksheet.append_row(new_row, value_input_option='USER_ENTERED')
             return True
-        except Exception as e:
-            logging.warning(f"⚠️  Google Sheets non disponible: {e}")
-            return False
-    
-    def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL"""
-        logging.info("📚 Chargement mémoire depuis PostgreSQL...")
-        conn = self.connect_to_db()
-        if not conn:
-            return
         
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT report_url FROM fundamental_analysis;")
-                self.analysis_memory = {row[0] for row in cur.fetchall()}
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) déjà en mémoire")
-        except Exception as e:
-            logging.error(f"❌ Erreur chargement mémoire: {e}")
-        finally:
-            if conn:
-                conn.close()
-    
-    def _save_to_supabase(self, company_id, report, summary):
-        """Sauvegarde dans Supabase"""
-        conn = self.connect_to_db()
-        if not conn:
-            return False
+        # Trouver la position d'insertion (ordre chronologique croissant)
+        insert_position = None
         
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO fundamental_analysis 
-                    (company_id, report_url, report_title, report_date, analysis_summary)
-                    VALUES (%s, %s, %s, %s, %s) 
-                    ON CONFLICT (report_url) DO NOTHING;
-                """, (company_id, report['url'], report['titre'], report['date'], summary))
+        for idx, row in enumerate(all_values[1:], start=2):  # Commencer à la ligne 2
+            if len(row) < 2:
+                continue
+            
+            try:
+                existing_date = datetime.strptime(row[1], '%d/%m/%Y').date()
                 
-                conn.commit()
-                inserted = cur.rowcount > 0
+                # Si la date existe déjà, ne rien faire
+                if existing_date == trade_date:
+                    return False
+                
+                # Si on trouve une date postérieure, insérer avant
+                if existing_date > trade_date:
+                    insert_position = idx
+                    break
             
-            if inserted:
-                self.analysis_memory.add(report['url'])
-                logging.info(f"      ✅ Sauvegardé dans Supabase")
-                return True
-            
-            return False
+            except:
+                continue
         
-        except Exception as e:
-            logging.error(f"❌ Erreur sauvegarde Supabase: {e}")
-            conn.rollback()
-            return False
+        # Insérer à la position trouvée ou à la fin
+        if insert_position:
+            worksheet.insert_row(new_row, insert_position, value_input_option='USER_ENTERED')
+        else:
+            worksheet.append_row(new_row, value_input_option='USER_ENTERED')
         
-        finally:
-            if conn:
-                conn.close()
-    
-    def _save_to_analysis_memory_sheet(self, symbol, report):
-        """Copie dans ANALYSIS_MEMORY (Google Sheets)"""
-        if not self.spreadsheet:
-            return
-        
-        try:
-            memory_sheet = self.spreadsheet.worksheet('ANALYSIS_MEMORY')
-            
-            new_row = [
-                report['url'],
-                symbol,
-                report['titre'],
-                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'Analyzed'
-            ]
-            
-            memory_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            logging.info(f"      📋 Copié dans ANALYSIS_MEMORY")
-        
-        except gspread.exceptions.WorksheetNotFound:
-            logging.warning("⚠️  Feuille ANALYSIS_MEMORY non trouvée")
-        
-        except Exception as e:
-            logging.error(f"❌ Erreur copie ANALYSIS_MEMORY: {e}")
-    
-    def _configure_api_keys(self):
-        """Charge jusqu'à 22 clés API"""
-        for i in range(1, 23):
-            key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key:
-                self.api_keys.append(key)
-        
-        if not self.api_keys:
-            logging.error("❌ Aucune clé API trouvée")
-            return False
-        
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées")
         return True
     
-    def _analyze_pdf_with_gemini(self, company_id, symbol, report):
-        """Analyse un PDF avec Gemini API"""
-        pdf_url = report['url']
+    except gspread.exceptions.WorksheetNotFound:
+        logging.warning(f"⚠️  Feuille '{symbol}' non trouvée")
+        return False
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur insertion GSheet pour {symbol}: {e}")
+        return False
+
+# --- Nettoyage des feuilles "_Technical" ---
+def cleanup_technical_sheets(gc, spreadsheet):
+    """Supprime toutes les feuilles se terminant par '_Technical'"""
+    try:
+        worksheets = spreadsheet.worksheets()
+        deleted_count = 0
         
-        # Vérifier si déjà analysé
-        if pdf_url in self.analysis_memory:
+        for ws in worksheets:
+            if ws.title.endswith('_Technical'):
+                logging.info(f"🗑️  Suppression de la feuille: {ws.title}")
+                spreadsheet.del_worksheet(ws)
+                deleted_count += 1
+                time.sleep(0.5)  # Pause pour respecter les limites API
+        
+        if deleted_count > 0:
+            logging.info(f"✅ {deleted_count} feuille(s) '_Technical' supprimée(s)")
+        else:
+            logging.info("ℹ️  Aucune feuille '_Technical' à supprimer")
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur nettoyage feuilles: {e}")
+
+# --- Fonction principale ---
+def run_data_collection():
+    logging.info("="*60)
+    logging.info("📊 ÉTAPE 1: COLLECTE COMPLÈTE DES DONNÉES (V4.0)")
+    logging.info("="*60)
+    
+    # Connexions
+    conn = connect_to_db()
+    if not conn:
+        return
+    
+    gc = authenticate_gsheets()
+    if not gc:
+        logging.error("❌ Google Sheets requis, arrêt du processus")
+        conn.close()
+        return
+    
+    try:
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        
+        # Nettoyage des feuilles "_Technical"
+        cleanup_technical_sheets(gc, spreadsheet)
+        
+        # Récupération des IDs sociétés
+        with conn.cursor() as cur:
+            company_ids = get_company_ids(cur)
+        
+        # Récupération de TOUS les BOCs
+        boc_links = get_all_boc_links()
+        
+        if not boc_links:
+            logging.error("❌ Aucun BOC trouvé")
             return
         
-        # Rate limiting
-        now = time.time()
-        self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
+        total_db_inserts = 0
+        total_gsheet_inserts = 0
+        total_skipped = 0
         
-        if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
-            sleep_time = 60 - (now - self.request_timestamps[0])
-            logging.warning(f"⏸️  Pause {sleep_time + 1:.1f}s (rate limit)...")
-            time.sleep(sleep_time + 1)
-            self.request_timestamps = []
-        
-        if self.current_key_index >= len(self.api_keys):
-            logging.error("❌ Toutes les clés API épuisées")
-            return
-        
-        api_key = self.api_keys[self.current_key_index]
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
-        
-        try:
-            logging.info(f"      🤖 Analyse IA (clé #{self.current_key_index + 1})")
+        # Traiter chaque BOC (du plus ancien au plus récent)
+        for boc_url in boc_links:
+            date_str = extract_date_from_url(boc_url)
             
-            # Télécharger le PDF
-            pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
-            pdf_response.raise_for_status()
-            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
+            if not date_str:
+                continue
             
-            # Prompt d'analyse
-            prompt = """Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
-Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
-Concentre-toi impérativement sur les aspects suivants :
-- **Évolution du Chiffre d'Affaires (CA)** : Indique la variation en pourcentage et en valeur si possible.
-- **Évolution du Résultat Net (RN)** : Indique la variation et les facteurs qui l'ont influencée.
-- **Politique de Dividende** : Cherche toute mention de dividende proposé, payé ou des perspectives.
-- **Performance des Activités Ordinaires/d'Exploitation** : Commente l'évolution de la rentabilité opérationnelle.
-- **Perspectives et Points de Vigilance** : Relève tout point crucial pour un investisseur.
-Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et base tes conclusions uniquement sur le document."""
+            try:
+                trade_date = datetime.strptime(date_str, '%Y%m%d').date()
+            except ValueError:
+                continue
             
-            request_body = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}
-                    ]
-                }],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "topK": 40,
-                    "topP": 0.95,
-                    "maxOutputTokens": 2048,
-                }
-            }
+            logging.info(f"\n📅 Traitement du BOC du {trade_date.strftime('%d/%m/%Y')}")
             
-            self.request_timestamps.append(time.time())
-            response = requests.post(api_url, json=request_body, timeout=120)
+            # Vérifier si cette date existe déjà dans DB
+            if date_exists_in_db(conn, trade_date):
+                logging.info(f"   ⏭️  Date déjà présente dans DB, passage au suivant")
+                total_skipped += 1
+                continue
             
-            if response.status_code == 429:
-                logging.warning(f"⚠️  Quota atteint pour clé #{self.current_key_index + 1}")
-                self.current_key_index += 1
-                self._analyze_pdf_with_gemini(company_id, symbol, report)
-                return
+            # Extraire les données du PDF
+            rows = extract_data_from_pdf(boc_url)
             
-            response.raise_for_status()
-            response_json = response.json()
+            if not rows:
+                logging.warning(f"   ⚠️  Aucune donnée extraite pour {trade_date}")
+                continue
             
-            analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
+            db_inserts = 0
+            gsheet_inserts = 0
             
-            if "erreur" not in analysis_text.lower():
-                # Sauvegarder dans Supabase
-                if self._save_to_supabase(company_id, report, analysis_text):
-                    # Copier dans ANALYSIS_MEMORY (optionnel)
-                    self._save_to_analysis_memory_sheet(symbol, report)
-                    self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
-        
-        except Exception as e:
-            logging.error(f"      ❌ Erreur clé #{self.current_key_index + 1}: {e}")
-            self.current_key_index += 1
-            
-            if self.current_key_index < len(self.api_keys):
-                self._analyze_pdf_with_gemini(company_id, symbol, report)
-    
-    def setup_selenium(self):
-        """Initialise le driver Selenium"""
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        
-        try:
-            self.driver = webdriver.Chrome(options=chrome_options)
-            logging.info("✅ Pilote Selenium démarré")
-        except Exception as e:
-            logging.error(f"❌ Impossible de démarrer Selenium: {e}")
-            self.driver = None
-    
-    def _normalize_text(self, text):
-        """Normalise le texte pour comparaison"""
-        if not text:
-            return ""
-        text = text.replace('-', ' ')
-        text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
-        text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
-        return re.sub(r'\s+', ' ', text).strip()
-    
-    def _get_symbol_from_name(self, company_name_normalized):
-        """Trouve le symbole à partir du nom normalisé"""
-        for symbol, info in self.societes_mapping.items():
-            if symbol in self.company_ids:
-                for alt in info['alternatives']:
-                    if alt in company_name_normalized:
-                        return symbol
-        return None
-    
-    def _extract_date_from_text(self, text):
-        """Extrait la date depuis le texte du rapport"""
-        if not text:
-            return datetime(1900, 1, 1).date()
-        
-        year_match = re.search(r'\b(20\d{2})\b', text)
-        if not year_match:
-            return datetime(1900, 1, 1).date()
-        
-        year = int(year_match.group(1))
-        text_lower = text.lower()
-        
-        if 't1' in text_lower or '1er trimestre' in text_lower:
-            return datetime(year, 3, 31).date()
-        if 's1' in text_lower or '1er semestre' in text_lower:
-            return datetime(year, 6, 30).date()
-        if 't3' in text_lower or '3eme trimestre' in text_lower:
-            return datetime(year, 9, 30).date()
-        if 'annuel' in text_lower:
-            return datetime(year, 12, 31).date()
-        
-        return datetime(year, 6, 15).date()
-    
-    def _find_all_reports(self):
-        """Trouve tous les rapports sur le site BRVM"""
-        if not self.driver:
-            return {}
-        
-        base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
-        all_reports = defaultdict(list)
-        company_links = []
-        
-        try:
-            # Parcourir les pages de sociétés
-            for page_num in range(5):
-                page_url = f"{base_url}?page={page_num}"
-                logging.info(f"📄 Navigation page {page_num}...")
+            # Traiter chaque ligne
+            for rec in rows:
+                symbol = rec.get('Symbole', '').strip()
                 
-                self.driver.get(page_url)
+                if symbol not in company_ids:
+                    continue
                 
                 try:
-                    WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table"))
-                    )
-                except TimeoutException:
-                    logging.info(f"   ⏭️  Page {page_num} vide, fin pagination")
-                    break
-                
-                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                table_rows = soup.select("table.views-table tbody tr")
-                
-                if not table_rows:
-                    break
-                
-                for row in table_rows:
-                    link_tag = row.find('a', href=True)
+                    price = clean_and_convert_numeric(rec.get('Cours'))
+                    volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
+                    value = clean_and_convert_numeric(rec.get('Valeur'))
                     
-                    if link_tag:
-                        company_name_normalized = self._normalize_text(link_tag.text)
-                        company_url = f"https://www.brvm.org{link_tag['href']}"
-                        symbol = self._get_symbol_from_name(company_name_normalized)
-                        
-                        if symbol:
-                            if not any(c['url'] == company_url for c in company_links):
-                                company_links.append({'symbol': symbol, 'url': company_url})
+                    # Insertion DB
+                    if insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
+                        db_inserts += 1
+                    
+                    # Insertion Google Sheets
+                    if insert_into_gsheet(gc, spreadsheet, symbol, trade_date, price, volume, value):
+                        gsheet_inserts += 1
+                    
+                    time.sleep(0.1)  # Petite pause entre insertions
                 
-                time.sleep(1)
+                except Exception as e:
+                    logging.error(f"   ❌ Erreur traitement {symbol}: {e}")
+                    continue
             
-            logging.info(f"📊 {len(company_links)} sociétés trouvées")
+            total_db_inserts += db_inserts
+            total_gsheet_inserts += gsheet_inserts
             
-            # Parcourir chaque page société
-            for company in company_links:
-                symbol = company['symbol']
-                logging.info(f"\n--- Collecte rapports: {symbol} ---")
-                
-                try:
-                    self.driver.get(company['url'])
-                    WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table"))
-                    )
-                    
-                    page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                    report_items = page_soup.select("table.views-table tbody tr")
-                    
-                    if not report_items:
-                        logging.warning(f"   ⚠️  Aucun rapport pour {symbol}")
-                        continue
-                    
-                    for item in report_items:
-                        pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
-                        
-                        if pdf_link_tag:
-                            full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
-                            
-                            if not any(r['url'] == full_url for r in all_reports[symbol]):
-                                report_data = {
-                                    'titre': " ".join(item.get_text().split()),
-                                    'url': full_url,
-                                    'date': self._extract_date_from_text(item.get_text())
-                                }
-                                all_reports[symbol].append(report_data)
-                    
-                    time.sleep(1)
-                
-                except TimeoutException:
-                    logging.error(f"   ⏱️  Timeout {symbol}
+            logging.info(f"   ✅ DB: {db_inserts} | GSheet: {gsheet_inserts}")
+            time.sleep(1)  # Pause entre BOCs
+        
+        # Résumé final
+        logging.info("\n" + "="*60)
+        logging.info("✅ COLLECTE TERMINÉE")
+        logging.info(f"📊 BOCs traités: {len(boc_links)}")
+        logging.info(f"📊 BOCs ignorés (doublons): {total_skipped}")
+        logging.info(f"💾 PostgreSQL: {total_db_inserts} nouveaux enregistrements")
+        logging.info(f"📋 Google Sheets: {total_gsheet_inserts} nouveaux enregistrements")
+        logging.info("="*60)
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur critique: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    run_data_collection()
