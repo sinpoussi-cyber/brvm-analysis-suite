@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER V7.0 - ÉCRITURE DANS COLONNES F-X
+# MODULE: TECHNICAL ANALYZER V7.0 FINAL - ÉCRITURE DANS COLONNES F-X
 # ==============================================================================
 
 import psycopg2
@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
-# --- Secrets ---
+# --- Configuration & Secrets ---
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
@@ -28,7 +28,7 @@ DB_PORT = os.environ.get('DB_PORT')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
-# --- Connexion DB ---
+# --- Connexion PostgreSQL ---
 def connect_to_db():
     try:
         conn = psycopg2.connect(
@@ -167,7 +167,7 @@ def write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
     try:
         worksheet = spreadsheet.worksheet(symbol)
         
-        # Récupérer toutes les dates existantes (colonne B)
+        # Récupérer toutes les données existantes
         all_values = worksheet.get_all_values()
         
         if len(all_values) <= 1:
@@ -191,27 +191,27 @@ def write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
             
             row_num = date_to_row[date_str]
             
-            # Préparer les valeurs pour colonnes F à X
+            # Préparer les valeurs pour colonnes F à X (19 colonnes)
             values = [
-                data_row.get('mm5', ''),
-                data_row.get('mm10', ''),
-                data_row.get('mm20', ''),
-                data_row.get('mm50', ''),
-                data_row.get('mm_decision', ''),
-                data_row.get('bollinger_central', ''),
-                data_row.get('bollinger_inferior', ''),
-                data_row.get('bollinger_superior', ''),
-                data_row.get('bollinger_decision', ''),
-                data_row.get('macd_line', ''),
-                data_row.get('signal_line', ''),
-                data_row.get('histogram', ''),
-                data_row.get('macd_decision', ''),
-                data_row.get('rs', ''),
-                data_row.get('rsi', ''),
-                data_row.get('rsi_decision', ''),
-                data_row.get('stochastic_k', ''),
-                data_row.get('stochastic_d', ''),
-                data_row.get('stochastic_decision', '')
+                data_row.get('mm5', ''),                    # F
+                data_row.get('mm10', ''),                   # G
+                data_row.get('mm20', ''),                   # H
+                data_row.get('mm50', ''),                   # I
+                data_row.get('mm_decision', ''),            # J
+                data_row.get('bollinger_central', ''),      # K
+                data_row.get('bollinger_inferior', ''),     # L
+                data_row.get('bollinger_superior', ''),     # M
+                data_row.get('bollinger_decision', ''),     # N
+                data_row.get('macd_line', ''),              # O
+                data_row.get('signal_line', ''),            # P
+                data_row.get('histogram', ''),              # Q
+                data_row.get('macd_decision', ''),          # R
+                data_row.get('rs', ''),                     # S
+                data_row.get('rsi', ''),                    # T
+                data_row.get('rsi_decision', ''),           # U
+                data_row.get('stochastic_k', ''),           # V
+                data_row.get('stochastic_d', ''),           # W
+                data_row.get('stochastic_decision', '')     # X
             ]
             
             # Convertir les valeurs en chaînes, remplacer NaN par vide
@@ -231,7 +231,7 @@ def write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
         # Mise à jour par lot (batch update)
         worksheet.batch_update(updates, value_input_option='USER_ENTERED')
         
-        logging.info(f"   ✅ {len(updates)} ligne(s) mises à jour dans GSheet")
+        logging.info(f"   ✅ {len(updates)} ligne(s) mises à jour dans GSheet (colonnes F-X)")
         return True
     
     except gspread.exceptions.WorksheetNotFound:
@@ -317,7 +317,7 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
 # --- Fonction principale ---
 def run_technical_analysis():
     logging.info("="*80)
-    logging.info("📈 ÉTAPE 2: ANALYSE TECHNIQUE (V7.0 - COLONNES F-X)")
+    logging.info("📈 ÉTAPE 2: ANALYSE TECHNIQUE (V7.0 FINAL - COLONNES F-X)")
     logging.info("="*80)
     
     start_time = time.time()
