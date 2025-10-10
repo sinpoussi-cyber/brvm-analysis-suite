@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR (V5.0 - GEMINI 2.0 FLASH)
+# MODULE: COMPREHENSIVE REPORT GENERATOR V6.0 - 100 JOURS + PRÉDICTIONS
 # ==============================================================================
 
 import psycopg2
@@ -9,22 +9,24 @@ import json
 import time
 import logging
 from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import requests
 from collections import defaultdict
 from datetime import datetime
 
-# --- Configuration & Secrets ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
+# --- Configuration & Secrets ---
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# Configuration pour Gemini 2.0 Flash
+# Configuration Gemini
 GEMINI_MODEL = "gemini-2.0-flash-exp"
-REQUESTS_PER_MINUTE_LIMIT = 15  # Limite pour Gemini 2.0 Flash
+REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -34,16 +36,16 @@ class ComprehensiveReportGenerator:
         self.request_timestamps = []
 
     def _configure_api_keys(self):
-        for i in range(1, 20):
+        for i in range(1, 11):  # 10 clés pour les rapports
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
         
         if not self.api_keys:
-            logging.warning("⚠️ Aucune clé API Gemini trouvée. Les analyses IA seront vides.")
+            logging.warning("⚠️  Aucune clé API Gemini trouvée.")
             return False
         
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini 2.0 Flash chargées.")
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
         return True
 
     def _call_gemini_with_retry(self, prompt):
@@ -55,7 +57,7 @@ class ComprehensiveReportGenerator:
         
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
             sleep_time = 60 - (now - self.request_timestamps[0]) if self.request_timestamps else 60
-            logging.warning(f"Limite de requêtes/minute atteinte. Pause de {sleep_time + 1:.1f} secondes...")
+            logging.warning(f"Pause rate limit: {sleep_time + 1:.1f}s")
             time.sleep(sleep_time + 1)
             self.request_timestamps = []
 
@@ -66,7 +68,6 @@ class ComprehensiveReportGenerator:
             try:
                 self.request_timestamps.append(time.time())
                 
-                # Configuration optimisée pour Gemini 2.0 Flash
                 request_body = {
                     "contents": [{
                         "parts": [{"text": prompt}]
@@ -82,7 +83,7 @@ class ComprehensiveReportGenerator:
                 response = requests.post(api_url, json=request_body, timeout=90)
 
                 if response.status_code == 429:
-                    logging.warning(f"Quota atteint pour la clé API #{self.current_key_index + 1}.")
+                    logging.warning(f"Quota atteint pour clé #{self.current_key_index + 1}")
                     self.current_key_index += 1
                     continue
                 
@@ -91,13 +92,14 @@ class ComprehensiveReportGenerator:
                 return response_json['candidates'][0]['content']['parts'][0]['text']
                 
             except Exception as e:
-                logging.error(f"Erreur avec la clé #{self.current_key_index + 1}: {e}")
+                logging.error(f"Erreur clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
         
-        return "Erreur d'analyse : Le quota de toutes les clés API a probablement été atteint."
+        return "Erreur d'analyse : Quota API épuisé."
 
     def _get_all_data_from_db(self):
-        logging.info("Récupération de toutes les données d'analyse depuis PostgreSQL...")
+        """Récupère les données sur 100 jours au lieu de 50"""
+        logging.info("Récupération des données (100 derniers jours)...")
         
         query = """
         WITH latest_historical_data AS (
@@ -115,7 +117,7 @@ class ComprehensiveReportGenerator:
         FROM companies c
         LEFT JOIN latest_historical_data lhd ON c.id = lhd.company_id
         LEFT JOIN technical_analysis ta ON lhd.id = ta.historical_data_id
-        WHERE lhd.rn <= 50 OR lhd.rn IS NULL;
+        WHERE lhd.rn <= 100 OR lhd.rn IS NULL;
         """
         
         df = pd.read_sql(query, self.db_conn)
@@ -129,33 +131,94 @@ class ComprehensiveReportGenerator:
                 'fundamental_summaries': group['fundamental_summaries'].iloc[0] or "Aucune analyse fondamentale disponible."
             }
         
-        logging.info(f"✅ Données pour {len(company_data)} sociétés récupérées et structurées.")
+        logging.info(f"✅ Données (100 jours) pour {len(company_data)} sociétés récupérées")
         return company_data
 
+    def _get_predictions_from_db(self, symbol):
+        """Récupère les prédictions pour une société"""
+        try:
+            query = """
+            SELECT 
+                p.prediction_date,
+                p.predicted_price,
+                p.lower_bound,
+                p.upper_bound,
+                p.confidence_level
+            FROM predictions p
+            JOIN companies c ON p.company_id = c.id
+            WHERE c.symbol = %s
+            ORDER BY p.prediction_date
+            """
+            df = pd.read_sql(query, self.db_conn, params=(symbol,))
+            
+            if df.empty:
+                return None
+            
+            return df
+        except Exception as e:
+            logging.error(f"Erreur récupération prédictions {symbol}: {e}")
+            return None
+
     def _analyze_price_evolution(self, df_prices):
+        """Analyse l'évolution du cours sur 100 jours"""
         if df_prices.empty or df_prices['price'].isnull().all():
-            return "Données de prix insuffisantes pour une analyse."
+            return "Données de prix insuffisantes."
         
         data_string = df_prices.to_csv(index=False)
-        prompt = f"""Analyse l'évolution du cours de cette action sur les 50 derniers jours. 
-        
-Fournis :
-- Tendance générale (haussière, baissière, stable)
-- Chiffres clés (début, fin, variation en %, plus haut, plus bas)
-- Dynamique récente
+        prompt = f"""Analyse l'évolution du cours de cette action sur les 100 derniers jours. 
 
-Données:
+Fournis une analyse structurée avec :
+- **Tendance générale** (haussière, baissière, stable) sur les 100 jours
+- **Chiffres clés** :
+  - Prix début de période vs fin de période
+  - Variation en % sur les 100 jours
+  - Plus haut et plus bas atteints
+  - Volatilité observée
+- **Phases marquantes** : Identifie 2-3 phases distinctes si présentes
+- **Dynamique récente** (30 derniers jours)
+
+Données (100 jours):
+{data_string}"""
+        
+        return self._call_gemini_with_retry(prompt)
+
+    def _analyze_predictions(self, df_predictions, current_price):
+        """Analyse les prédictions"""
+        if df_predictions is None or df_predictions.empty:
+            return "Aucune prédiction disponible."
+        
+        first_pred = df_predictions.iloc[0]['predicted_price']
+        last_pred = df_predictions.iloc[-1]['predicted_price']
+        avg_pred = df_predictions['predicted_price'].mean()
+        
+        change_percent = ((last_pred - current_price) / current_price * 100)
+        
+        data_string = df_predictions.to_csv(index=False)
+        
+        prompt = f"""Analyse ces prédictions de prix pour les 20 prochains jours ouvrés.
+
+Prix actuel: {current_price:.2f} F CFA
+Prix prédit à J+20: {last_pred:.2f} F CFA
+Variation prévue: {change_percent:.2f}%
+
+Fournis une analyse concise avec :
+- **Tendance prévue** (haussière, baissière, stable)
+- **Points clés** : Variation attendue, fourchette de prix, moments critiques
+- **Niveau de confiance** de la prédiction
+- **Recommandation** pour un investisseur (court terme)
+
+Données des prédictions:
 {data_string}"""
         
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_technical_indicators(self, series_indicators):
         data_string = series_indicators.to_string()
-        prompt = f"""Analyse ces indicateurs techniques pour le jour le plus récent. 
+        prompt = f"""Analyse ces indicateurs techniques (jour le plus récent).
 
-Pour chaque indicateur (Moyennes Mobiles, Bollinger, MACD, RSI, Stochastique) :
-- Donne une analyse de 2-3 phrases
-- Fournis un signal clair (Achat, Vente, Neutre)
+Pour chaque indicateur, fournis :
+- Une analyse concise (2-3 phrases)
+- Un signal clair (Achat/Vente/Neutre)
 
 Indicateurs:
 {data_string}"""
@@ -163,7 +226,7 @@ Indicateurs:
         return self._call_gemini_with_retry(prompt)
 
     def _summarize_fundamental_analysis(self, summaries):
-        prompt = f"""Synthétise ces analyses de rapports financiers en 3 ou 4 points clés pour un investisseur.
+        prompt = f"""Synthétise ces analyses fondamentales en 3-4 points clés.
 
 Concentre-toi sur :
 - Chiffre d'affaires
@@ -177,62 +240,98 @@ Analyses:
         return self._call_gemini_with_retry(prompt)
 
     def _create_main_report(self, company_analyses):
-        logging.info("Création du rapport de synthèse principal...")
+        """Génère le rapport Word avec prédictions"""
+        logging.info("Création du rapport de synthèse (100 jours + prédictions)...")
         
         doc = Document()
-        doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
-        doc.add_paragraph(f"Généré le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        doc.add_paragraph(f"Propulsé par {GEMINI_MODEL}")
         
+        # Titre
+        title = doc.add_heading('Rapport de Synthèse d\'Investissement - BRVM', level=0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Métadonnées
+        meta = doc.add_paragraph()
+        meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
+        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrés")
+        meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        doc.add_paragraph()  # Espace
+        
+        # Contenu pour chaque société
         for symbol, analyses in sorted(company_analyses.items()):
             nom_societe = analyses.get('nom_societe', symbol)
-            doc.add_heading(f'Analyse Détaillée : {nom_societe} ({symbol})', level=1)
             
-            doc.add_heading('1. Évolution du Cours (50 derniers jours)', level=2)
-            doc.add_paragraph(analyses.get('price_analysis', 'Analyse du prix non disponible.'))
+            # En-tête société
+            heading = doc.add_heading(f'{nom_societe} ({symbol})', level=1)
+            heading.runs[0].font.color.rgb = RGBColor(0, 51, 102)
             
-            doc.add_heading('2. Analyse Technique des Indicateurs', level=2)
+            # 1. Évolution du Cours (100 jours)
+            doc.add_heading('1. Évolution du Cours (100 derniers jours)', level=2)
+            doc.add_paragraph(analyses.get('price_analysis', 'Analyse non disponible.'))
+            
+            # 2. Prédictions (20 jours ouvrés)
+            if 'predictions_analysis' in analyses:
+                doc.add_heading('2. Prédictions (20 prochains jours ouvrés)', level=2)
+                doc.add_paragraph(analyses['predictions_analysis'])
+            
+            # 3. Analyse Technique
+            doc.add_heading('3. Analyse Technique des Indicateurs', level=2)
             doc.add_paragraph(analyses.get('technical_analysis', 'Analyse technique non disponible.'))
             
-            doc.add_heading('3. Synthèse Fondamentale', level=2)
+            # 4. Synthèse Fondamentale
+            doc.add_heading('4. Synthèse Fondamentale', level=2)
             doc.add_paragraph(analyses.get('fundamental_summary', 'Analyse fondamentale non disponible.'))
             
             doc.add_page_break()
 
+        # Sauvegarde
         output_filename = f"Rapport_Synthese_Investissement_BRVM_{time.strftime('%Y%m%d_%H%M')}.docx"
         doc.save(output_filename)
         
-        logging.info(f"🎉 Rapport de synthèse principal généré : {output_filename}")
+        logging.info(f"🎉 Rapport généré: {output_filename}")
         return output_filename
 
     def generate_all_reports(self, new_fundamental_analyses):
-        logging.info("="*60)
-        logging.info("ÉTAPE 4 : GÉNÉRATION DES RAPPORTS (GEMINI 2.0 FLASH)")
-        logging.info("="*60)
+        logging.info("="*80)
+        logging.info("ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS)")
+        logging.info("="*80)
 
         if not self._configure_api_keys():
-            logging.warning("Génération des rapports sans clés API Gemini.")
+            logging.warning("Génération sans clés API Gemini")
             
+        # Récupérer toutes les données (100 jours)
         all_data = self._get_all_data_from_db()
         company_analyses = {}
 
         for symbol, data in all_data.items():
-            logging.info(f"--- Génération des synthèses IA pour : {symbol} ---")
+            logging.info(f"--- Génération synthèses IA: {symbol} ---")
+            
+            # Prix actuel
+            current_price = data['price_data']['price'].iloc[-1] if not data['price_data'].empty else 0
+            
             company_analyses[symbol] = {
                 'nom_societe': data['nom_societe'],
                 'price_analysis': self._analyze_price_evolution(data['price_data']),
                 'technical_analysis': self._analyze_technical_indicators(data['indicator_data']),
                 'fundamental_summary': self._summarize_fundamental_analysis(data['fundamental_summaries'])
             }
+            
+            # Ajouter l'analyse des prédictions
+            df_predictions = self._get_predictions_from_db(symbol)
+            if df_predictions is not None and not df_predictions.empty:
+                company_analyses[symbol]['predictions_analysis'] = self._analyze_predictions(
+                    df_predictions, 
+                    current_price
+                )
 
         self._create_main_report(company_analyses)
-        logging.info("✅ Génération de tous les rapports terminée.")
+        logging.info("✅ Génération rapports terminée")
 
 if __name__ == "__main__":
     db_conn = None
     try:
         if not all([DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT]):
-            logging.error("Des secrets de base de données sont manquants. Arrêt du script.")
+            logging.error("Secrets DB manquants")
         else:
             db_conn = psycopg2.connect(
                 dbname=DB_NAME, 
@@ -244,7 +343,7 @@ if __name__ == "__main__":
             report_generator = ComprehensiveReportGenerator(db_conn)
             report_generator.generate_all_reports([])
     except Exception as e:
-        logging.error(f"❌ Erreur fatale dans le générateur de rapports : {e}", exc_info=True)
+        logging.error(f"❌ Erreur: {e}", exc_info=True)
     finally:
         if db_conn:
             db_conn.close()
