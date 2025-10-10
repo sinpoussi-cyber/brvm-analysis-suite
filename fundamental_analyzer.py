@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V6.0 - SAUVEGARDE DB + ANALYSIS_MEMORY
+# MODULE: FUNDAMENTAL ANALYZER V6.0 FINAL - DB + ANALYSIS_MEMORY
 # ==============================================================================
 
 import requests
@@ -27,7 +27,7 @@ from google.oauth2 import service_account
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
-# --- Secrets ---
+# --- Configuration & Secrets ---
 DB_NAME = os.environ.get('DB_NAME')
 DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
@@ -463,7 +463,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 3: ANALYSE FONDAMENTALE (V6.0)")
+        logging.info("📄 ÉTAPE 3: ANALYSE FONDAMENTALE (V6.0 FINAL)")
         logging.info("="*80)
         
         conn = None
