@@ -54,11 +54,11 @@ def authenticate_gsheets():
         logging.error(f"❌ Erreur authentification Google Sheets: {e}")
         return None
 
-# --- Génération des jours ouvrés (Mardi-Samedi) ---
+# --- Génération des jours ouvrés (Lundi-Vendredi) ---
 def generate_business_days(start_date, num_days=20):
     """
-    Génère les 20 prochains jours ouvrés (Mardi-Samedi)
-    La BRVM est ouverte du Mardi au Samedi
+    Génère les 20 prochains jours ouvrables (Lundi-Vendredi)
+    Standard international pour les prédictions boursières
     """
     business_days = []
     current_date = start_date + timedelta(days=1)
@@ -67,8 +67,8 @@ def generate_business_days(start_date, num_days=20):
         # 0=Lundi, 1=Mardi, 2=Mercredi, 3=Jeudi, 4=Vendredi, 5=Samedi, 6=Dimanche
         weekday = current_date.weekday()
         
-        # Mardi(1) au Samedi(5)
-        if 1 <= weekday <= 5:
+        # Lundi(0) au Vendredi(4) - Jours ouvrables standard
+        if 0 <= weekday <= 4:
             business_days.append(current_date)
         
         current_date += timedelta(days=1)
