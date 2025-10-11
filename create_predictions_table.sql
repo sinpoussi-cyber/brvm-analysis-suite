@@ -2,9 +2,6 @@
 -- TABLE: PREDICTIONS - Prédictions de prix (20 jours ouvrés)
 -- ==============================================================================
 
--- Supprimer la table si elle existe déjà (optionnel, pour réinitialisation)
--- DROP TABLE IF EXISTS predictions CASCADE;
-
 -- Créer la table predictions
 CREATE TABLE IF NOT EXISTS predictions (
     id SERIAL PRIMARY KEY,
@@ -71,29 +68,5 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Exécuter le nettoyage automatiquement (optionnel)
--- SELECT clean_old_predictions();
-
--- ==============================================================================
--- REQUÊTES UTILES
--- ==============================================================================
-
--- Voir toutes les prédictions d'une société
--- SELECT * FROM predictions WHERE company_id = 1 ORDER BY prediction_date;
-
--- Voir les prédictions avec intervalle de confiance
--- SELECT 
---     c.symbol,
---     p.prediction_date,
---     p.lower_bound as "Min",
---     p.predicted_price as "Prédit",
---     p.upper_bound as "Max",
---     p.confidence_level
--- FROM predictions p
--- JOIN companies c ON p.company_id = c.id
--- WHERE c.symbol = 'BICC'
--- ORDER BY p.prediction_date;
-
--- ==============================================================================
--- FIN DU SCRIPT
--- ==============================================================================
+-- Vérifier que la table a été créée
+SELECT 'Table predictions créée avec succès !' as status;
