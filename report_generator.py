@@ -195,7 +195,7 @@ Données (100 jours):
         
         data_string = df_predictions.to_csv(index=False)
         
-        prompt = f"""Analyse ces prédictions de prix pour les 20 prochains jours ouvrés.
+        prompt = f"""Analyse ces prédictions de prix pour les 20 prochains jours ouvrables (Lundi-Vendredi).
 
 Prix actuel: {current_price:.2f} F CFA
 Prix prédit à J+20: {last_pred:.2f} F CFA
@@ -252,7 +252,7 @@ Analyses:
         # Métadonnées
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrés")
+        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()  # Espace
@@ -269,9 +269,9 @@ Analyses:
             doc.add_heading('1. Évolution du Cours (100 derniers jours)', level=2)
             doc.add_paragraph(analyses.get('price_analysis', 'Analyse non disponible.'))
             
-            # 2. Prédictions (20 jours ouvrés)
+            # 2. Prédictions (20 jours ouvrables)
             if 'predictions_analysis' in analyses:
-                doc.add_heading('2. Prédictions (20 prochains jours ouvrés)', level=2)
+                doc.add_heading('2. Prédictions (20 prochains jours ouvrables Lun-Ven)', level=2)
                 doc.add_paragraph(analyses['predictions_analysis'])
             
             # 3. Analyse Technique
@@ -293,7 +293,7 @@ Analyses:
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
-        logging.info("ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS)")
+        logging.info("ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS LUN-VEN)")
         logging.info("="*80)
 
         if not self._configure_api_keys():
