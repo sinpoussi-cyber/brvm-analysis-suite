@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR V4.0 FINAL - COLLECTE COMPLÈTE + EXTRACTION PDF
+# MODULE: DATA COLLECTOR V5.0 - OPTIMISÉ BATCH PROCESSING
 # ==============================================================================
 
 import re
@@ -9,6 +9,7 @@ import os
 import json
 from io import BytesIO
 from datetime import datetime
+from collections import defaultdict
 
 import pdfplumber
 import requests
@@ -30,6 +31,28 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+
+# ═══════════════════════════════════════════════════════════
+# RATE LIMITING GOOGLE SHEETS (CRITIQUE)
+# ═══════════════════════════════════════════════════════════
+MAX_REQUESTS_PER_MINUTE = 50  # Sécurité sous la limite de 60
+request_timestamps = []
+
+def rate_limit_gsheet():
+    """Gestion stricte du rate limiting Google Sheets"""
+    global request_timestamps
+    now = time.time()
+    
+    # Garder seulement les requêtes des 60 dernières secondes
+    request_timestamps = [t for t in request_timestamps if now - t < 60]
+    
+    if len(request_timestamps) >= MAX_REQUESTS_PER_MINUTE:
+        sleep_time = 60 - (now - request_timestamps[0]) + 2  # +2s de sécurité
+        logging.warning(f"⏸️  Rate limit atteint ({len(request_timestamps)} req). Pause {sleep_time:.1f}s")
+        time.sleep(sleep_time)
+        request_timestamps = []
+    
+    request_timestamps.append(time.time())
 
 # --- Connexion PostgreSQL ---
 def connect_to_db():
@@ -72,15 +95,13 @@ def get_company_ids(cur):
 
 # --- Extraction date depuis URL ---
 def extract_date_from_url(url):
-    """Extrait la date au format YYYYMMDD depuis l'URL"""
     date_match = re.search(r'boc_(\d{8})', url)
     if date_match:
         return date_match.group(1)
     return None
 
-# --- Récupération TOUS les BOCs disponibles ---
+# --- Récupération TOUS les BOCs ---
 def get_all_boc_links():
-    """Récupère tous les BOCs disponibles sur le site"""
     url = "https://www.brvm.org/fr/bulletins-officiels-de-la-cote"
     logging.info(f"🔍 Recherche de TOUS les BOCs sur : {url}")
     
@@ -99,9 +120,7 @@ def get_all_boc_links():
             logging.warning("⚠️  Aucun BOC trouvé sur la page")
             return []
         
-        # Trier par date (du plus ancien au plus récent)
         sorted_links = sorted(list(links), key=lambda x: extract_date_from_url(x) or '19000101')
-        
         logging.info(f"✅ {len(sorted_links)} BOC(s) trouvé(s)")
         return sorted_links
     
@@ -109,9 +128,8 @@ def get_all_boc_links():
         logging.error(f"❌ Erreur récupération BOCs: {e}")
         return []
 
-# --- Vérification existence date dans DB ---
+# --- Vérification date dans DB ---
 def date_exists_in_db(conn, trade_date):
-    """Vérifie si des données existent déjà pour cette date"""
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM historical_data WHERE trade_date = %s LIMIT 1;", (trade_date,))
@@ -120,27 +138,53 @@ def date_exists_in_db(conn, trade_date):
         logging.error(f"❌ Erreur vérification date DB: {e}")
         return False
 
-# --- Vérification existence date dans Google Sheets (toutes feuilles) ---
-def check_date_in_all_sheets(gc, spreadsheet, trade_date, company_symbols):
+# ═══════════════════════════════════════════════════════════
+# NOUVELLE FONCTION : CHARGEMENT BATCH DES DATES EXISTANTES
+# ═══════════════════════════════════════════════════════════
+def load_existing_dates_batch(gc, spreadsheet, company_symbols):
     """
-    Vérifie si la date existe dans toutes les feuilles des sociétés
-    Retourne un dict {symbol: True/False}
+    Charge TOUTES les dates existantes en BATCH (optimisé)
+    Retourne : {symbol: set(dates)}
     """
-    date_str = trade_date.strftime('%d/%m/%Y')
-    results = {}
+    logging.info("📂 Chargement des dates existantes (mode BATCH)...")
+    existing_dates = defaultdict(set)
     
-    for symbol in company_symbols:
-        try:
-            worksheet = spreadsheet.worksheet(symbol)
-            all_dates = worksheet.col_values(2)[1:]  # Colonne B, sans l'en-tête
-            results[symbol] = date_str in all_dates
-        except gspread.exceptions.WorksheetNotFound:
-            results[symbol] = False
-        except Exception as e:
-            logging.error(f"❌ Erreur vérification {symbol}: {e}")
-            results[symbol] = False
+    if not gc or not spreadsheet:
+        return existing_dates
     
-    return results
+    try:
+        # Récupérer la liste des feuilles existantes (1 seule requête)
+        rate_limit_gsheet()
+        all_worksheets = spreadsheet.worksheets()
+        worksheet_titles = {ws.title: ws for ws in all_worksheets}
+        
+        # Pour chaque société
+        for symbol in company_symbols:
+            if symbol not in worksheet_titles:
+                continue
+            
+            try:
+                worksheet = worksheet_titles[symbol]
+                
+                # Charger la colonne B (dates) en une seule requête
+                rate_limit_gsheet()
+                dates_column = worksheet.col_values(2)  # Colonne B
+                
+                # Enlever l'en-tête et stocker dans un set
+                if len(dates_column) > 1:
+                    existing_dates[symbol] = set(dates_column[1:])
+                
+            except Exception as e:
+                logging.warning(f"   ⚠️  Erreur lecture {symbol}: {e}")
+                continue
+        
+        total_dates = sum(len(dates) for dates in existing_dates.values())
+        logging.info(f"   ✅ {len(existing_dates)} feuilles | {total_dates} dates chargées")
+        return existing_dates
+    
+    except Exception as e:
+        logging.error(f"❌ Erreur chargement batch: {e}")
+        return defaultdict(set)
 
 # --- Nettoyage valeurs numériques ---
 def clean_and_convert_numeric(value):
@@ -154,7 +198,6 @@ def clean_and_convert_numeric(value):
 
 # --- Extraction données depuis PDF ---
 def extract_data_from_pdf(pdf_url):
-    """Extrait les données du BOC PDF"""
     logging.info(f"   📄 Analyse du PDF...")
     data = []
     
@@ -193,7 +236,6 @@ def extract_data_from_pdf(pdf_url):
 
 # --- Insertion dans DB ---
 def insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
-    """Insert les données dans PostgreSQL"""
     if symbol not in company_ids:
         return False
     
@@ -215,63 +257,63 @@ def insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
         conn.rollback()
         return False
 
-# --- Insertion dans Google Sheets ---
-def insert_into_gsheet(gc, spreadsheet, symbol, trade_date, price, volume, value):
-    """Insert les données dans Google Sheets à la bonne position chronologique"""
-    try:
-        worksheet = spreadsheet.worksheet(symbol)
-        
-        date_str = trade_date.strftime('%d/%m/%Y')
-        all_values = worksheet.get_all_values()
-        
-        # Vérifier si la date existe déjà
-        for row in all_values[1:]:
-            if len(row) >= 2 and row[1] == date_str:
-                return False  # Déjà présent
-        
-        # Trouver la position d'insertion (ordre chronologique croissant)
-        insert_position = None
-        
-        for idx, row in enumerate(all_values[1:], start=2):
-            if len(row) < 2:
-                continue
-            
-            try:
-                existing_date = datetime.strptime(row[1], '%d/%m/%Y').date()
-                
-                if existing_date > trade_date:
-                    insert_position = idx
-                    break
-            except:
-                continue
-        
-        new_row = [symbol, date_str, price if price else '', volume if volume else '', value if value else '']
-        
-        # Insérer à la position trouvée ou à la fin
-        if insert_position:
-            worksheet.insert_row(new_row, insert_position, value_input_option='USER_ENTERED')
-        else:
-            worksheet.append_row(new_row, value_input_option='USER_ENTERED')
-        
-        return True
+# ═══════════════════════════════════════════════════════════
+# NOUVELLE FONCTION : BATCH UPDATE GOOGLE SHEETS
+# ═══════════════════════════════════════════════════════════
+def batch_update_gsheets(gc, spreadsheet, updates_by_symbol):
+    """
+    Met à jour toutes les feuilles en BATCH
+    updates_by_symbol = {symbol: [[date, prix, volume], ...]}
+    """
+    if not updates_by_symbol:
+        return 0
     
-    except gspread.exceptions.WorksheetNotFound:
-        logging.warning(f"⚠️  Feuille '{symbol}' non trouvée")
-        return False
-    except Exception as e:
-        logging.error(f"❌ Erreur insertion GSheet pour {symbol}: {e}")
-        return False
+    logging.info(f"📤 Mise à jour batch Google Sheets ({len(updates_by_symbol)} feuilles)...")
+    total_updated = 0
+    
+    for symbol, rows_to_add in updates_by_symbol.items():
+        if not rows_to_add:
+            continue
+        
+        try:
+            # Ouvrir la feuille
+            rate_limit_gsheet()
+            try:
+                worksheet = spreadsheet.worksheet(symbol)
+            except gspread.exceptions.WorksheetNotFound:
+                logging.warning(f"   ⚠️  Feuille '{symbol}' non trouvée, création...")
+                rate_limit_gsheet()
+                worksheet = spreadsheet.add_worksheet(title=symbol, rows=1000, cols=10)
+                rate_limit_gsheet()
+                worksheet.append_row(['Symbole', 'Date', 'Cours', 'Volume'], value_input_option='USER_ENTERED')
+            
+            # Trier chronologiquement
+            rows_to_add.sort(key=lambda x: datetime.strptime(x[1], '%d/%m/%Y'))
+            
+            # UN SEUL append_rows pour toute la feuille
+            rate_limit_gsheet()
+            worksheet.append_rows(rows_to_add, value_input_option='USER_ENTERED')
+            
+            total_updated += len(rows_to_add)
+            logging.info(f"   ✅ {symbol}: {len(rows_to_add)} lignes")
+        
+        except Exception as e:
+            logging.error(f"   ❌ Erreur {symbol}: {e}")
+            continue
+    
+    return total_updated
 
 # --- Nettoyage des feuilles "_Technical" ---
 def cleanup_technical_sheets(gc, spreadsheet):
-    """Supprime toutes les feuilles se terminant par '_Technical'"""
     try:
+        rate_limit_gsheet()
         worksheets = spreadsheet.worksheets()
         deleted_count = 0
         
         for ws in worksheets:
             if ws.title.endswith('_Technical'):
                 logging.info(f"🗑️  Suppression de la feuille: {ws.title}")
+                rate_limit_gsheet()
                 spreadsheet.del_worksheet(ws)
                 deleted_count += 1
                 time.sleep(0.5)
@@ -284,10 +326,12 @@ def cleanup_technical_sheets(gc, spreadsheet):
     except Exception as e:
         logging.error(f"❌ Erreur nettoyage feuilles: {e}")
 
-# --- Fonction principale ---
+# ═══════════════════════════════════════════════════════════
+# FONCTION PRINCIPALE (OPTIMISÉE)
+# ═══════════════════════════════════════════════════════════
 def run_data_collection():
     logging.info("="*60)
-    logging.info("📊 ÉTAPE 1: COLLECTE COMPLÈTE DES DONNÉES (V4.0 FINAL)")
+    logging.info("📊 ÉTAPE 1: COLLECTE OPTIMISÉE (BATCH PROCESSING)")
     logging.info("="*60)
     
     # Connexions
@@ -302,12 +346,18 @@ def run_data_collection():
     try:
         spreadsheet = None
         if gc:
+            rate_limit_gsheet()
             spreadsheet = gc.open_by_key(SPREADSHEET_ID)
             cleanup_technical_sheets(gc, spreadsheet)
         
         # Récupération des IDs sociétés
         with conn.cursor() as cur:
             company_ids = get_company_ids(cur)
+        
+        # ═══════════════════════════════════════════════════════════
+        # OPTIMISATION : Charger TOUTES les dates en BATCH
+        # ═══════════════════════════════════════════════════════════
+        existing_dates = load_existing_dates_batch(gc, spreadsheet, company_ids.keys())
         
         # Récupération de TOUS les BOCs
         boc_links = get_all_boc_links()
@@ -317,11 +367,14 @@ def run_data_collection():
             return
         
         total_db_inserts = 0
-        total_gsheet_inserts = 0
-        total_gsheet_syncs = 0
         total_skipped = 0
         
-        # Traiter chaque BOC (du plus ancien au plus récent)
+        # Buffer pour batch updates Google Sheets
+        gsheet_updates_buffer = defaultdict(list)  # {symbol: [[date, prix, volume], ...]}
+        
+        # ═══════════════════════════════════════════════════════════
+        # Traiter chaque BOC
+        # ═══════════════════════════════════════════════════════════
         for boc_url in boc_links:
             date_str = extract_date_from_url(boc_url)
             
@@ -335,64 +388,64 @@ def run_data_collection():
             
             logging.info(f"\n📅 Traitement du BOC du {trade_date.strftime('%d/%m/%Y')}")
             
-            # ═══════════════════════════════════════════════════════════
-            # LOGIQUE PRINCIPALE : EXTRACTION PDF (JAMAIS COPIE DB→GSHEET)
-            # ═══════════════════════════════════════════════════════════
+            date_str_formatted = trade_date.strftime('%d/%m/%Y')
             
+            # Vérifier si date existe dans DB
             db_has_date = date_exists_in_db(conn, trade_date)
             
-            # Étape 1 : Si date existe dans DB, vérifier Google Sheets
+            # ═══════════════════════════════════════════════════════════
+            # CAS 1 : Date existe dans DB
+            # ═══════════════════════════════════════════════════════════
             if db_has_date:
                 logging.info(f"   ✓ Date présente dans DB")
                 
                 if gc and spreadsheet:
-                    logging.info(f"   🔍 Vérification présence dans Google Sheets...")
+                    # Identifier les feuilles qui manquent la date
+                    missing_symbols = [
+                        symbol for symbol in company_ids.keys() 
+                        if date_str_formatted not in existing_dates[symbol]
+                    ]
                     
-                    gsheet_status = check_date_in_all_sheets(gc, spreadsheet, trade_date, company_ids.keys())
-                    
-                    # Identifier les feuilles manquantes
-                    missing_in_gsheet = [symbol for symbol, exists in gsheet_status.items() if not exists]
-                    
-                    if missing_in_gsheet:
-                        logging.info(f"   ⚠️  Date manquante dans {len(missing_in_gsheet)} feuille(s) Google Sheets")
-                        logging.info(f"   📄 Extraction du PDF pour compléter Google Sheets...")
+                    if missing_symbols:
+                        logging.info(f"   ⚠️  {len(missing_symbols)} feuille(s) à compléter")
                         
-                        # IMPORTANT : Extraire du PDF (PAS de copie depuis DB)
+                        # Extraire du PDF pour compléter
                         rows = extract_data_from_pdf(boc_url)
                         
                         if rows:
-                            gsheet_inserts = 0
-                            
                             for rec in rows:
                                 symbol = rec.get('Symbole', '').strip()
                                 
-                                # Insérer SEULEMENT dans les feuilles qui manquent la date
-                                if symbol in missing_in_gsheet:
-                                    try:
-                                        price = clean_and_convert_numeric(rec.get('Cours'))
-                                        volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
-                                        value = clean_and_convert_numeric(rec.get('Valeur'))
-                                        
-                                        if insert_into_gsheet(gc, spreadsheet, symbol, trade_date, price, volume, value):
-                                            gsheet_inserts += 1
-                                        
-                                        time.sleep(0.1)
-                                    except Exception as e:
-                                        logging.error(f"   ❌ Erreur {symbol}: {e}")
-                            
-                            total_gsheet_syncs += gsheet_inserts
-                            logging.info(f"   ✅ {gsheet_inserts} feuille(s) complétée(s) depuis PDF")
-                        else:
-                            logging.warning(f"   ⚠️  Impossible d'extraire les données du PDF")
+                                if symbol not in missing_symbols:
+                                    continue
+                                
+                                try:
+                                    price = clean_and_convert_numeric(rec.get('Cours'))
+                                    volume = int(clean_and_convert_numeric(rec.get('Volume')) or 0)
+                                    
+                                    # Ajouter au buffer (pas d'insertion immédiate)
+                                    gsheet_updates_buffer[symbol].append([
+                                        symbol, 
+                                        date_str_formatted, 
+                                        price if price else '', 
+                                        volume if volume else ''
+                                    ])
+                                    
+                                    # Mettre à jour le cache
+                                    existing_dates[symbol].add(date_str_formatted)
+                                
+                                except Exception as e:
+                                    logging.error(f"   ❌ Erreur {symbol}: {e}")
                     else:
-                        logging.info(f"   ✓ Date présente dans toutes les feuilles Google Sheets")
                         total_skipped += 1
                 else:
                     total_skipped += 1
                 
                 continue  # Passer au BOC suivant
             
-            # Étape 2 : Si date n'existe pas dans DB, extraire du PDF pour DB + GSheets
+            # ═══════════════════════════════════════════════════════════
+            # CAS 2 : Date n'existe pas dans DB
+            # ═══════════════════════════════════════════════════════════
             logging.info(f"   ℹ️  Date absente dans DB, extraction du PDF...")
             rows = extract_data_from_pdf(boc_url)
             
@@ -401,9 +454,7 @@ def run_data_collection():
                 continue
             
             db_inserts = 0
-            gsheet_inserts = 0
             
-            # Traiter chaque ligne
             for rec in rows:
                 symbol = rec.get('Symbole', '').strip()
                 
@@ -419,32 +470,41 @@ def run_data_collection():
                     if insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
                         db_inserts += 1
                     
-                    # Insertion Google Sheets
+                    # Ajouter au buffer Google Sheets
                     if gc and spreadsheet:
-                        if insert_into_gsheet(gc, spreadsheet, symbol, trade_date, price, volume, value):
-                            gsheet_inserts += 1
-                    
-                    time.sleep(0.1)
+                        gsheet_updates_buffer[symbol].append([
+                            symbol, 
+                            date_str_formatted, 
+                            price if price else '', 
+                            volume if volume else ''
+                        ])
+                        existing_dates[symbol].add(date_str_formatted)
                 
                 except Exception as e:
                     logging.error(f"   ❌ Erreur traitement {symbol}: {e}")
                     continue
             
             total_db_inserts += db_inserts
-            total_gsheet_inserts += gsheet_inserts
-            
-            logging.info(f"   ✅ DB: {db_inserts} | GSheet: {gsheet_inserts}")
-            time.sleep(1)
+            logging.info(f"   ✅ DB: {db_inserts} inserts")
+            time.sleep(0.5)
         
+        # ═══════════════════════════════════════════════════════════
+        # FLUSH BATCH : Écrire toutes les mises à jour GSheets
+        # ═══════════════════════════════════════════════════════════
+        total_gsheet_inserts = 0
+        if gc and spreadsheet and gsheet_updates_buffer:
+            total_gsheet_inserts = batch_update_gsheets(gc, spreadsheet, gsheet_updates_buffer)
+        
+        # ═══════════════════════════════════════════════════════════
         # Résumé final
+        # ═══════════════════════════════════════════════════════════
         logging.info("\n" + "="*60)
         logging.info("✅ COLLECTE TERMINÉE")
         logging.info(f"📊 BOCs traités: {len(boc_links)}")
-        logging.info(f"📊 BOCs complets (DB+GSheet à jour): {total_skipped}")
+        logging.info(f"📊 BOCs complets (à jour): {total_skipped}")
         logging.info(f"💾 PostgreSQL: {total_db_inserts} nouveaux enregistrements")
-        logging.info(f"📋 Google Sheets:")
-        logging.info(f"   • Nouveaux (depuis PDF): {total_gsheet_inserts}")
-        logging.info(f"   • Complétés (depuis PDF): {total_gsheet_syncs}")
+        logging.info(f"📋 Google Sheets: {total_gsheet_inserts} lignes ajoutées")
+        logging.info(f"🔧 Requêtes API GSheets: ~{len(request_timestamps)} (limite: 60/min)")
         logging.info("="*60)
     
     except Exception as e:
