@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V6.0 FINAL - DB + ANALYSIS_MEMORY
+# MODULE: FUNDAMENTAL ANALYZER V7.0 - SUPABASE + MÉMOIRE DB VÉRIFIÉE
 # ==============================================================================
 
 import requests
@@ -11,7 +11,6 @@ from datetime import datetime
 import logging
 import unicodedata
 import urllib3
-import json
 import base64
 from collections import defaultdict
 from seleniumwire import webdriver
@@ -21,8 +20,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
-import gspread
-from google.oauth2 import service_account
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -33,8 +30,6 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
-GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
 # Configuration Gemini
 GEMINI_MODEL = "gemini-1.5-flash"
@@ -100,8 +95,6 @@ class BRVMAnalyzer:
         self.api_keys = []
         self.current_key_index = 0
         self.request_timestamps = []
-        self.gc = None
-        self.spreadsheet = None
 
     def connect_to_db(self):
         try:
@@ -114,64 +107,88 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur connexion DB: {e}")
             return None
 
-    def authenticate_gsheets(self):
-        """Authentification Google Sheets"""
-        try:
-            if not GSPREAD_SERVICE_ACCOUNT_JSON:
-                return False
-            
-            creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
-            scopes = ['https://www.googleapis.com/auth/spreadsheets']
-            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            self.gc = gspread.authorize(creds)
-            self.spreadsheet = self.gc.open_by_key(SPREADSHEET_ID)
-            logging.info("✅ Authentification Google Sheets réussie.")
-            return True
-        except Exception as e:
-            logging.warning(f"⚠️  Google Sheets non disponible: {e}")
-            return False
-
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL"""
+        """Charge la mémoire depuis PostgreSQL - VÉRIFIÉ"""
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
         if not conn: 
+            logging.error("❌ Impossible de charger la mémoire: connexion DB échouée")
             return
         
         try:
             with conn.cursor() as cur:
+                # Vérifier que la table existe
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'fundamental_analysis'
+                    );
+                """)
+                table_exists = cur.fetchone()[0]
+                
+                if not table_exists:
+                    logging.warning("⚠️  Table 'fundamental_analysis' n'existe pas encore")
+                    self.analysis_memory = set()
+                    return
+                
+                # Charger tous les URLs déjà analysés
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
-                self.analysis_memory = {row[0] for row in cur.fetchall()}
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyses chargées depuis DB")
+                urls = cur.fetchall()
+                self.analysis_memory = {row[0] for row in urls}
+                
+            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) chargée(s) depuis DB")
+            
+            # Afficher quelques exemples pour vérification
+            if self.analysis_memory:
+                sample_urls = list(self.analysis_memory)[:3]
+                logging.info(f"   📋 Exemples d'URLs en mémoire:")
+                for url in sample_urls:
+                    logging.info(f"      • {url[:80]}...")
+                    
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire DB: {e}")
+            self.analysis_memory = set()
         finally:
             if conn: 
                 conn.close()
 
     def _save_to_db(self, company_id, report, summary):
-        """Sauvegarde dans PostgreSQL"""
+        """Sauvegarde dans PostgreSQL avec vérification"""
         conn = self.connect_to_db()
         if not conn: 
+            logging.error("❌ Impossible de sauvegarder: connexion DB échouée")
             return False
         
         try:
             with conn.cursor() as cur:
+                # Vérifier si l'URL existe déjà
+                cur.execute("""
+                    SELECT id, analysis_summary FROM fundamental_analysis 
+                    WHERE report_url = %s;
+                """, (report['url'],))
+                existing = cur.fetchone()
+                
+                if existing:
+                    logging.info(f"    ⚠️  Rapport déjà en DB (ID: {existing[0]}), mise à jour...")
+                
+                # Insert ou Update
                 cur.execute("""
                     INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                     VALUES (%s, %s, %s, %s, %s) 
                     ON CONFLICT (report_url) DO UPDATE SET
                         analysis_summary = EXCLUDED.analysis_summary,
-                        updated_at = CURRENT_TIMESTAMP;
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING id;
                 """, (company_id, report['url'], report['titre'], report['date'], summary))
+                
+                inserted_id = cur.fetchone()[0]
                 conn.commit()
-                inserted = cur.rowcount > 0
             
-            if inserted:
-                self.analysis_memory.add(report['url'])
-                logging.info(f"    ✅ Sauvegardé dans PostgreSQL")
-                return True
-            return False
+            # Ajouter à la mémoire en RAM
+            self.analysis_memory.add(report['url'])
+            logging.info(f"    ✅ Sauvegardé dans PostgreSQL (ID: {inserted_id})")
+            return True
+            
         except Exception as e:
             logging.error(f"❌ Erreur sauvegarde DB: {e}")
             conn.rollback()
@@ -180,47 +197,9 @@ class BRVMAnalyzer:
             if conn: 
                 conn.close()
 
-    def _save_to_analysis_memory_sheet(self, symbol, report):
-        """Sauvegarde dans la feuille ANALYSIS_MEMORY"""
-        if not self.spreadsheet:
-            return
-        
-        try:
-            memory_sheet = self.spreadsheet.worksheet('ANALYSIS_MEMORY')
-            
-            new_row = [
-                report['url'],
-                symbol,
-                report['titre'],
-                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'Analyzed'
-            ]
-            
-            memory_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            logging.info(f"    ✅ Ajouté à ANALYSIS_MEMORY")
-        
-        except gspread.exceptions.WorksheetNotFound:
-            logging.warning("⚠️  Feuille ANALYSIS_MEMORY non trouvée, création...")
-            try:
-                memory_sheet = self.spreadsheet.add_worksheet(title='ANALYSIS_MEMORY', rows=1000, cols=5)
-                memory_sheet.append_row(['URL', 'Symbole', 'Titre', 'Date Analyse', 'Statut'])
-                memory_sheet.append_row([
-                    report['url'],
-                    symbol,
-                    report['titre'],
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'Analyzed'
-                ])
-                logging.info("    ✅ ANALYSIS_MEMORY créée et remplie")
-            except Exception as e:
-                logging.error(f"❌ Erreur création ANALYSIS_MEMORY: {e}")
-        
-        except Exception as e:
-            logging.error(f"❌ Erreur ANALYSIS_MEMORY: {e}")
-
     def _configure_api_keys(self):
-        """Charge jusqu'à 22 clés API"""
-        for i in range(1, 23):
+        """Charge les 22 clés API"""
+        for i in range(1, 23):  # 22 clés
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
@@ -233,11 +212,12 @@ class BRVMAnalyzer:
         return True
 
     def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
-        """Analyse un PDF avec l'API Gemini"""
+        """Analyse un PDF avec l'API Gemini + vérification mémoire"""
         pdf_url = report['url']
         
-        # Vérifier dans la mémoire
+        # VÉRIFICATION MÉMOIRE
         if pdf_url in self.analysis_memory:
+            logging.info(f"    ⏭️  Déjà analysé (en mémoire), passage au suivant")
             return
         
         # Gestion rate limit
@@ -307,8 +287,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if "erreur" not in analysis_text.lower():
                 # Sauvegarder dans PostgreSQL
                 if self._save_to_db(company_id, report, analysis_text):
-                    # Sauvegarder dans ANALYSIS_MEMORY
-                    self._save_to_analysis_memory_sheet(symbol, report)
                     self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
         
         except Exception as e:
@@ -461,9 +439,9 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
         return all_reports
 
     def run_and_get_results(self):
-        """Fonction principale"""
+        """Fonction principale avec vérifications"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 3: ANALYSE FONDAMENTALE (V6.0 FINAL)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.0 - MÉMOIRE DB VÉRIFIÉE)")
         logging.info("="*80)
         
         conn = None
@@ -471,11 +449,9 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if not self._configure_api_keys():
                 return {}, []
             
-            # Authentifier Google Sheets
-            self.authenticate_gsheets()
-            
-            # Charger la mémoire depuis PostgreSQL
+            # Charger la mémoire depuis PostgreSQL (VÉRIFICATION)
             self._load_analysis_memory_from_db()
+            logging.info(f"📊 Mémoire active: {len(self.analysis_memory)} rapport(s) déjà analysé(s)")
             
             # Démarrer Selenium
             self.setup_selenium()
@@ -498,6 +474,9 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             all_reports = self._find_all_reports()
             
             # Traiter chaque société
+            total_analyzed = 0
+            total_skipped = 0
+            
             for symbol, (company_id, company_name) in self.company_ids.items():
                 logging.info(f"\n📊 Traitement {symbol} - {company_name}")
                 company_reports = all_reports.get(symbol, [])
@@ -511,12 +490,19 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                 recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
                 recent_reports.sort(key=lambda x: x['date'], reverse=True)
                 
-                logging.info(f"   📂 {len(recent_reports)} rapport(s) récent(s)")
+                logging.info(f"   📂 {len(recent_reports)} rapport(s) récent(s) trouvé(s)")
                 
                 for report in recent_reports:
-                    self._analyze_pdf_with_direct_api(company_id, symbol, report)
+                    if report['url'] in self.analysis_memory:
+                        logging.info(f"    ⏭️  Déjà analysé: {os.path.basename(report['url'])}")
+                        total_skipped += 1
+                    else:
+                        self._analyze_pdf_with_direct_api(company_id, symbol, report)
+                        total_analyzed += 1
             
             logging.info("\n✅ Traitement terminé")
+            logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
+            logging.info(f"📊 Rapports ignorés (déjà en DB): {total_skipped}")
             
             # Récupérer les résultats depuis PostgreSQL
             conn = self.connect_to_db()
@@ -535,7 +521,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                     final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
                     final_results[symbol]['nom'] = name
             
-            logging.info(f"📊 Résultats: {len(final_results)} société(s)")
+            logging.info(f"📊 Résultats finaux: {len(final_results)} société(s) avec analyses")
             return (dict(final_results), self.newly_analyzed_reports)
         
         except Exception as e:
