@@ -1,11 +1,11 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V6.0 - 100 JOURS + PRÉDICTIONS
+# MODULE: COMPREHENSIVE REPORT GENERATOR V7.0 - SUPABASE UNIQUEMENT
+# 100 JOURS + PRÉDICTIONS
 # ==============================================================================
 
 import psycopg2
 import pandas as pd
 import os
-import json
 import time
 import logging
 from docx import Document
@@ -25,7 +25,7 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # Configuration Gemini
-GEMINI_MODEL = "gemini-2.0-flash-exp"
+GEMINI_MODEL = "gemini-1.5-flash"
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
@@ -36,6 +36,7 @@ class ComprehensiveReportGenerator:
         self.request_timestamps = []
 
     def _configure_api_keys(self):
+        """Charge les 10 premières clés pour les rapports"""
         for i in range(1, 11):  # 10 clés pour les rapports
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
@@ -49,6 +50,7 @@ class ComprehensiveReportGenerator:
         return True
 
     def _call_gemini_with_retry(self, prompt):
+        """Appelle l'API Gemini avec gestion des erreurs et retry"""
         if not self.api_keys:
             return "Analyse IA non disponible (aucune clé API configurée)."
 
@@ -57,7 +59,7 @@ class ComprehensiveReportGenerator:
         
         if len(self.request_timestamps) >= REQUESTS_PER_MINUTE_LIMIT:
             sleep_time = 60 - (now - self.request_timestamps[0]) if self.request_timestamps else 60
-            logging.warning(f"Pause rate limit: {sleep_time + 1:.1f}s")
+            logging.warning(f"⏸️  Pause rate limit: {sleep_time + 1:.1f}s")
             time.sleep(sleep_time + 1)
             self.request_timestamps = []
 
@@ -83,7 +85,7 @@ class ComprehensiveReportGenerator:
                 response = requests.post(api_url, json=request_body, timeout=90)
 
                 if response.status_code == 429:
-                    logging.warning(f"Quota atteint pour clé #{self.current_key_index + 1}")
+                    logging.warning(f"⚠️  Quota atteint pour clé #{self.current_key_index + 1}")
                     self.current_key_index += 1
                     continue
                 
@@ -92,14 +94,14 @@ class ComprehensiveReportGenerator:
                 return response_json['candidates'][0]['content']['parts'][0]['text']
                 
             except Exception as e:
-                logging.error(f"Erreur clé #{self.current_key_index + 1}: {e}")
+                logging.error(f"❌ Erreur clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
         
         return "Erreur d'analyse : Quota API épuisé."
 
     def _get_all_data_from_db(self):
-        """Récupère les données sur 100 jours au lieu de 50"""
-        logging.info("Récupération des données (100 derniers jours)...")
+        """Récupère les données sur 100 jours depuis Supabase"""
+        logging.info("📂 Récupération des données (100 derniers jours)...")
         
         query = """
         WITH latest_historical_data AS (
@@ -131,11 +133,11 @@ class ComprehensiveReportGenerator:
                 'fundamental_summaries': group['fundamental_summaries'].iloc[0] or "Aucune analyse fondamentale disponible."
             }
         
-        logging.info(f"✅ Données (100 jours) pour {len(company_data)} sociétés récupérées")
+        logging.info(f"   ✅ Données (100 jours) pour {len(company_data)} sociétés récupérées")
         return company_data
 
     def _get_predictions_from_db(self, symbol):
-        """Récupère les prédictions pour une société"""
+        """Récupère les prédictions depuis Supabase"""
         try:
             query = """
             SELECT 
@@ -156,11 +158,11 @@ class ComprehensiveReportGenerator:
             
             return df
         except Exception as e:
-            logging.error(f"Erreur récupération prédictions {symbol}: {e}")
+            logging.error(f"❌ Erreur récupération prédictions {symbol}: {e}")
             return None
 
     def _analyze_price_evolution(self, df_prices):
-        """Analyse l'évolution du cours sur 100 jours"""
+        """Analyse l'évolution du cours sur 100 jours avec IA"""
         if df_prices.empty or df_prices['price'].isnull().all():
             return "Données de prix insuffisantes."
         
@@ -183,7 +185,7 @@ Données (100 jours):
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_predictions(self, df_predictions, current_price):
-        """Analyse les prédictions"""
+        """Analyse les prédictions avec IA"""
         if df_predictions is None or df_predictions.empty:
             return "Aucune prédiction disponible."
         
@@ -213,6 +215,7 @@ Données des prédictions:
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_technical_indicators(self, series_indicators):
+        """Analyse les indicateurs techniques avec IA"""
         data_string = series_indicators.to_string()
         prompt = f"""Analyse ces indicateurs techniques (jour le plus récent).
 
@@ -226,6 +229,7 @@ Indicateurs:
         return self._call_gemini_with_retry(prompt)
 
     def _summarize_fundamental_analysis(self, summaries):
+        """Synthétise les analyses fondamentales avec IA"""
         prompt = f"""Synthétise ces analyses fondamentales en 3-4 points clés.
 
 Concentre-toi sur :
@@ -241,7 +245,7 @@ Analyses:
 
     def _create_main_report(self, company_analyses):
         """Génère le rapport Word avec prédictions"""
-        logging.info("Création du rapport de synthèse (100 jours + prédictions)...")
+        logging.info("📝 Création du rapport de synthèse (100 jours + prédictions)...")
         
         doc = Document()
         
@@ -252,7 +256,8 @@ Analyses:
         # Métadonnées
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)")
+        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL)")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()  # Espace
@@ -292,14 +297,15 @@ Analyses:
         return output_filename
 
     def generate_all_reports(self, new_fundamental_analyses):
+        """Génère tous les rapports depuis Supabase"""
         logging.info("="*80)
-        logging.info("ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS LUN-VEN)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS)")
         logging.info("="*80)
 
         if not self._configure_api_keys():
-            logging.warning("Génération sans clés API Gemini")
+            logging.warning("⚠️  Génération sans clés API Gemini")
             
-        # Récupérer toutes les données (100 jours)
+        # Récupérer toutes les données depuis Supabase (100 jours)
         all_data = self._get_all_data_from_db()
         company_analyses = {}
 
@@ -316,7 +322,7 @@ Analyses:
                 'fundamental_summary': self._summarize_fundamental_analysis(data['fundamental_summaries'])
             }
             
-            # Ajouter l'analyse des prédictions
+            # Ajouter l'analyse des prédictions depuis Supabase
             df_predictions = self._get_predictions_from_db(symbol)
             if df_predictions is not None and not df_predictions.empty:
                 company_analyses[symbol]['predictions_analysis'] = self._analyze_predictions(
@@ -331,7 +337,7 @@ if __name__ == "__main__":
     db_conn = None
     try:
         if not all([DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT]):
-            logging.error("Secrets DB manquants")
+            logging.error("❌ Secrets DB manquants")
         else:
             db_conn = psycopg2.connect(
                 dbname=DB_NAME, 
