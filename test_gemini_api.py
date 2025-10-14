@@ -1,5 +1,5 @@
 # ==============================================================================
-# SCRIPT DE TEST - VÉRIFICATION DES CLÉS API GEMINI
+# SCRIPT DE TEST - VÉRIFICATION DES CLÉS API GEMINI (VERSION CORRIGÉE)
 # ==============================================================================
 
 import os
@@ -20,18 +20,38 @@ def test_gemini_api_key(api_key, key_number):
     masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
     logging.info(f"Clé : {masked_key}")
     
-    # URLs à tester
+    # URLs à tester (dans l'ordre de priorité)
     test_urls = [
-        # Option 1 : Gemini 2.5 Pro (RECOMMANDÉ - Le plus récent)
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent?key={api_key}",
-        # Option 2 : Gemini 1.5 Pro
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={api_key}",
-        # Option 3 : Gemini 1.5 Flash Latest
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
-        # Option 4 : Gemini 1.5 Flash
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}",
-        # Option 5 : API v1beta (ancienne version)
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+        # ✅ Option 1 : Gemini 1.5 Flash Latest (RECOMMANDÉ - API v1)
+        {
+            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash-latest",
+            "version": "v1"
+        },
+        # Option 2 : Gemini 1.5 Pro (API v1)
+        {
+            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={api_key}",
+            "model": "gemini-1.5-pro",
+            "version": "v1"
+        },
+        # Option 3 : Gemini 1.5 Flash (API v1)
+        {
+            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash",
+            "version": "v1"
+        },
+        # Option 4 : Gemini 1.5 Flash Latest (API v1beta - ancienne version)
+        {
+            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash-latest",
+            "version": "v1beta"
+        },
+        # Option 5 : Gemini 1.5 Flash (API v1beta - ancienne version)
+        {
+            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash",
+            "version": "v1beta"
+        },
     ]
     
     # Test simple
@@ -43,9 +63,12 @@ def test_gemini_api_key(api_key, key_number):
     
     headers = {"Content-Type": "application/json"}
     
-    for idx, url in enumerate(test_urls, 1):
-        model_name = url.split("/models/")[1].split(":")[0]
-        logging.info(f"\n  Test {idx}/4 : Modèle '{model_name}'")
+    for idx, test_config in enumerate(test_urls, 1):
+        url = test_config["url"]
+        model_name = test_config["model"]
+        api_version = test_config["version"]
+        
+        logging.info(f"\n  Test {idx}/{len(test_urls)} : Modèle '{model_name}' (API {api_version})")
         
         try:
             response = requests.post(url, json=test_request, headers=headers, timeout=10)
@@ -56,7 +79,7 @@ def test_gemini_api_key(api_key, key_number):
                     result = response.json()
                     answer = result['candidates'][0]['content']['parts'][0]['text']
                     logging.info(f"    📝 Réponse: {answer[:50]}...")
-                    return True, url  # Retourner l'URL qui fonctionne
+                    return True, test_config  # Retourner la config qui fonctionne
                 except:
                     logging.info(f"    ⚠️  Réponse reçue mais format inattendu")
                     
@@ -80,11 +103,11 @@ def test_gemini_api_key(api_key, key_number):
     return False, None
 
 def main():
-    logging.info("🔍 DÉMARRAGE DU TEST DES CLÉS API GEMINI\n")
+    logging.info("🔍 DÉMARRAGE DU TEST DES CLÉS API GEMINI (VERSION CORRIGÉE)\n")
     
     # Charger les clés depuis les variables d'environnement
     api_keys = []
-    for i in range(1, 20):
+    for i in range(1, 23):  # Tester jusqu'à 22 clés
         key = os.environ.get(f'GOOGLE_API_KEY_{i}')
         if key:
             api_keys.append(key)
@@ -100,10 +123,10 @@ def main():
     failed_keys = []
     
     for idx, key in enumerate(api_keys, 1):
-        success, working_url = test_gemini_api_key(key, idx)
+        success, working_config = test_gemini_api_key(key, idx)
         
         if success:
-            working_keys.append((idx, working_url))
+            working_keys.append((idx, working_config))
         else:
             failed_keys.append(idx)
         
@@ -120,18 +143,19 @@ def main():
     
     if working_keys:
         logging.info("\n🎉 Clés API fonctionnelles:")
-        for key_num, url in working_keys:
-            model = url.split("/models/")[1].split(":")[0]
-            logging.info(f"   • Clé #{key_num} : Modèle '{model}'")
+        for key_num, config in working_keys:
+            logging.info(f"   • Clé #{key_num} : Modèle '{config['model']}' (API {config['version']})")
         
         logging.info("\n💡 RECOMMANDATION:")
-        model_to_use = working_keys[0][1].split("/models/")[1].split(":")[0]
-        logging.info(f"   Utilisez le modèle : {model_to_use}")
+        recommended_config = working_keys[0][1]
+        logging.info(f"   Modèle à utiliser : {recommended_config['model']}")
+        logging.info(f"   Version API : {recommended_config['version']}")
         
-        # Afficher l'URL correcte à utiliser
-        correct_url_template = working_keys[0][1].replace(f"?key={api_keys[0]}", "?key={{api_key}}")
-        logging.info(f"\n📝 URL correcte à utiliser dans votre code:")
-        logging.info(f"   {correct_url_template}")
+        # Afficher la configuration à copier dans le code
+        logging.info(f"\n📝 Configuration à utiliser dans votre code Python:")
+        logging.info(f"   GEMINI_MODEL = \"{recommended_config['model']}\"")
+        logging.info(f"   GEMINI_API_VERSION = \"{recommended_config['version']}\"")
+        logging.info(f"   API_URL = \"https://generativelanguage.googleapis.com/{recommended_config['version']}/models/{{GEMINI_MODEL}}:generateContent?key={{api_key}}\"")
         
     if failed_keys:
         logging.warning(f"\n⚠️  Clés non fonctionnelles : {failed_keys}")
@@ -145,6 +169,8 @@ def main():
         logging.error("\n❌ AUCUNE CLÉ FONCTIONNELLE")
         logging.error("   Le système ne pourra pas effectuer d'analyses fondamentales")
         logging.error("   Corrigez les clés API avant de continuer")
+    else:
+        logging.info("\n✅ AU MOINS UNE CLÉ FONCTIONNE - VOUS POUVEZ LANCER LE WORKFLOW")
     
     logging.info("="*60)
 
