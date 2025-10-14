@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V7.0 - SUPABASE + MÉMOIRE DB VÉRIFIÉE
+# MODULE: FUNDAMENTAL ANALYZER V7.1 - SUPABASE + API GEMINI CORRIGÉE
 # ==============================================================================
 
 import requests
@@ -31,8 +31,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# Configuration Gemini
-GEMINI_MODEL = "gemini-1.5-flash"
+# ✅ CONFIGURATION GEMINI CORRIGÉE
+GEMINI_MODEL = "gemini-1.5-flash-latest"
+GEMINI_API_VERSION = "v1"  # Changé de v1beta à v1
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class BRVMAnalyzer:
@@ -108,7 +109,7 @@ class BRVMAnalyzer:
             return None
 
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL - VÉRIFIÉ"""
+        """Charge la mémoire depuis PostgreSQL"""
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
         if not conn: 
@@ -117,7 +118,6 @@ class BRVMAnalyzer:
         
         try:
             with conn.cursor() as cur:
-                # Vérifier que la table existe
                 cur.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables 
@@ -131,14 +131,12 @@ class BRVMAnalyzer:
                     self.analysis_memory = set()
                     return
                 
-                # Charger tous les URLs déjà analysés
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
                 urls = cur.fetchall()
                 self.analysis_memory = {row[0] for row in urls}
-                
+            
             logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) chargée(s) depuis DB")
             
-            # Afficher quelques exemples pour vérification
             if self.analysis_memory:
                 sample_urls = list(self.analysis_memory)[:3]
                 logging.info(f"   📋 Exemples d'URLs en mémoire:")
@@ -161,7 +159,6 @@ class BRVMAnalyzer:
         
         try:
             with conn.cursor() as cur:
-                # Vérifier si l'URL existe déjà
                 cur.execute("""
                     SELECT id, analysis_summary FROM fundamental_analysis 
                     WHERE report_url = %s;
@@ -171,7 +168,6 @@ class BRVMAnalyzer:
                 if existing:
                     logging.info(f"    ⚠️  Rapport déjà en DB (ID: {existing[0]}), mise à jour...")
                 
-                # Insert ou Update
                 cur.execute("""
                     INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                     VALUES (%s, %s, %s, %s, %s) 
@@ -184,7 +180,6 @@ class BRVMAnalyzer:
                 inserted_id = cur.fetchone()[0]
                 conn.commit()
             
-            # Ajouter à la mémoire en RAM
             self.analysis_memory.add(report['url'])
             logging.info(f"    ✅ Sauvegardé dans PostgreSQL (ID: {inserted_id})")
             return True
@@ -199,7 +194,7 @@ class BRVMAnalyzer:
 
     def _configure_api_keys(self):
         """Charge les 22 clés API"""
-        for i in range(1, 23):  # 22 clés
+        for i in range(1, 23):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
@@ -209,18 +204,17 @@ class BRVMAnalyzer:
             return False
         
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées")
+        logging.info(f"📝 Modèle: {GEMINI_MODEL} | API Version: {GEMINI_API_VERSION}")
         return True
 
     def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
         """Analyse un PDF avec l'API Gemini + vérification mémoire"""
         pdf_url = report['url']
         
-        # VÉRIFICATION MÉMOIRE
         if pdf_url in self.analysis_memory:
             logging.info(f"    ⏭️  Déjà analysé (en mémoire), passage au suivant")
             return
         
-        # Gestion rate limit
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         
@@ -235,12 +229,12 @@ class BRVMAnalyzer:
             return
         
         api_key = self.api_keys[self.current_key_index]
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ URL CORRIGÉE
+        api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
             logging.info(f"    🤖 Analyse IA (clé #{self.current_key_index + 1}): {os.path.basename(pdf_url)}")
             
-            # Télécharger le PDF
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
             pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
@@ -285,7 +279,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
             
             if "erreur" not in analysis_text.lower():
-                # Sauvegarder dans PostgreSQL
                 if self._save_to_db(company_id, report, analysis_text):
                     self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
         
@@ -360,7 +353,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
         company_links = []
         
         try:
-            # Parcourir les pages
             for page_num in range(5):
                 page_url = f"{base_url}?page={page_num}"
                 logging.info(f"🔍 Navigation page {page_num}...")
@@ -396,7 +388,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             
             logging.info(f"📊 {len(company_links)} page(s) de sociétés à visiter")
             
-            # Visiter chaque page de société
             for company in company_links:
                 symbol = company['symbol']
                 logging.info(f"--- Collecte rapports pour {symbol} ---")
@@ -441,7 +432,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
     def run_and_get_results(self):
         """Fonction principale avec vérifications"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.0 - MÉMOIRE DB VÉRIFIÉE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.1 - API GEMINI CORRIGÉE)")
         logging.info("="*80)
         
         conn = None
@@ -449,16 +440,13 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if not self._configure_api_keys():
                 return {}, []
             
-            # Charger la mémoire depuis PostgreSQL (VÉRIFICATION)
             self._load_analysis_memory_from_db()
             logging.info(f"📊 Mémoire active: {len(self.analysis_memory)} rapport(s) déjà analysé(s)")
             
-            # Démarrer Selenium
             self.setup_selenium()
             if not self.driver: 
                 return {}, []
             
-            # Charger les IDs des sociétés
             conn = self.connect_to_db()
             if not conn: 
                 return {}, []
@@ -470,10 +458,8 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             
             self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
             
-            # Trouver tous les rapports
             all_reports = self._find_all_reports()
             
-            # Traiter chaque société
             total_analyzed = 0
             total_skipped = 0
             
@@ -485,7 +471,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                     logging.info(f"   ⏭️  Aucun rapport pour {symbol}")
                     continue
                 
-                # Filtrer les rapports récents (depuis 2024)
                 date_2024_start = datetime(2024, 1, 1).date()
                 recent_reports = [r for r in company_reports if r['date'] >= date_2024_start]
                 recent_reports.sort(key=lambda x: x['date'], reverse=True)
@@ -504,7 +489,6 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
             logging.info(f"📊 Rapports ignorés (déjà en DB): {total_skipped}")
             
-            # Récupérer les résultats depuis PostgreSQL
             conn = self.connect_to_db()
             if not conn: 
                 return {}, []
