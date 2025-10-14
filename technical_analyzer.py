@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER V7.0 FINAL - ÉCRITURE DANS COLONNES F-X
+# MODULE: TECHNICAL ANALYZER V8.0 FINAL - SUPABASE UNIQUEMENT
 # ==============================================================================
 
 import psycopg2
@@ -10,10 +10,6 @@ import warnings
 import os
 import logging
 import time
-import json
-import gspread
-from google.oauth2 import service_account
-from datetime import datetime
 
 warnings.filterwarnings('ignore')
 
@@ -25,8 +21,6 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
-GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
 # --- Connexion PostgreSQL ---
 def connect_to_db():
@@ -39,22 +33,6 @@ def connect_to_db():
         return conn
     except Exception as e:
         logging.error(f"❌ Erreur connexion DB: {e}")
-        return None
-
-# --- Authentification Google Sheets ---
-def authenticate_gsheets():
-    try:
-        if not GSPREAD_SERVICE_ACCOUNT_JSON:
-            return None
-        
-        creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
-        scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
-        logging.info("✅ Authentification Google Sheets réussie.")
-        return gc
-    except Exception as e:
-        logging.error(f"❌ Erreur authentification Google Sheets: {e}")
         return None
 
 # --- Calcul Moyennes Mobiles ---
@@ -161,92 +139,11 @@ def calculate_stochastic(df, price_col='price', k_period=20, d_period=5):
     df['stochastic_decision'] = df.apply(stochastic_decision, axis=1)
     return df
 
-# --- Écriture dans Google Sheets (Colonnes F-X) ---
-def write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
-    """Écrit l'analyse technique dans les colonnes F à X de la feuille existante"""
-    try:
-        worksheet = spreadsheet.worksheet(symbol)
-        
-        # Récupérer toutes les données existantes
-        all_values = worksheet.get_all_values()
-        
-        if len(all_values) <= 1:
-            logging.warning(f"   ⚠️  Feuille {symbol} vide ou sans données")
-            return False
-        
-        # Créer un mapping date -> numéro de ligne
-        date_to_row = {}
-        for idx, row in enumerate(all_values[1:], start=2):  # Ligne 2 = première donnée
-            if len(row) >= 2:
-                date_to_row[row[1]] = idx  # row[1] = colonne B (Date)
-        
-        # Préparer les mises à jour par lot
-        updates = []
-        
-        for _, data_row in df.iterrows():
-            date_str = data_row['trade_date'].strftime('%d/%m/%Y')
-            
-            if date_str not in date_to_row:
-                continue
-            
-            row_num = date_to_row[date_str]
-            
-            # Préparer les valeurs pour colonnes F à X (19 colonnes)
-            values = [
-                data_row.get('mm5', ''),                    # F
-                data_row.get('mm10', ''),                   # G
-                data_row.get('mm20', ''),                   # H
-                data_row.get('mm50', ''),                   # I
-                data_row.get('mm_decision', ''),            # J
-                data_row.get('bollinger_central', ''),      # K
-                data_row.get('bollinger_inferior', ''),     # L
-                data_row.get('bollinger_superior', ''),     # M
-                data_row.get('bollinger_decision', ''),     # N
-                data_row.get('macd_line', ''),              # O
-                data_row.get('signal_line', ''),            # P
-                data_row.get('histogram', ''),              # Q
-                data_row.get('macd_decision', ''),          # R
-                data_row.get('rs', ''),                     # S
-                data_row.get('rsi', ''),                    # T
-                data_row.get('rsi_decision', ''),           # U
-                data_row.get('stochastic_k', ''),           # V
-                data_row.get('stochastic_d', ''),           # W
-                data_row.get('stochastic_decision', '')     # X
-            ]
-            
-            # Convertir les valeurs en chaînes, remplacer NaN par vide
-            values = ['' if pd.isna(v) else (f"{v:.2f}" if isinstance(v, (int, float)) else str(v)) for v in values]
-            
-            # Plage F à X pour cette ligne
-            range_name = f"F{row_num}:X{row_num}"
-            updates.append({
-                'range': range_name,
-                'values': [values]
-            })
-        
-        if not updates:
-            logging.warning(f"   ⚠️  Aucune mise à jour pour {symbol}")
-            return False
-        
-        # Mise à jour par lot (batch update)
-        worksheet.batch_update(updates, value_input_option='USER_ENTERED')
-        
-        logging.info(f"   ✅ {len(updates)} ligne(s) mises à jour dans GSheet (colonnes F-X)")
-        return True
-    
-    except gspread.exceptions.WorksheetNotFound:
-        logging.warning(f"   ⚠️  Feuille '{symbol}' non trouvée")
-        return False
-    
-    except Exception as e:
-        logging.error(f"   ❌ Erreur GSheet pour {symbol}: {e}")
-        return False
-
 # --- Traitement par société ---
-def process_company(conn, gc, spreadsheet, company_id, symbol):
+def process_company(conn, company_id, symbol):
     logging.info(f"--- Traitement: {symbol} ---")
     
-    # Récupérer les données historiques
+    # Récupérer les données historiques depuis Supabase
     query = "SELECT id, trade_date, price FROM historical_data WHERE company_id = %s ORDER BY trade_date;"
     df = pd.read_sql(query, conn, params=(company_id,), index_col='id')
     
@@ -254,7 +151,7 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
         logging.warning(f"   ⚠️  Pas assez de données ({len(df)} lignes)")
         return 0
     
-    # Calcul des indicateurs
+    # Calcul des indicateurs techniques
     df = calculate_moving_averages(df)
     df = calculate_bollinger_bands(df)
     df = calculate_macd(df)
@@ -266,7 +163,7 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
     df_to_update.rename(columns={'id': 'historical_data_id'}, inplace=True)
     df_to_update = df_to_update.replace({np.nan: None})
     
-    # 1️⃣ ÉCRITURE DANS POSTGRESQL
+    # Écriture dans PostgreSQL (Supabase)
     cur = conn.cursor()
     update_count = 0
     
@@ -288,7 +185,8 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
                 macd_decision = EXCLUDED.macd_decision,
                 rsi = EXCLUDED.rsi, rsi_decision = EXCLUDED.rsi_decision, 
                 stochastic_k = EXCLUDED.stochastic_k, stochastic_d = EXCLUDED.stochastic_d, 
-                stochastic_decision = EXCLUDED.stochastic_decision;
+                stochastic_decision = EXCLUDED.stochastic_decision,
+                updated_at = CURRENT_TIMESTAMP;
         """)
         
         cur.execute(query, (
@@ -306,18 +204,13 @@ def process_company(conn, gc, spreadsheet, company_id, symbol):
     cur.close()
     logging.info(f"   ✅ PostgreSQL: {update_count} enregistrements")
     
-    # 2️⃣ ÉCRITURE DANS GOOGLE SHEETS (colonnes F-X)
-    if gc and spreadsheet:
-        if write_technical_to_gsheet_columns(gc, spreadsheet, symbol, df):
-            logging.info(f"   ✅ Google Sheets: colonnes F-X mises à jour")
-    
     time.sleep(0.3)
     return update_count
 
 # --- Fonction principale ---
 def run_technical_analysis():
     logging.info("="*80)
-    logging.info("📈 ÉTAPE 2: ANALYSE TECHNIQUE (V7.0 FINAL - COLONNES F-X)")
+    logging.info("📈 ÉTAPE 2: ANALYSE TECHNIQUE (SUPABASE UNIQUEMENT)")
     logging.info("="*80)
     
     start_time = time.time()
@@ -325,20 +218,9 @@ def run_technical_analysis():
     if not conn: 
         return
     
-    gc = authenticate_gsheets()
-    spreadsheet = None
-    
-    if gc:
-        try:
-            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        except Exception as e:
-            logging.error(f"❌ Erreur ouverture spreadsheet: {e}")
-    else:
-        logging.warning("⚠️  Google Sheets non disponible, PostgreSQL uniquement")
-    
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, symbol FROM companies;")
+        cur.execute("SELECT id, symbol FROM companies ORDER BY symbol;")
         companies = cur.fetchall()
         cur.close()
         
@@ -346,12 +228,12 @@ def run_technical_analysis():
         
         total_updates = 0
         for company_id, company_symbol in companies:
-            total_updates += process_company(conn, gc, spreadsheet, company_id, company_symbol)
+            total_updates += process_company(conn, company_id, company_symbol)
         
         elapsed = time.time() - start_time
         logging.info("\n" + "="*80)
         logging.info(f"✅ Analyse technique terminée en {elapsed:.2f}s")
-        logging.info(f"📊 Total: {total_updates} mises à jour")
+        logging.info(f"📊 Total: {total_updates} mises à jour dans Supabase")
         logging.info("="*80)
     
     except Exception as e:
