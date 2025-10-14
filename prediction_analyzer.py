@@ -1,6 +1,6 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER - ALGORITHME HYBRIDE (CORRIGÉ)
-# Prédiction sur 20 jours ouvrés (Mardi-Samedi)
+# MODULE: PREDICTION ANALYZER - ALGORITHME HYBRIDE (SUPABASE UNIQUEMENT)
+# Prédiction sur 20 jours ouvrés (Lundi-Vendredi)
 # ==============================================================================
 
 import psycopg2
@@ -9,9 +9,6 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import os
 import logging
-import json
-import gspread
-from google.oauth2 import service_account
 from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -22,8 +19,6 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
-GSPREAD_SERVICE_ACCOUNT_JSON = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
 # --- Connexion PostgreSQL ---
 def connect_to_db():
@@ -36,22 +31,6 @@ def connect_to_db():
         return conn
     except Exception as e:
         logging.error(f"❌ Erreur connexion DB: {e}")
-        return None
-
-# --- Authentification Google Sheets ---
-def authenticate_gsheets():
-    try:
-        if not GSPREAD_SERVICE_ACCOUNT_JSON:
-            return None
-        
-        creds_dict = json.loads(GSPREAD_SERVICE_ACCOUNT_JSON)
-        scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
-        logging.info("✅ Authentification Google Sheets réussie.")
-        return gc
-    except Exception as e:
-        logging.error(f"❌ Erreur authentification Google Sheets: {e}")
         return None
 
 # --- Génération des jours ouvrés (Lundi-Vendredi) ---
@@ -97,7 +76,7 @@ def hybrid_prediction(prices, dates):
     # Dernière valeur connue
     last_price = prices_100[-1]
     
-    # 🔧 CORRECTION : Récupérer la dernière date correctement
+    # Récupérer la dernière date correctement
     last_date_value = dates_100.iloc[-1]
     
     # Si c'est déjà un datetime.date, on l'utilise directement
@@ -203,50 +182,8 @@ def save_predictions_to_db(conn, company_id, symbol, prediction_data):
         conn.rollback()
         return False
 
-# --- Sauvegarde dans Google Sheets ---
-def save_predictions_to_gsheet(gc, spreadsheet, symbol, prediction_data):
-    """Sauvegarde les prédictions dans une feuille dédiée"""
-    try:
-        sheet_name = f"{symbol}_Predictions"
-        
-        # Créer ou ouvrir la feuille
-        try:
-            worksheet = spreadsheet.worksheet(sheet_name)
-            # Effacer le contenu existant
-            worksheet.clear()
-        except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=30, cols=6)
-        
-        # En-têtes
-        headers = ['Date', 'Prix Prédit', 'Borne Inférieure', 'Borne Supérieure', 'Confiance', 'Variation %']
-        
-        # Données
-        rows = [headers]
-        for i, pred_date in enumerate(prediction_data['dates']):
-            variation = ((prediction_data['predictions'][i] - prediction_data['last_price']) / 
-                        prediction_data['last_price'] * 100)
-            
-            rows.append([
-                pred_date.strftime('%d/%m/%Y'),
-                f"{prediction_data['predictions'][i]:.2f}",
-                f"{prediction_data['lower_bound'][i]:.2f}",
-                f"{prediction_data['upper_bound'][i]:.2f}",
-                prediction_data['confidence'],
-                f"{variation:.2f}%"
-            ])
-        
-        # Écrire toutes les données
-        worksheet.update('A1', rows, value_input_option='USER_ENTERED')
-        
-        logging.info(f"   ✅ Google Sheets: feuille {sheet_name} mise à jour")
-        return True
-    
-    except Exception as e:
-        logging.error(f"❌ Erreur sauvegarde GSheet prédictions pour {symbol}: {e}")
-        return False
-
 # --- Traitement par société ---
-def process_company_prediction(conn, gc, spreadsheet, company_id, symbol):
+def process_company_prediction(conn, company_id, symbol):
     """Génère et sauvegarde les prédictions pour une société"""
     logging.info(f"--- Prédiction: {symbol} ---")
     
@@ -283,10 +220,6 @@ def process_company_prediction(conn, gc, spreadsheet, company_id, symbol):
         # Sauvegarder dans PostgreSQL
         save_predictions_to_db(conn, company_id, symbol, prediction_data)
         
-        # Sauvegarder dans Google Sheets
-        if gc and spreadsheet:
-            save_predictions_to_gsheet(gc, spreadsheet, symbol, prediction_data)
-        
         return True
     
     except Exception as e:
@@ -296,21 +229,12 @@ def process_company_prediction(conn, gc, spreadsheet, company_id, symbol):
 # --- Fonction principale ---
 def run_prediction_analysis():
     logging.info("="*80)
-    logging.info("🔮 ÉTAPE 3: PRÉDICTIONS (ALGORITHME HYBRIDE - 20 JOURS OUVRÉS)")
+    logging.info("🔮 ÉTAPE 3: PRÉDICTIONS (ALGORITHME HYBRIDE - SUPABASE UNIQUEMENT)")
     logging.info("="*80)
     
     conn = connect_to_db()
     if not conn:
         return
-    
-    gc = authenticate_gsheets()
-    spreadsheet = None
-    
-    if gc:
-        try:
-            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        except Exception as e:
-            logging.error(f"❌ Erreur ouverture spreadsheet: {e}")
     
     try:
         # Récupérer toutes les sociétés
@@ -322,7 +246,7 @@ def run_prediction_analysis():
         
         success_count = 0
         for company_id, symbol in companies:
-            if process_company_prediction(conn, gc, spreadsheet, company_id, symbol):
+            if process_company_prediction(conn, company_id, symbol):
                 success_count += 1
         
         logging.info("\n" + "="*80)
