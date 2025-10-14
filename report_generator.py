@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V7.0 - SUPABASE UNIQUEMENT
+# MODULE: COMPREHENSIVE REPORT GENERATOR V7.1 - API GEMINI CORRIGÉE
 # 100 JOURS + PRÉDICTIONS
 # ==============================================================================
 
@@ -24,8 +24,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# Configuration Gemini
-GEMINI_MODEL = "gemini-1.5-flash"
+# ✅ CONFIGURATION GEMINI CORRIGÉE
+GEMINI_MODEL = "gemini-1.5-flash-latest"
+GEMINI_API_VERSION = "v1"  # Changé de v1beta à v1
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
@@ -37,7 +38,7 @@ class ComprehensiveReportGenerator:
 
     def _configure_api_keys(self):
         """Charge les 10 premières clés pour les rapports"""
-        for i in range(1, 11):  # 10 clés pour les rapports
+        for i in range(1, 11):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
@@ -47,6 +48,7 @@ class ComprehensiveReportGenerator:
             return False
         
         logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
+        logging.info(f"📝 Modèle: {GEMINI_MODEL} | API Version: {GEMINI_API_VERSION}")
         return True
 
     def _call_gemini_with_retry(self, prompt):
@@ -65,7 +67,8 @@ class ComprehensiveReportGenerator:
 
         while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+            # ✅ URL CORRIGÉE
+            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
             
             try:
                 self.request_timestamps.append(time.time())
@@ -260,13 +263,12 @@ Analyses:
         meta.add_run(f"Base de données : Supabase (PostgreSQL)")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        doc.add_paragraph()  # Espace
+        doc.add_paragraph()
         
         # Contenu pour chaque société
         for symbol, analyses in sorted(company_analyses.items()):
             nom_societe = analyses.get('nom_societe', symbol)
             
-            # En-tête société
             heading = doc.add_heading(f'{nom_societe} ({symbol})', level=1)
             heading.runs[0].font.color.rgb = RGBColor(0, 51, 102)
             
@@ -305,14 +307,12 @@ Analyses:
         if not self._configure_api_keys():
             logging.warning("⚠️  Génération sans clés API Gemini")
             
-        # Récupérer toutes les données depuis Supabase (100 jours)
         all_data = self._get_all_data_from_db()
         company_analyses = {}
 
         for symbol, data in all_data.items():
             logging.info(f"--- Génération synthèses IA: {symbol} ---")
             
-            # Prix actuel
             current_price = data['price_data']['price'].iloc[-1] if not data['price_data'].empty else 0
             
             company_analyses[symbol] = {
@@ -322,7 +322,6 @@ Analyses:
                 'fundamental_summary': self._summarize_fundamental_analysis(data['fundamental_summaries'])
             }
             
-            # Ajouter l'analyse des prédictions depuis Supabase
             df_predictions = self._get_predictions_from_db(symbol)
             if df_predictions is not None and not df_predictions.empty:
                 company_analyses[symbol]['predictions_analysis'] = self._analyze_predictions(
