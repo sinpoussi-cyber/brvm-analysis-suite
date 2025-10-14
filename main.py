@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORCHESTRATEUR PRINCIPAL - SUPABASE UNIQUEMENT (V4.0 FINAL)
+# ORCHESTRATEUR PRINCIPAL - SUPABASE UNIQUEMENT (V4.1 FINAL)
 # ==============================================================================
 
 import os
@@ -21,8 +21,9 @@ def main():
     logging.info("="*80)
     logging.info("🚀 BRVM ANALYSIS SUITE - SUPABASE UNIQUEMENT")
     logging.info("="*80)
-    logging.info("Version: 4.0 Final")
+    logging.info("Version: 4.1 Final (Corrections API Gemini + SQL)")
     logging.info("Base de données: Supabase (PostgreSQL)")
+    logging.info("Modèle IA: gemini-1.5-flash-latest")
     logging.info("="*80)
 
     # --- Étape 1 : Collecte des données (SUPABASE) ---
@@ -122,6 +123,7 @@ def main():
     logging.info("🎉 SUITE D'ANALYSE BRVM COMPLÈTE TERMINÉE")
     logging.info("="*80)
     logging.info("✅ Architecture : Supabase (PostgreSQL) uniquement")
+    logging.info("✅ Modèle IA : gemini-1.5-flash-latest (API v1)")
     logging.info("📊 Tables mises à jour :")
     logging.info("   • companies (sociétés cotées)")
     logging.info("   • historical_data (données de marché)")
