@@ -1,5 +1,5 @@
 # ==============================================================================
-# .gitignore pour BRVM Analysis Suite
+# .gitignore pour BRVM Analysis Suite (Version Supabase)
 # ==============================================================================
 
 # Fichiers de secrets et configuration locale
@@ -92,3 +92,9 @@ geckodriver
 *.backup
 temp/
 tmp/
+
+# Fichiers supprimés (plus de Google Sheets)
+sync_data_manager.py
+export_to_gsheet.py
+test_synchronization.py
+test_batch_optimization.py
