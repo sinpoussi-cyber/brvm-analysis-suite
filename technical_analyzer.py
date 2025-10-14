@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: TECHNICAL ANALYZER V8.0 FINAL - SUPABASE UNIQUEMENT
+# MODULE: TECHNICAL ANALYZER V8.1 FINAL - SUPABASE UNIQUEMENT
 # ==============================================================================
 
 import psycopg2
@@ -185,8 +185,7 @@ def process_company(conn, company_id, symbol):
                 macd_decision = EXCLUDED.macd_decision,
                 rsi = EXCLUDED.rsi, rsi_decision = EXCLUDED.rsi_decision, 
                 stochastic_k = EXCLUDED.stochastic_k, stochastic_d = EXCLUDED.stochastic_d, 
-                stochastic_decision = EXCLUDED.stochastic_decision,
-                updated_at = CURRENT_TIMESTAMP;
+                stochastic_decision = EXCLUDED.stochastic_decision;
         """)
         
         cur.execute(query, (
