@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V7.1 - SUPABASE + API GEMINI CORRIGÉE
+# MODULE: FUNDAMENTAL ANALYZER V7.2 - SUPABASE + API GEMINI CORRIGÉE
 # ==============================================================================
 
 import requests
@@ -31,9 +31,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI CORRIGÉE
-GEMINI_MODEL = "gemini-1.5-flash-latest"
-GEMINI_API_VERSION = "v1"  # Changé de v1beta à v1
+# ✅ CONFIGURATION GEMINI CORRIGÉE - Basé sur vos versions disponibles
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_VERSION = "v2beta"  # Changé pour correspondre à vos versions: v1, v2, v2beta, v2internal, v3, v3beta
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class BRVMAnalyzer:
@@ -229,7 +229,7 @@ class BRVMAnalyzer:
             return
         
         api_key = self.api_keys[self.current_key_index]
-        # ✅ URL CORRIGÉE
+        # ✅ URL CORRIGÉE avec v2beta
         api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
@@ -432,7 +432,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
     def run_and_get_results(self):
         """Fonction principale avec vérifications"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.1 - API GEMINI CORRIGÉE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.2 - API GEMINI V2BETA)")
         logging.info("="*80)
         
         conn = None
