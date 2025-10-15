@@ -208,12 +208,31 @@ class BRVMAnalyzer:
         return True
 
     def _analyze_pdf_with_direct_api(self, company_id, symbol, report):
-        """Analyse un PDF avec l'API Gemini + vérification mémoire"""
+        """Analyse un PDF avec l'API Gemini + vérification mémoire STRICTE"""
         pdf_url = report['url']
         
+        # ✅ VÉRIFICATION MÉMOIRE STRICTE - Arrêter immédiatement si déjà analysé
         if pdf_url in self.analysis_memory:
-            logging.info(f"    ⏭️  Déjà analysé (en mémoire), passage au suivant")
-            return
+            logging.info(f"    ⏭️  Déjà analysé: {os.path.basename(pdf_url)}")
+            return None  # Retourner None pour indiquer qu'on a sauté
+        
+        # ✅ DOUBLE VÉRIFICATION : Checker aussi dans la DB en temps réel
+        conn = self.connect_to_db()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM fundamental_analysis WHERE report_url = %s;", (pdf_url,))
+                    if cur.fetchone():
+                        logging.info(f"    ⏭️  Déjà en base: {os.path.basename(pdf_url)}")
+                        self.analysis_memory.add(pdf_url)  # Ajouter à la mémoire locale
+                        return None
+            except Exception as e:
+                logging.error(f"    ⚠️  Erreur vérification DB: {e}")
+            finally:
+                conn.close()
+        
+        # ✅ Le rapport n'a jamais été analysé, on procède
+        logging.info(f"    🆕 NOUVEAU rapport à analyser: {os.path.basename(pdf_url)}")
         
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
@@ -226,14 +245,14 @@ class BRVMAnalyzer:
         
         if self.current_key_index >= len(self.api_keys):
             logging.error("❌ Toutes les clés API épuisées")
-            return
+            return None
         
         api_key = self.api_keys[self.current_key_index]
         # ✅ URL CORRIGÉE avec v2beta
         api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         try:
-            logging.info(f"    🤖 Analyse IA (clé #{self.current_key_index + 1}): {os.path.basename(pdf_url)}")
+            logging.info(f"    🤖 Analyse IA (clé #{self.current_key_index + 1})")
             
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
@@ -270,8 +289,7 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if response.status_code == 429:
                 logging.warning(f"⚠️  Quota atteint pour clé #{self.current_key_index + 1}")
                 self.current_key_index += 1
-                self._analyze_pdf_with_direct_api(company_id, symbol, report)
-                return
+                return self._analyze_pdf_with_direct_api(company_id, symbol, report)
             
             response.raise_for_status()
             response_json = response.json()
@@ -281,12 +299,16 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if "erreur" not in analysis_text.lower():
                 if self._save_to_db(company_id, report, analysis_text):
                     self.newly_analyzed_reports.append(f"Rapport pour {symbol}:\n{analysis_text}\n")
+                    return True  # Succès
+            
+            return False
         
         except Exception as e:
             logging.error(f"    ❌ Erreur clé #{self.current_key_index + 1}: {e}")
             self.current_key_index += 1
             if self.current_key_index < len(self.api_keys):
-                self._analyze_pdf_with_direct_api(company_id, symbol, report)
+                return self._analyze_pdf_with_direct_api(company_id, symbol, report)
+            return False
 
     def setup_selenium(self):
         """Configuration Selenium"""
