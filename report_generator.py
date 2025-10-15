@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V7.2 - API GEMINI V2BETA
+# MODULE: COMPREHENSIVE REPORT GENERATOR V7.3 - 33 CLÉS API GEMINI V2BETA
 # 100 JOURS + PRÉDICTIONS
 # ==============================================================================
 
@@ -26,7 +26,7 @@ DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI CORRIGÉE - Basé sur vos versions disponibles
 GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_API_VERSION = "v2beta"  # Changé pour correspondre à vos versions: v1, v2, v2beta, v2internal, v3, v3beta
+GEMINI_API_VERSION = "v2beta"  # Compatible avec: v1, v2, v2beta, v2internal, v3, v3beta
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
@@ -37,8 +37,8 @@ class ComprehensiveReportGenerator:
         self.request_timestamps = []
 
     def _configure_api_keys(self):
-        """Charge les 10 premières clés pour les rapports"""
-        for i in range(1, 11):
+        """Charge les 15 premières clés pour les rapports (sur 33 disponibles)"""
+        for i in range(1, 16):  # Utiliser les 15 premières clés
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
@@ -47,7 +47,7 @@ class ComprehensiveReportGenerator:
             logging.warning("⚠️  Aucune clé API Gemini trouvée.")
             return False
         
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées (sur 33 disponibles).")
         logging.info(f"📝 Modèle: {GEMINI_MODEL} | API Version: {GEMINI_API_VERSION}")
         return True
 
@@ -260,7 +260,7 @@ Analyses:
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
         meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION}) | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL)")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 7.3")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -301,7 +301,7 @@ Analyses:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génère tous les rapports depuis Supabase"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (100 JOURS + PRÉDICTIONS)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V7.3 - 33 CLÉS DISPONIBLES)")
         logging.info("="*80)
 
         if not self._configure_api_keys():
