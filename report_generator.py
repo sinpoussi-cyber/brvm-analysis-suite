@@ -1,6 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V7.3 - 33 CLÉS API GEMINI V2BETA
-# 100 JOURS + PRÉDICTIONS
+# MODULE: COMPREHENSIVE REPORT GENERATOR V7.4 - API GEMINI CORRIGÉE
 # ==============================================================================
 
 import psycopg2
@@ -24,9 +23,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI CORRIGÉE - Basé sur vos versions disponibles
+# ✅ CONFIGURATION GEMINI CORRIGÉE
 GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_API_VERSION = "v2beta"  # Compatible avec: v1, v2, v2beta, v2internal, v3, v3beta
+GEMINI_API_VERSION = "v1beta"  # Changé pour plus de stabilité
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
@@ -37,25 +36,27 @@ class ComprehensiveReportGenerator:
         self.request_timestamps = []
 
     def _configure_api_keys(self):
-        """Charge les 15 premières clés pour les rapports (sur 33 disponibles)"""
-        for i in range(1, 16):  # Utiliser les 15 premières clés
+        """Charge les 15 premières clés pour les rapports"""
+        for i in range(1, 16):
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
-            if key: 
-                self.api_keys.append(key)
+            if key:
+                # ✅ Nettoyer la clé des espaces
+                self.api_keys.append(key.strip())
         
         if not self.api_keys:
             logging.warning("⚠️  Aucune clé API Gemini trouvée.")
             return False
         
-        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées (sur 33 disponibles).")
+        logging.info(f"✅ {len(self.api_keys)} clé(s) API Gemini chargées.")
         logging.info(f"📝 Modèle: {GEMINI_MODEL} | API Version: {GEMINI_API_VERSION}")
         return True
 
     def _call_gemini_with_retry(self, prompt):
-        """Appelle l'API Gemini avec gestion des erreurs et retry"""
+        """Appelle l'API Gemini - VERSION CORRIGÉE"""
         if not self.api_keys:
             return "Analyse IA non disponible (aucune clé API configurée)."
 
+        # Gestion du rate limiting
         now = time.time()
         self.request_timestamps = [ts for ts in self.request_timestamps if now - ts < 60]
         
@@ -67,11 +68,18 @@ class ComprehensiveReportGenerator:
 
         while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
-            # ✅ URL CORRIGÉE avec v2beta
-            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+            
+            # ✅ URL CORRIGÉE - Sans le paramètre key dans l'URL
+            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             try:
                 self.request_timestamps.append(time.time())
+                
+                # ✅ HEADERS CORRIGÉS - Utiliser x-goog-api-key
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                }
                 
                 request_body = {
                     "contents": [{
@@ -85,10 +93,22 @@ class ComprehensiveReportGenerator:
                     }
                 }
                 
-                response = requests.post(api_url, json=request_body, timeout=90)
+                response = requests.post(api_url, headers=headers, json=request_body, timeout=90)
 
+                # Gestion des erreurs
                 if response.status_code == 429:
                     logging.warning(f"⚠️  Quota atteint pour clé #{self.current_key_index + 1}")
+                    self.current_key_index += 1
+                    continue
+                
+                if response.status_code == 404:
+                    logging.error(f"❌ 404 Not Found - Problème avec l'URL de l'API")
+                    logging.error(f"   URL: {api_url}")
+                    self.current_key_index += 1
+                    continue
+                
+                if response.status_code == 403:
+                    logging.error(f"❌ 403 Forbidden - Clé API invalide ou permissions insuffisantes")
                     self.current_key_index += 1
                     continue
                 
@@ -96,11 +116,20 @@ class ComprehensiveReportGenerator:
                 response_json = response.json()
                 return response_json['candidates'][0]['content']['parts'][0]['text']
                 
+            except requests.exceptions.Timeout:
+                logging.error(f"❌ Timeout clé #{self.current_key_index + 1}")
+                self.current_key_index += 1
+            except requests.exceptions.RequestException as e:
+                logging.error(f"❌ Erreur requête clé #{self.current_key_index + 1}: {e}")
+                self.current_key_index += 1
+            except KeyError as e:
+                logging.error(f"❌ Erreur parsing réponse clé #{self.current_key_index + 1}: {e}")
+                self.current_key_index += 1
             except Exception as e:
-                logging.error(f"❌ Erreur clé #{self.current_key_index + 1}: {e}")
+                logging.error(f"❌ Erreur inattendue clé #{self.current_key_index + 1}: {e}")
                 self.current_key_index += 1
         
-        return "Erreur d'analyse : Quota API épuisé."
+        return "Erreur d'analyse : Toutes les clés API ont échoué."
 
     def _get_all_data_from_db(self):
         """Récupère les données sur 100 jours depuis Supabase"""
@@ -169,21 +198,30 @@ class ComprehensiveReportGenerator:
         if df_prices.empty or df_prices['price'].isnull().all():
             return "Données de prix insuffisantes."
         
-        data_string = df_prices.to_csv(index=False)
+        # Préparer un résumé des données
+        start_price = df_prices['price'].iloc[0]
+        end_price = df_prices['price'].iloc[-1]
+        variation = ((end_price - start_price) / start_price * 100)
+        max_price = df_prices['price'].max()
+        min_price = df_prices['price'].min()
+        
+        data_summary = f"""Prix début: {start_price:.2f} F CFA
+Prix fin: {end_price:.2f} F CFA
+Variation: {variation:.2f}%
+Plus haut: {max_price:.2f} F CFA
+Plus bas: {min_price:.2f} F CFA
+Nombre de jours: {len(df_prices)}"""
+        
         prompt = f"""Analyse l'évolution du cours de cette action sur les 100 derniers jours. 
 
 Fournis une analyse structurée avec :
 - **Tendance générale** (haussière, baissière, stable) sur les 100 jours
-- **Chiffres clés** :
-  - Prix début de période vs fin de période
-  - Variation en % sur les 100 jours
-  - Plus haut et plus bas atteints
-  - Volatilité observée
+- **Chiffres clés** : Variation, volatilité observée
 - **Phases marquantes** : Identifie 2-3 phases distinctes si présentes
 - **Dynamique récente** (30 derniers jours)
 
-Données (100 jours):
-{data_string}"""
+Résumé des données:
+{data_summary}"""
         
         return self._call_gemini_with_retry(prompt)
 
@@ -192,34 +230,40 @@ Données (100 jours):
         if df_predictions is None or df_predictions.empty:
             return "Aucune prédiction disponible."
         
-        first_pred = df_predictions.iloc[0]['predicted_price']
         last_pred = df_predictions.iloc[-1]['predicted_price']
         avg_pred = df_predictions['predicted_price'].mean()
-        
         change_percent = ((last_pred - current_price) / current_price * 100)
-        
-        data_string = df_predictions.to_csv(index=False)
         
         prompt = f"""Analyse ces prédictions de prix pour les 20 prochains jours ouvrables (Lundi-Vendredi).
 
 Prix actuel: {current_price:.2f} F CFA
 Prix prédit à J+20: {last_pred:.2f} F CFA
 Variation prévue: {change_percent:.2f}%
+Prix moyen prédit: {avg_pred:.2f} F CFA
 
 Fournis une analyse concise avec :
 - **Tendance prévue** (haussière, baissière, stable)
-- **Points clés** : Variation attendue, fourchette de prix, moments critiques
+- **Points clés** : Variation attendue, fourchette de prix
 - **Niveau de confiance** de la prédiction
-- **Recommandation** pour un investisseur (court terme)
-
-Données des prédictions:
-{data_string}"""
+- **Recommandation** pour un investisseur (court terme)"""
         
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_technical_indicators(self, series_indicators):
         """Analyse les indicateurs techniques avec IA"""
-        data_string = series_indicators.to_string()
+        # Extraire les décisions clés
+        mm_decision = series_indicators.get('mm_decision', 'N/A')
+        bollinger_decision = series_indicators.get('bollinger_decision', 'N/A')
+        macd_decision = series_indicators.get('macd_decision', 'N/A')
+        rsi_decision = series_indicators.get('rsi_decision', 'N/A')
+        stochastic_decision = series_indicators.get('stochastic_decision', 'N/A')
+        
+        indicators_summary = f"""Moyennes Mobiles: {mm_decision}
+Bandes de Bollinger: {bollinger_decision}
+MACD: {macd_decision}
+RSI: {rsi_decision}
+Stochastique: {stochastic_decision}"""
+        
         prompt = f"""Analyse ces indicateurs techniques (jour le plus récent).
 
 Pour chaque indicateur, fournis :
@@ -227,12 +271,18 @@ Pour chaque indicateur, fournis :
 - Un signal clair (Achat/Vente/Neutre)
 
 Indicateurs:
-{data_string}"""
+{indicators_summary}"""
         
         return self._call_gemini_with_retry(prompt)
 
     def _summarize_fundamental_analysis(self, summaries):
         """Synthétise les analyses fondamentales avec IA"""
+        if not summaries or summaries == "Aucune analyse fondamentale disponible.":
+            return summaries
+        
+        # Limiter la taille pour éviter de dépasser les limites
+        summary_preview = summaries[:3000] + "..." if len(summaries) > 3000 else summaries
+        
         prompt = f"""Synthétise ces analyses fondamentales en 3-4 points clés.
 
 Concentre-toi sur :
@@ -242,7 +292,7 @@ Concentre-toi sur :
 - Perspectives
 
 Analyses:
-{summaries}"""
+{summary_preview}"""
         
         return self._call_gemini_with_retry(prompt)
 
@@ -259,8 +309,9 @@ Analyses:
         # Métadonnées
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION}) | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 7.3")
+        meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION})\n")
+        meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 7.4")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -272,13 +323,13 @@ Analyses:
             heading = doc.add_heading(f'{nom_societe} ({symbol})', level=1)
             heading.runs[0].font.color.rgb = RGBColor(0, 51, 102)
             
-            # 1. Évolution du Cours (100 jours)
+            # 1. Évolution du Cours
             doc.add_heading('1. Évolution du Cours (100 derniers jours)', level=2)
             doc.add_paragraph(analyses.get('price_analysis', 'Analyse non disponible.'))
             
-            # 2. Prédictions (20 jours ouvrables)
+            # 2. Prédictions
             if 'predictions_analysis' in analyses:
-                doc.add_heading('2. Prédictions (20 prochains jours ouvrables Lun-Ven)', level=2)
+                doc.add_heading('2. Prédictions (20 prochains jours ouvrables)', level=2)
                 doc.add_paragraph(analyses['predictions_analysis'])
             
             # 3. Analyse Technique
@@ -301,7 +352,7 @@ Analyses:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génère tous les rapports depuis Supabase"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V7.3 - 33 CLÉS DISPONIBLES)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V7.4 - API CORRIGÉE)")
         logging.info("="*80)
 
         if not self._configure_api_keys():
@@ -322,6 +373,7 @@ Analyses:
                 'fundamental_summary': self._summarize_fundamental_analysis(data['fundamental_summaries'])
             }
             
+            # Ajouter l'analyse des prédictions si disponibles
             df_predictions = self._get_predictions_from_db(symbol)
             if df_predictions is not None and not df_predictions.empty:
                 company_analyses[symbol]['predictions_analysis'] = self._analyze_predictions(
