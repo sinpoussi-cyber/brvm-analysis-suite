@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V7.1 - API GEMINI CORRIGÉE
+# MODULE: COMPREHENSIVE REPORT GENERATOR V7.2 - API GEMINI V2BETA
 # 100 JOURS + PRÉDICTIONS
 # ==============================================================================
 
@@ -24,9 +24,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI CORRIGÉE
-GEMINI_MODEL = "gemini-1.5-flash-latest"
-GEMINI_API_VERSION = "v1"  # Changé de v1beta à v1
+# ✅ CONFIGURATION GEMINI CORRIGÉE - Basé sur vos versions disponibles
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_VERSION = "v2beta"  # Changé pour correspondre à vos versions: v1, v2, v2beta, v2internal, v3, v3beta
 REQUESTS_PER_MINUTE_LIMIT = 15
 
 class ComprehensiveReportGenerator:
@@ -67,7 +67,7 @@ class ComprehensiveReportGenerator:
 
         while self.current_key_index < len(self.api_keys):
             api_key = self.api_keys[self.current_key_index]
-            # ✅ URL CORRIGÉE
+            # ✅ URL CORRIGÉE avec v2beta
             api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
             
             try:
@@ -259,7 +259,7 @@ Analyses:
         # Métadonnées
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(f"Propulsé par {GEMINI_MODEL} | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
+        meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION}) | Analyse sur 100 jours | Prédictions 20 jours ouvrables (Lun-Ven)\n")
         meta.add_run(f"Base de données : Supabase (PostgreSQL)")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
