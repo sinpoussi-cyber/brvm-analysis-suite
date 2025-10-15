@@ -80,6 +80,17 @@ jobs:
           GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
           GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
           GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
+          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
+          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
+          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
+          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
+          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
+          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
+          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
+          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
+          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
+          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
         run: |
           echo "✅ Secrets configurés"
           echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
@@ -120,7 +131,7 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (33 Clés API)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -149,12 +160,23 @@ jobs:
           GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
           GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
           GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
+          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
+          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
+          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
+          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
+          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
+          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
+          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
+          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
+          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
+          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
         run: |
           echo "🚀 Démarrage de l'analyse fondamentale..."
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération des Rapports (100 jours + Prédictions)
+      - name: 📝 ÉTAPE 5 - Génération des Rapports (15 Clés API)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -171,6 +193,11 @@ jobs:
           GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
         run: |
           echo "🚀 Démarrage de la génération des rapports..."
           python report_generator.py
@@ -193,6 +220,7 @@ jobs:
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run #: ${{ github.run_number }}"
           echo "Base de données: Supabase (PostgreSQL)"
+          echo "Clés API Gemini: 33 clés disponibles"
           echo "═══════════════════════════════════════════════════════════"
           
           if [ -f "Rapport_Synthese_Investissement_BRVM_"*.docx ]; then
