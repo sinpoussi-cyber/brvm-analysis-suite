@@ -1,10 +1,11 @@
 # ==============================================================================
-# SCRIPT DE TEST - VÉRIFICATION DES CLÉS API GEMINI (VERSION CORRIGÉE V2)
+# SCRIPT DE TEST - VÉRIFICATION DES 33 CLÉS API GEMINI (VERSION 7.3)
 # ==============================================================================
 
 import os
 import requests
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -122,37 +123,46 @@ def test_gemini_api_key(api_key, key_number):
     return False, None
 
 def main():
-    logging.info("🔍 DÉMARRAGE DU TEST DES CLÉS API GEMINI")
-    logging.info("📋 Versions API disponibles: v1, v2, v2beta, v2internal, v3, v3beta\n")
+    logging.info("🔍 DÉMARRAGE DU TEST DES 33 CLÉS API GEMINI")
+    logging.info("📋 Versions API disponibles: v1, v2, v2beta, v2internal, v3, v3beta")
+    logging.info("📝 Version du script: 7.3\n")
     
     # Charger les clés depuis les variables d'environnement
     api_keys = []
-    for i in range(1, 23):  # Tester jusqu'à 22 clés
+    for i in range(1, 34):  # Tester jusqu'à 33 clés
         key = os.environ.get(f'GOOGLE_API_KEY_{i}')
         if key:
-            api_keys.append(key)
+            api_keys.append((i, key))
     
     if not api_keys:
         logging.error("❌ Aucune clé API trouvée dans les variables d'environnement")
         logging.error("   Vérifiez que GOOGLE_API_KEY_1, GOOGLE_API_KEY_2, etc. sont définis")
+        logging.error("\n💡 Pour définir les variables:")
+        logging.error("   1. Créez un fichier .env")
+        logging.error("   2. Ajoutez: export GOOGLE_API_KEY_1='votre_clé'")
+        logging.error("   3. Chargez: source .env")
         return
     
-    logging.info(f"📊 {len(api_keys)} clé(s) API trouvée(s)\n")
+    logging.info(f"📊 {len(api_keys)} clé(s) API trouvée(s) sur 33 possibles\n")
+    
+    if len(api_keys) < 33:
+        logging.warning(f"⚠️  Attention: Seulement {len(api_keys)} clés trouvées sur 33 attendues")
+        logging.warning(f"   Clés manquantes: {33 - len(api_keys)}")
+        logging.warning(f"   Pour performances optimales, configurez toutes les 33 clés\n")
     
     working_keys = []
     failed_keys = []
     
-    for idx, key in enumerate(api_keys, 1):
-        success, working_config = test_gemini_api_key(key, idx)
+    for key_num, key in api_keys:
+        success, working_config = test_gemini_api_key(key, key_num)
         
         if success:
-            working_keys.append((idx, working_config))
+            working_keys.append((key_num, working_config))
         else:
-            failed_keys.append(idx)
+            failed_keys.append(key_num)
         
-        if idx < len(api_keys):
+        if key_num < len(api_keys):
             logging.info("\n⏳ Pause de 2 secondes avant le test suivant...")
-            import time
             time.sleep(2)
     
     # Résumé final
@@ -161,12 +171,25 @@ def main():
     logging.info("="*60)
     logging.info(f"✅ Clés fonctionnelles : {len(working_keys)}/{len(api_keys)}")
     
+    # Statistiques de performance
+    if len(api_keys) == 33:
+        logging.info(f"🎯 Configuration optimale: 33/33 clés testées")
+    elif len(api_keys) >= 20:
+        logging.info(f"✅ Configuration bonne: {len(api_keys)}/33 clés testées")
+    elif len(api_keys) >= 10:
+        logging.info(f"⚠️  Configuration minimale: {len(api_keys)}/33 clés testées")
+    else:
+        logging.info(f"❌ Configuration insuffisante: {len(api_keys)}/33 clés testées")
+    
     if working_keys:
-        logging.info("\n🎉 Clés API fonctionnelles:")
-        for key_num, config in working_keys:
+        logging.info(f"\n🎉 Clés API fonctionnelles:")
+        for key_num, config in working_keys[:5]:  # Afficher les 5 premières
             logging.info(f"   • Clé #{key_num} : Modèle '{config['model']}' (API {config['version']})")
         
-        logging.info("\n💡 RECOMMANDATION:")
+        if len(working_keys) > 5:
+            logging.info(f"   ... et {len(working_keys) - 5} autres clés fonctionnelles")
+        
+        logging.info(f"\n💡 RECOMMANDATION:")
         recommended_config = working_keys[0][1]
         logging.info(f"   Modèle à utiliser : {recommended_config['model']}")
         logging.info(f"   Version API : {recommended_config['version']}")
@@ -178,23 +201,102 @@ def main():
         logging.info(f"\n📋 URL API:")
         logging.info(f"   https://generativelanguage.googleapis.com/{recommended_config['version']}/models/{recommended_config['model']}:generateContent?key={{api_key}}")
         
+        # Estimation de capacité
+        logging.info(f"\n📈 CAPACITÉ DE TRAITEMENT:")
+        logging.info(f"   • Requêtes/minute: {len(working_keys) * 15} req/min")
+        logging.info(f"   • Requêtes/heure: {len(working_keys) * 15 * 60:,} req/h")
+        logging.info(f"   • Requêtes/jour: {len(working_keys) * 1500:,} req/jour")
+        
+        if len(working_keys) >= 30:
+            logging.info(f"   🚀 Performance MAXIMALE - Capacité excellente!")
+        elif len(working_keys) >= 20:
+            logging.info(f"   ✅ Performance ÉLEVÉE - Capacité très bonne")
+        elif len(working_keys) >= 10:
+            logging.info(f"   ✔️  Performance STANDARD - Capacité suffisante")
+        else:
+            logging.info(f"   ⚠️  Performance LIMITÉE - Ajoutez plus de clés")
+    
     if failed_keys:
         logging.warning(f"\n⚠️  Clés non fonctionnelles : {failed_keys}")
-        logging.warning("\n🔧 ACTIONS CORRECTIVES:")
-        logging.warning("   1. Vérifiez que les clés sont créées sur: https://aistudio.google.com/app/apikey")
-        logging.warning("   2. Activez l'API 'Generative Language API' dans Google Cloud Console")
-        logging.warning("   3. Assurez-vous que les clés n'ont pas de restrictions d'API")
-        logging.warning("   4. Vérifiez que le quota n'est pas dépassé")
-        logging.warning("   5. Attendez quelques minutes après création de la clé")
+        logging.warning(f"\n🔧 ACTIONS CORRECTIVES:")
+        logging.warning(f"   1. Vérifiez que les clés sont créées sur: https://aistudio.google.com/app/apikey")
+        logging.warning(f"   2. Activez l'API 'Generative Language API' dans Google Cloud Console")
+        logging.warning(f"   3. Assurez-vous que les clés n'ont pas de restrictions d'API")
+        logging.warning(f"   4. Vérifiez que le quota n'est pas dépassé")
+        logging.warning(f"   5. Attendez quelques minutes après création de la clé")
+        logging.warning(f"\n   Pour recréer les clés en erreur:")
+        for key_num in failed_keys[:3]:  # Montrer les 3 premières
+            logging.warning(f"   - Clé #{key_num}: Supprimez et recréez sur Google AI Studio")
     
     if not working_keys:
-        logging.error("\n❌ AUCUNE CLÉ FONCTIONNELLE")
-        logging.error("   Le système ne pourra pas effectuer d'analyses fondamentales")
-        logging.error("   Corrigez les clés API avant de continuer")
+        logging.error(f"\n❌ AUCUNE CLÉ FONCTIONNELLE")
+        logging.error(f"   Le système ne pourra pas effectuer d'analyses fondamentales")
+        logging.error(f"   Corrigez les clés API avant de continuer")
+        logging.error(f"\n   Étapes de résolution:")
+        logging.error(f"   1. Vérifiez votre connexion Internet")
+        logging.error(f"   2. Allez sur https://aistudio.google.com/app/apikey")
+        logging.error(f"   3. Créez de nouvelles clés API")
+        logging.error(f"   4. Vérifiez que l'API Generative Language est activée")
+        logging.error(f"   5. Relancez ce test après 5 minutes")
     else:
-        logging.info("\n✅ AU MOINS UNE CLÉ FONCTIONNE - VOUS POUVEZ LANCER LE WORKFLOW")
+        percentage = (len(working_keys) / len(api_keys)) * 100
+        logging.info(f"\n✅ TAUX DE SUCCÈS : {percentage:.1f}%")
+        
+        if percentage == 100:
+            logging.info(f"🎉 PARFAIT ! Toutes les clés fonctionnent")
+            logging.info(f"✅ VOUS POUVEZ LANCER LE WORKFLOW GITHUB ACTIONS")
+        elif percentage >= 90:
+            logging.info(f"✅ EXCELLENT ! Presque toutes les clés fonctionnent")
+            logging.info(f"✅ VOUS POUVEZ LANCER LE WORKFLOW GITHUB ACTIONS")
+        elif percentage >= 70:
+            logging.info(f"✅ BIEN ! La majorité des clés fonctionnent")
+            logging.info(f"💡 Recommandation : Corrigez les clés en erreur pour performances optimales")
+            logging.info(f"✅ VOUS POUVEZ LANCER LE WORKFLOW GITHUB ACTIONS")
+        elif percentage >= 50:
+            logging.warning(f"⚠️  MOYEN ! Seulement {percentage:.0f}% des clés fonctionnent")
+            logging.warning(f"💡 Recommandation : Corrigez au moins 70% des clés avant de lancer")
+        else:
+            logging.error(f"❌ INSUFFISANT ! Moins de 50% des clés fonctionnent")
+            logging.error(f"❌ NE LANCEZ PAS LE WORKFLOW - Corrigez d'abord les clés")
     
-    logging.info("="*60)
+    # Informations complémentaires
+    logging.info(f"\n" + "="*60)
+    logging.info(f"📚 INFORMATIONS COMPLÉMENTAIRES")
+    logging.info(f"="*60)
+    logging.info(f"🔗 Ressources utiles:")
+    logging.info(f"   • Google AI Studio: https://aistudio.google.com/app/apikey")
+    logging.info(f"   • Documentation API: https://ai.google.dev/gemini-api/docs")
+    logging.info(f"   • Guide configuration: Voir CONFIGURATION_33_CLES.md")
+    
+    logging.info(f"\n💾 Configuration GitHub Secrets:")
+    logging.info(f"   Pour chaque clé fonctionnelle, créez un secret:")
+    logging.info(f"   Settings → Secrets and variables → Actions → New secret")
+    logging.info(f"   Name: GOOGLE_API_KEY_X (où X = 1 à 33)")
+    logging.info(f"   Value: [Votre clé API]")
+    
+    logging.info(f"\n⏭️  PROCHAINES ÉTAPES:")
+    if len(working_keys) >= len(api_keys) * 0.7:
+        logging.info(f"   1. ✅ Les clés sont prêtes")
+        logging.info(f"   2. Ajoutez-les dans GitHub Secrets")
+        logging.info(f"   3. Lancez le workflow GitHub Actions")
+        logging.info(f"   4. Vérifiez les logs de l'étape 4 (Analyse fondamentale)")
+    else:
+        logging.info(f"   1. ⚠️  Corrigez les clés en erreur: {failed_keys}")
+        logging.info(f"   2. Relancez ce test: python test_gemini_api.py")
+        logging.info(f"   3. Une fois >70% OK, ajoutez dans GitHub Secrets")
+        logging.info(f"   4. Lancez le workflow GitHub Actions")
+    
+    logging.info(f"\n" + "="*60)
+    
+    # Code de sortie
+    if len(working_keys) >= len(api_keys) * 0.7:
+        logging.info(f"✅ TEST RÉUSSI - Système prêt à déployer")
+        return 0
+    else:
+        logging.warning(f"⚠️  TEST PARTIEL - Corrections nécessaires")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    import sys
+    exit_code = main()
+    sys.exit(exit_code)
