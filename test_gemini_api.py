@@ -1,5 +1,5 @@
 # ==============================================================================
-# SCRIPT DE TEST - VÉRIFICATION DES CLÉS API GEMINI (VERSION CORRIGÉE)
+# SCRIPT DE TEST - VÉRIFICATION DES CLÉS API GEMINI (VERSION CORRIGÉE V2)
 # ==============================================================================
 
 import os
@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 def test_gemini_api_key(api_key, key_number):
     """
     Teste une clé API Gemini avec une requête simple
+    Basé sur les versions disponibles: v1, v2, v2beta, v2internal, v3, v3beta
     """
     logging.info(f"\n{'='*60}")
     logging.info(f"TEST DE LA CLÉ API #{key_number}")
@@ -20,37 +21,49 @@ def test_gemini_api_key(api_key, key_number):
     masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
     logging.info(f"Clé : {masked_key}")
     
-    # URLs à tester (dans l'ordre de priorité)
+    # URLs à tester (dans l'ordre de priorité basé sur VOS versions)
     test_urls = [
-        # ✅ Option 1 : Gemini 1.5 Flash Latest (RECOMMANDÉ - API v1)
+        # ✅ Option 1 : v2beta avec gemini-1.5-flash (RECOMMANDÉ)
         {
-            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
+            "url": f"https://generativelanguage.googleapis.com/v2beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash",
+            "version": "v2beta"
+        },
+        # Option 2 : v2beta avec gemini-1.5-flash-latest
+        {
+            "url": f"https://generativelanguage.googleapis.com/v2beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
             "model": "gemini-1.5-flash-latest",
-            "version": "v1"
+            "version": "v2beta"
         },
-        # Option 2 : Gemini 1.5 Pro (API v1)
+        # Option 3 : v3beta avec gemini-1.5-flash
         {
-            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={api_key}",
-            "model": "gemini-1.5-pro",
-            "version": "v1"
+            "url": f"https://generativelanguage.googleapis.com/v3beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash",
+            "version": "v3beta"
         },
-        # Option 3 : Gemini 1.5 Flash (API v1)
+        # Option 4 : v2 avec gemini-1.5-flash
+        {
+            "url": f"https://generativelanguage.googleapis.com/v2/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "model": "gemini-1.5-flash",
+            "version": "v2"
+        },
+        # Option 5 : v1 avec gemini-1.5-flash
         {
             "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}",
             "model": "gemini-1.5-flash",
             "version": "v1"
         },
-        # Option 4 : Gemini 1.5 Flash Latest (API v1beta - ancienne version)
+        # Option 6 : v1 avec gemini-pro (modèle plus ancien mais stable)
         {
-            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
-            "model": "gemini-1.5-flash-latest",
-            "version": "v1beta"
+            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}",
+            "model": "gemini-pro",
+            "version": "v1"
         },
-        # Option 5 : Gemini 1.5 Flash (API v1beta - ancienne version)
+        # Option 7 : v3 avec gemini-1.5-flash
         {
-            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            "url": f"https://generativelanguage.googleapis.com/v3/models/gemini-1.5-flash:generateContent?key={api_key}",
             "model": "gemini-1.5-flash",
-            "version": "v1beta"
+            "version": "v3"
         },
     ]
     
@@ -58,7 +71,11 @@ def test_gemini_api_key(api_key, key_number):
     test_request = {
         "contents": [{
             "parts": [{"text": "Dis bonjour en français"}]
-        }]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 50
+        }
     }
     
     headers = {"Content-Type": "application/json"}
@@ -71,7 +88,7 @@ def test_gemini_api_key(api_key, key_number):
         logging.info(f"\n  Test {idx}/{len(test_urls)} : Modèle '{model_name}' (API {api_version})")
         
         try:
-            response = requests.post(url, json=test_request, headers=headers, timeout=10)
+            response = requests.post(url, json=test_request, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 logging.info(f"    ✅ SUCCÈS ! Ce modèle fonctionne")
@@ -84,7 +101,7 @@ def test_gemini_api_key(api_key, key_number):
                     logging.info(f"    ⚠️  Réponse reçue mais format inattendu")
                     
             elif response.status_code == 404:
-                logging.warning(f"    ❌ 404 - Modèle non trouvé ou API non activée")
+                logging.warning(f"    ❌ 404 - Modèle non trouvé ou API version non activée")
                 
             elif response.status_code == 403:
                 logging.error(f"    ❌ 403 - Accès refusé. Vérifiez les permissions de la clé")
@@ -97,13 +114,16 @@ def test_gemini_api_key(api_key, key_number):
                 
         except requests.exceptions.Timeout:
             logging.error(f"    ❌ Timeout - Le serveur ne répond pas")
+        except requests.exceptions.ConnectionError:
+            logging.error(f"    ❌ Erreur de connexion")
         except Exception as e:
-            logging.error(f"    ❌ Erreur: {e}")
+            logging.error(f"    ❌ Erreur: {str(e)[:100]}")
     
     return False, None
 
 def main():
-    logging.info("🔍 DÉMARRAGE DU TEST DES CLÉS API GEMINI (VERSION CORRIGÉE)\n")
+    logging.info("🔍 DÉMARRAGE DU TEST DES CLÉS API GEMINI")
+    logging.info("📋 Versions API disponibles: v1, v2, v2beta, v2internal, v3, v3beta\n")
     
     # Charger les clés depuis les variables d'environnement
     api_keys = []
@@ -155,7 +175,8 @@ def main():
         logging.info(f"\n📝 Configuration à utiliser dans votre code Python:")
         logging.info(f"   GEMINI_MODEL = \"{recommended_config['model']}\"")
         logging.info(f"   GEMINI_API_VERSION = \"{recommended_config['version']}\"")
-        logging.info(f"   API_URL = \"https://generativelanguage.googleapis.com/{recommended_config['version']}/models/{{GEMINI_MODEL}}:generateContent?key={{api_key}}\"")
+        logging.info(f"\n📋 URL API:")
+        logging.info(f"   https://generativelanguage.googleapis.com/{recommended_config['version']}/models/{recommended_config['model']}:generateContent?key={{api_key}}")
         
     if failed_keys:
         logging.warning(f"\n⚠️  Clés non fonctionnelles : {failed_keys}")
@@ -164,6 +185,7 @@ def main():
         logging.warning("   2. Activez l'API 'Generative Language API' dans Google Cloud Console")
         logging.warning("   3. Assurez-vous que les clés n'ont pas de restrictions d'API")
         logging.warning("   4. Vérifiez que le quota n'est pas dépassé")
+        logging.warning("   5. Attendez quelques minutes après création de la clé")
     
     if not working_keys:
         logging.error("\n❌ AUCUNE CLÉ FONCTIONNELLE")
