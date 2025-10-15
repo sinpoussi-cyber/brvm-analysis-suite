@@ -193,8 +193,8 @@ class BRVMAnalyzer:
                 conn.close()
 
     def _configure_api_keys(self):
-        """Charge les 22 clés API"""
-        for i in range(1, 23):
+        """Charge les 33 clés API"""
+        for i in range(1, 34):  # De 1 à 33
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key: 
                 self.api_keys.append(key)
@@ -452,9 +452,9 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
         return all_reports
 
     def run_and_get_results(self):
-        """Fonction principale avec vérifications"""
+        """Fonction principale avec système de mémoire optimisé"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.2 - API GEMINI V2BETA)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.3 - MÉMOIRE OPTIMISÉE)")
         logging.info("="*80)
         
         conn = None
@@ -462,8 +462,14 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             if not self._configure_api_keys():
                 return {}, []
             
+            # ✅ CHARGEMENT MÉMOIRE AU DÉMARRAGE
             self._load_analysis_memory_from_db()
-            logging.info(f"📊 Mémoire active: {len(self.analysis_memory)} rapport(s) déjà analysé(s)")
+            logging.info(f"📊 Mémoire chargée: {len(self.analysis_memory)} rapport(s) déjà analysé(s)")
+            
+            if len(self.analysis_memory) > 0:
+                logging.info(f"   💡 Ces rapports seront automatiquement ignorés")
+            else:
+                logging.info(f"   💡 Première exécution - tous les rapports seront analysés")
             
             self.setup_selenium()
             if not self.driver: 
@@ -480,7 +486,18 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
             
             self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
             
+            # ✅ COLLECTE DES RAPPORTS
+            logging.info("\n🔍 Phase 1: Collecte des rapports sur le site BRVM...")
             all_reports = self._find_all_reports()
+            
+            # ✅ STATISTIQUES PRÉ-TRAITEMENT
+            total_reports_found = sum(len(reports) for reports in all_reports.values())
+            logging.info(f"\n📊 Statistiques de collecte:")
+            logging.info(f"   • Total rapports trouvés: {total_reports_found}")
+            logging.info(f"   • Sociétés avec rapports: {len(all_reports)}")
+            
+            # ✅ ANALYSE AVEC FILTRAGE INTELLIGENT
+            logging.info(f"\n🤖 Phase 2: Analyse des nouveaux rapports...")
             
             total_analyzed = 0
             total_skipped = 0
@@ -499,17 +516,34 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                 
                 logging.info(f"   📂 {len(recent_reports)} rapport(s) récent(s) trouvé(s)")
                 
+                # ✅ FILTRAGE INTELLIGENT : Séparer les rapports déjà analysés des nouveaux
+                already_analyzed = []
+                new_reports = []
+                
                 for report in recent_reports:
                     if report['url'] in self.analysis_memory:
-                        logging.info(f"    ⏭️  Déjà analysé: {os.path.basename(report['url'])}")
-                        total_skipped += 1
+                        already_analyzed.append(report)
                     else:
-                        self._analyze_pdf_with_direct_api(company_id, symbol, report)
+                        new_reports.append(report)
+                
+                logging.info(f"   ✅ Déjà analysés: {len(already_analyzed)}")
+                logging.info(f"   🆕 Nouveaux à analyser: {len(new_reports)}")
+                
+                # ✅ TRAITER UNIQUEMENT LES NOUVEAUX RAPPORTS
+                for report in new_reports:
+                    result = self._analyze_pdf_with_direct_api(company_id, symbol, report)
+                    if result is True:
                         total_analyzed += 1
+                    elif result is None:
+                        total_skipped += 1
+                
+                # Les rapports déjà analysés sont comptés à part
+                total_skipped += len(already_analyzed)
             
             logging.info("\n✅ Traitement terminé")
-            logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
+            logging.info(f"📊 Nouvelles analyses effectuées: {total_analyzed}")
             logging.info(f"📊 Rapports ignorés (déjà en DB): {total_skipped}")
+            logging.info(f"💾 Total dans la mémoire: {len(self.analysis_memory)} rapport(s)")
             
             conn = self.connect_to_db()
             if not conn: 
