@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V7.4 - CORRECTION API GEMINI
+# MODULE: FUNDAMENTAL ANALYZER V7.5 - VERSION COMPLÈTE CORRIGÉE
 # ==============================================================================
 
 import requests
@@ -33,7 +33,6 @@ DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI CORRIGÉE
 GEMINI_MODEL = "gemini-1.5-flash"
-# Utiliser v1beta qui est plus stable et largement supporté
 GEMINI_API_VERSION = "v1beta"
 REQUESTS_PER_MINUTE_LIMIT = 15
 
@@ -41,8 +40,52 @@ class BRVMAnalyzer:
     def __init__(self):
         self.societes_mapping = {
             'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
-            'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
-            # ... (garder tous les autres mappings)
+            'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci', 'palmci']},
+            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci', 'unilever']},
+            'SLBC': {'nom_rapport': 'SOLIBRA', 'alternatives': ['solibra ci', 'solibra']},
+            'SICC': {'nom_rapport': 'SICOR', 'alternatives': ['sicor ci', 'sicor']},
+            'SPHC': {'nom_rapport': 'SAPH', 'alternatives': ['saph ci', 'saph']},
+            'SCRC': {'nom_rapport': 'SUCRIVOIRE', 'alternatives': ['sucrivoire', 'sucre']},
+            'STBC': {'nom_rapport': 'SITAB', 'alternatives': ['sitab ci', 'sitab']},
+            'SGBC': {'nom_rapport': 'SOCIETE GENERALE', 'alternatives': ['sgci', 'societe generale ci', 'sg cote']},
+            'BICC': {'nom_rapport': 'BICI', 'alternatives': ['bici ci', 'bici cote']},
+            'NSBC': {'nom_rapport': 'NSIA BANQUE', 'alternatives': ['nsia ci', 'nsia banque ci']},
+            'ECOC': {'nom_rapport': 'ECOBANK CI', 'alternatives': ['ecobank cote', 'eco ci']},
+            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['boa ci', 'boa cote']},
+            'SIBC': {'nom_rapport': 'SIB', 'alternatives': ['sib ci', 'societe ivoirienne']},
+            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['boa bf', 'boa burkina']},
+            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['boa sn', 'boa senegal']},
+            'BOAM': {'nom_rapport': 'BANK OF AFRICA MALI', 'alternatives': ['boa ml', 'boa mali']},
+            'BOAN': {'nom_rapport': 'BANK OF AFRICA NIGER', 'alternatives': ['boa ng', 'boa niger']},
+            'BOAB': {'nom_rapport': 'BANK OF AFRICA BENIN', 'alternatives': ['boa bn', 'boa benin']},
+            'BICB': {'nom_rapport': 'BICI BENIN', 'alternatives': ['bici bn', 'bici benin']},
+            'CBIBF': {'nom_rapport': 'CORIS BANK', 'alternatives': ['coris banking', 'coris bf']},
+            'ETIT': {'nom_rapport': 'ECOBANK ETI', 'alternatives': ['eti', 'ecobank transnational']},
+            'ORGT': {'nom_rapport': 'ORAGROUP', 'alternatives': ['oragroup togo', 'ora tg']},
+            'SAFC': {'nom_rapport': 'SAFCA', 'alternatives': ['safca ci', 'saf ci']},
+            'SOGC': {'nom_rapport': 'SOGB', 'alternatives': ['sogb ci', 'societe generale burkina']},
+            'SNTS': {'nom_rapport': 'SONATEL', 'alternatives': ['sonatel sn', 'orange senegal']},
+            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange cote', 'oci']},
+            'ONTBF': {'nom_rapport': 'ONATEL', 'alternatives': ['onatel bf', 'onatel burkina']},
+            'TTLC': {'nom_rapport': 'TOTAL CI', 'alternatives': ['totalenergies ci', 'total cote']},
+            'TTLS': {'nom_rapport': 'TOTAL SN', 'alternatives': ['totalenergies sn', 'total senegal']},
+            'SHEC': {'nom_rapport': 'VIVO ENERGY', 'alternatives': ['shell ci', 'vivo ci']},
+            'CIEC': {'nom_rapport': 'CIE', 'alternatives': ['cie ci', 'compagnie ivoirienne']},
+            'CFAC': {'nom_rapport': 'CFAO MOTORS', 'alternatives': ['cfao ci', 'cfao']},
+            'PRSC': {'nom_rapport': 'TRACTAFRIC', 'alternatives': ['tractafric motors', 'tractafric ci']},
+            'SDSC': {'nom_rapport': 'BOLLORE', 'alternatives': ['africa global logistics', 'sdv ci']},
+            'ABJC': {'nom_rapport': 'SERVAIR', 'alternatives': ['servair abidjan', 'servair ci']},
+            'BNBC': {'nom_rapport': 'BERNABE', 'alternatives': ['bernabe ci']},
+            'NEIC': {'nom_rapport': 'NEI-CEDA', 'alternatives': ['nei ceda', 'neiceda']},
+            'UNXC': {'nom_rapport': 'UNIWAX', 'alternatives': ['uniwax ci']},
+            'LNBB': {'nom_rapport': 'LOTERIE BENIN', 'alternatives': ['loterie nationale benin']},
+            'CABC': {'nom_rapport': 'SICABLE', 'alternatives': ['sicable ci']},
+            'FTSC': {'nom_rapport': 'FILTISAC', 'alternatives': ['filtisac ci']},
+            'SDCC': {'nom_rapport': 'SODE', 'alternatives': ['sode ci']},
+            'SEMC': {'nom_rapport': 'EVIOSYS', 'alternatives': ['crown siem', 'eviosys packaging']},
+            'SIVC': {'nom_rapport': 'AIR LIQUIDE', 'alternatives': ['air liquide ci']},
+            'STAC': {'nom_rapport': 'SETAO', 'alternatives': ['setao ci']},
+            'SMBC': {'nom_rapport': 'SMB', 'alternatives': ['smb ci', 'societe miniere']}
         }
         self.driver = None
         self.session = requests.Session()
@@ -55,6 +98,7 @@ class BRVMAnalyzer:
         self.request_timestamps = []
 
     def connect_to_db(self):
+        """Connexion à PostgreSQL (Supabase)"""
         try:
             conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
@@ -133,6 +177,130 @@ class BRVMAnalyzer:
         finally:
             if conn: 
                 conn.close()
+
+    def setup_selenium(self):
+        """Configuration du driver Selenium avec Chrome headless"""
+        try:
+            logging.info("🌐 Configuration de Selenium...")
+            
+            chrome_options = Options()
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+            
+            seleniumwire_options = {
+                'verify_ssl': False,
+                'suppress_connection_errors': True
+            }
+            
+            self.driver = webdriver.Chrome(
+                options=chrome_options,
+                seleniumwire_options=seleniumwire_options
+            )
+            self.driver.set_page_load_timeout(30)
+            
+            logging.info("   ✅ Selenium configuré")
+            return True
+        
+        except Exception as e:
+            logging.error(f"❌ Erreur configuration Selenium: {e}")
+            self.driver = None
+            return False
+
+    def _normalize_text(self, text):
+        """Normalise le texte pour comparaison"""
+        if not text:
+            return ""
+        
+        # Supprimer les accents
+        text = ''.join(c for c in unicodedata.normalize('NFD', text) 
+                       if unicodedata.category(c) != 'Mn')
+        
+        # Mettre en minuscules et supprimer espaces multiples
+        text = ' '.join(text.lower().split())
+        
+        return text
+
+    def _find_all_reports(self):
+        """Trouve tous les rapports financiers sur le site BRVM"""
+        all_reports = defaultdict(list)
+        
+        try:
+            url = "https://www.brvm.org/fr/capitalisation-marche"
+            logging.info(f"   🔍 Accès à {url}")
+            
+            self.driver.get(url)
+            time.sleep(3)
+            
+            # Chercher les liens vers les pages de sociétés
+            company_links = []
+            try:
+                elements = self.driver.find_elements(By.TAG_NAME, 'a')
+                for elem in elements:
+                    href = elem.get_attribute('href')
+                    if href and '/societe/' in href:
+                        company_links.append(href)
+            except Exception as e:
+                logging.error(f"   ❌ Erreur recherche liens: {e}")
+            
+            company_links = list(set(company_links))
+            logging.info(f"   📊 {len(company_links)} page(s) de société trouvée(s)")
+            
+            # Parcourir chaque page de société
+            for idx, link in enumerate(company_links, 1):
+                try:
+                    logging.info(f"   📄 Analyse page {idx}/{len(company_links)}")
+                    self.driver.get(link)
+                    time.sleep(2)
+                    
+                    # Chercher les rapports financiers
+                    report_elements = self.driver.find_elements(By.TAG_NAME, 'a')
+                    
+                    for elem in report_elements:
+                        try:
+                            href = elem.get_attribute('href')
+                            text = elem.text.strip()
+                            
+                            if not href or not href.endswith('.pdf'):
+                                continue
+                            
+                            if any(keyword in text.lower() for keyword in 
+                                   ['rapport', 'financier', 'annuel', 'semestriel', 'trimestriel', 'etats financiers']):
+                                
+                                # Extraire la date du titre
+                                date_match = re.search(r'(20\d{2})', text)
+                                report_date = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
+                                
+                                # Identifier la société
+                                for symbol, info in self.societes_mapping.items():
+                                    nom_principal = self._normalize_text(info['nom_rapport'])
+                                    alternatives = [self._normalize_text(alt) for alt in info.get('alternatives', [])]
+                                    text_normalized = self._normalize_text(text)
+                                    
+                                    if nom_principal in text_normalized or any(alt in text_normalized for alt in alternatives):
+                                        all_reports[symbol].append({
+                                            'url': href,
+                                            'titre': text,
+                                            'date': report_date
+                                        })
+                                        break
+                        
+                        except Exception as e:
+                            continue
+                
+                except Exception as e:
+                    logging.error(f"   ⚠️  Erreur page {link}: {e}")
+                    continue
+            
+            logging.info(f"   ✅ Collecte terminée: {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
+            return all_reports
+        
+        except Exception as e:
+            logging.error(f"❌ Erreur recherche rapports: {e}")
+            return {}
 
     def _configure_api_keys(self):
         """Charge les 33 clés API"""
@@ -275,12 +443,10 @@ Si une information n'est pas trouvée, mentionne-le clairement. Sois factuel et 
                 return self._analyze_pdf_with_direct_api(company_id, symbol, report)
             return False
 
-    # ... (garder toutes les autres méthodes: setup_selenium, _normalize_text, etc.)
-
     def run_and_get_results(self):
         """Fonction principale avec système de mémoire optimisé"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.4 - API CORRIGÉE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V7.5 - VERSION COMPLÈTE)")
         logging.info("="*80)
         
         conn = None
