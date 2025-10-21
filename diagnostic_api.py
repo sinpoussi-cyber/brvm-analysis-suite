@@ -13,6 +13,20 @@ import json
 import re
 from datetime import datetime
 
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+
+
+def build_gemini_url(model: str) -> str:
+    """Retourne l'URL complète pour le modèle Gemini donné."""
+
+    clean_model = model.strip()
+    return (
+        f"https://generativelanguage.googleapis.com/"
+        f"{GEMINI_API_VERSION}/models/{clean_model}:generateContent"
+    )
+
 class Colors:
     """Codes couleur pour terminal"""
     HEADER = '\033[95m'
@@ -101,8 +115,8 @@ class GeminiDiagnostic:
         """Teste un endpoint API avec une clé"""
         key = key_data['key']
         
-        # Configuration correcte v7.4
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        # Utiliser le modèle et la version configurables
+        url = build_gemini_url(GEMINI_MODEL)
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": key
@@ -174,7 +188,7 @@ class GeminiDiagnostic:
         files_to_check = {
             'fundamental_analyzer.py': {
                 'required_strings': [
-                    'GEMINI_API_VERSION = "v1beta"',
+                    'GEMINI_API_VERSION =os.environ.get',
                     'x-goog-api-key',
                     'api_key.strip()'
                 ],
@@ -185,7 +199,7 @@ class GeminiDiagnostic:
             },
             'report_generator.py': {
                 'required_strings': [
-                    'GEMINI_API_VERSION = "v1beta"',
+                    'GEMINI_API_VERSION =os.environ.get',
                     'x-goog-api-key',
                     'api_key.strip()'
                 ],
@@ -293,7 +307,7 @@ class GeminiDiagnostic:
         
         # Tester la liste des modèles disponibles
         print_info("Test de l'accès aux modèles...")
-        url = "https://generativelanguage.googleapis.com/v1beta/models"
+        url =f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models"
         headers = {"x-goog-api-key": test_key}
         
         try:
