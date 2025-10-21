@@ -10,6 +10,9 @@ jobs:
   brvm-analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 180  # 3 heures max pour tout le processus
+    env:
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-1.5-flash-latest' }}
+      GEMINI_API_VERSION: ${{ secrets.GEMINI_API_VERSION || 'v1beta' }}
     
     steps:
       - name: 🔥 Checkout du code
@@ -61,6 +64,15 @@ jobs:
         run: |
           echo "✅ Secrets DB configurés"
           echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+        - name: 🧹 Réinitialisation de l'état des clés API
+        run: |
+          python - <<'PY'
+          from api_key_manager import cleanup_state_file
+
+          cleanup_state_file()
+          PY
+          
       
       - name: 📊 ÉTAPE 1 - Collecte de Données
         env:
