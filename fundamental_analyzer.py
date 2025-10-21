@@ -35,8 +35,18 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI
-GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_API_VERSION = "v1beta"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+
+
+def _build_gemini_url(model: str) -> str:
+    """Construit l'URL d'appel pour le modèle Gemini cible."""
+
+    clean_model = model.strip()
+    return (
+        f"https://generativelanguage.googleapis.com/"
+        f"{GEMINI_API_VERSION}/models/{clean_model}:generateContent"
+    )
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -358,7 +368,7 @@ Si une info manque, mentionne-le clairement."""
             # Gestion rate limit
             self.api_manager.handle_rate_limit()
             
-            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
+            api_url =_build_gemini_url(GEMINI_MODEL)
             
             headers = {
                 "Content-Type": "application/json",
@@ -400,7 +410,18 @@ Si une info manque, mentionne-le clairement."""
                     continue
                 
                 elif response.status_code == 404:
-                    logging.error(f"    ❌ 404 avec clé #{key_num}")
+                    error_detail = ""
+                    try:
+                        error_detail = response.json().get("error", {}).get("message", "")
+                    except ValueError:
+                        error_detail = response.text[:200]
+
+                    logging.error(
+                        "    ❌ 404 avec clé #%s - %s",
+                        key_num,
+                        error_detail or "Endpoint ou modèle introuvable",
+                    )
+                    self.api_manager.mark_key_exhausted(key_num)
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
