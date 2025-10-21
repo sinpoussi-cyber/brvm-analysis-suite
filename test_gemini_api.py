@@ -7,6 +7,20 @@ import requests
 import logging
 import time
 
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+
+
+def build_gemini_url(model: str, version: str) -> str:
+    """Construit l'URL pour appeler un modèle Gemini."""
+
+    clean_model = model.strip()
+    clean_version = version.strip()
+    return (
+        f"https://generativelanguage.googleapis.com/"
+        f"{clean_version}/models/{clean_model}:generateContent"
+    )
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 def test_gemini_api_key(api_key, key_number):
@@ -24,21 +38,28 @@ def test_gemini_api_key(api_key, key_number):
     
     # ✅ CONFIGURATION CORRIGÉE
     test_configs = [
-        # Option 1 : v1beta avec gemini-1.5-flash (RECOMMANDÉ)
+        # Option 1 :configuration par défaut basée sur les variables d'environnement
         {
-            "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-            "model": "gemini-1.5-flash",
-            "version": "v1beta",
-            "use_header": True  # Utiliser x-goog-api-key dans le header
+            "url": build_gemini_url(GEMINI_MODEL, GEMINI_API_VERSION),
+            "model": GEMINI_MODEL,
+            "version": GEMINI_API_VERSION,
+            "use_header": True,  # Utiliser x-goog-api-key dans le header
         },
-        # Option 2 : v1 avec gemini-1.5-flash
+        # Option 2 : v1beta avec gemini-1.5-flash-latest
         {
-            "url": "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+            "url": build_gemini_url("gemini-1.5-flash-latest", "v1beta"),
+            "model": "gemini-1.5-flash-latest",
+            "version": "v1beta",
+            "use_header": True,
+        },
+        # Option 3 : v1 avec gemini-1.5-flash
+        {
+            "url":build_gemini_url("gemini-1.5-flash", "v1"),
             "model": "gemini-1.5-flash",
             "version": "v1",
-            "use_header": True
+            "use_header": True,
         },
-        # Option 3 : v1 avec gemini-pro (plus ancien mais stable)
+        # Option 4 : v1 avec gemini-pro (plus ancien mais stable)
         {
             "url": "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
             "model": "gemini-pro",
@@ -91,7 +112,15 @@ def test_gemini_api_key(api_key, key_number):
                     logging.info(f"    ⚠️  Réponse reçue mais format inattendu: {e}")
                     
             elif response.status_code == 404:
-                logging.warning(f"    ❌ 404 - Modèle ou endpoint non trouvé")
+                                error_detail = ""
+                try:
+                    error_detail = response.json().get("error", {}).get("message", "")
+                except ValueError:
+                    error_detail = response.text[:200]
+
+                logging.warning("    ❌ 404 - Modèle ou endpoint non trouvé")
+                if error_detail:
+                    logging.warning(f"       Détail: {error_detail}")
                 logging.warning(f"       URL testée: {test_url[:80]}...")
                 
             elif response.status_code == 403:
@@ -177,8 +206,8 @@ def main():
         logging.info(f"   GEMINI_API_VERSION = \"{recommended['version']}\"")
         logging.info(f"\n📋 Format de requête:")
         logging.info(f"   URL: {recommended['url']}")
-        logging.info(f"   Headers: {{'Content-Type': 'application/json', 'x-goog-api-key': api_key}}")
-        
+        logging.info("   Headers: {'Content-Type': 'application/json', 'x-goog-api-key': '<YOUR_KEY>'}")
+
         logging.info(f"\n📈 CAPACITÉ:")
         logging.info(f"   • {len(working_keys) * 15} requêtes/minute")
         logging.info(f"   • {len(working_keys) * 1500:,} requêtes/jour")
