@@ -1,0 +1,254 @@
+name: BRVM Analysis Suite V9.0 - Gestion Intelligente des Clés API
+
+on:
+  schedule:
+    # Exécution TOUS LES JOURS à 06h00 GMT
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Permet lancement manuel
+
+jobs:
+  brvm-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 heures max pour tout le processus
+    
+    steps:
+      - name: 🔥 Checkout du code
+        uses: actions/checkout@v3
+      
+      - name: 🐍 Configuration Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🌐 Installation Chrome/Chromedriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          
+          # Installation Chrome
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          
+          # Installation Chromedriver
+          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+')
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
+          wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O chromedriver.zip
+          
+          unzip -q chromedriver.zip
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
+          rm -rf chromedriver-linux64 chromedriver.zip
+          
+          echo "✅ Chrome et Chromedriver installés"
+          google-chrome --version
+          chromedriver --version
+      
+      - name: 🔐 Configuration des secrets
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "✅ Secrets DB configurés"
+          echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+      
+      - name: 📊 ÉTAPE 1 - Collecte de Données
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Démarrage de la collecte de données..."
+          python data_collector.py
+          echo "✅ Collecte terminée"
+      
+      - name: 📈 ÉTAPE 2 - Analyse Technique
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Démarrage de l'analyse technique..."
+          python technical_analyzer.py
+          echo "✅ Analyse technique terminée"
+      
+      - name: 🔮 ÉTAPE 3 - Prédictions (20 par société)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Démarrage des prédictions..."
+          python prediction_analyzer.py
+          echo "✅ Prédictions terminées (20 jours par société)"
+      
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Toutes les clés disponibles)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          # Charger TOUTES les clés API disponibles (1-100)
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
+          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
+          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
+          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
+          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
+          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
+          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
+          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
+          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
+          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
+          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
+          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
+          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
+          GOOGLE_API_KEY_34: ${{ secrets.GOOGLE_API_KEY_34 }}
+          GOOGLE_API_KEY_35: ${{ secrets.GOOGLE_API_KEY_35 }}
+          GOOGLE_API_KEY_36: ${{ secrets.GOOGLE_API_KEY_36 }}
+          GOOGLE_API_KEY_37: ${{ secrets.GOOGLE_API_KEY_37 }}
+          GOOGLE_API_KEY_38: ${{ secrets.GOOGLE_API_KEY_38 }}
+          GOOGLE_API_KEY_39: ${{ secrets.GOOGLE_API_KEY_39 }}
+          GOOGLE_API_KEY_40: ${{ secrets.GOOGLE_API_KEY_40 }}
+          GOOGLE_API_KEY_41: ${{ secrets.GOOGLE_API_KEY_41 }}
+          GOOGLE_API_KEY_42: ${{ secrets.GOOGLE_API_KEY_42 }}
+          GOOGLE_API_KEY_43: ${{ secrets.GOOGLE_API_KEY_43 }}
+          GOOGLE_API_KEY_44: ${{ secrets.GOOGLE_API_KEY_44 }}
+          GOOGLE_API_KEY_45: ${{ secrets.GOOGLE_API_KEY_45 }}
+          GOOGLE_API_KEY_46: ${{ secrets.GOOGLE_API_KEY_46 }}
+          GOOGLE_API_KEY_47: ${{ secrets.GOOGLE_API_KEY_47 }}
+          GOOGLE_API_KEY_48: ${{ secrets.GOOGLE_API_KEY_48 }}
+          GOOGLE_API_KEY_49: ${{ secrets.GOOGLE_API_KEY_49 }}
+          GOOGLE_API_KEY_50: ${{ secrets.GOOGLE_API_KEY_50 }}
+        run: |
+          echo "🚀 Démarrage de l'analyse fondamentale..."
+          python fundamental_analyzer.py
+          echo "✅ Analyse fondamentale terminée"
+      
+      - name: 📝 ÉTAPE 5 - Génération des Rapports (Clés non épuisées)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          # Charger les mêmes clés (le système utilisera celles non épuisées)
+          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
+          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
+          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
+          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
+          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
+          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
+          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
+          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
+          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
+          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
+          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
+          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
+          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
+          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
+          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
+          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
+          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
+          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
+          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
+          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
+          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
+          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
+          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
+          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
+          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
+          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
+          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
+          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
+          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
+          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
+          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
+          GOOGLE_API_KEY_34: ${{ secrets.GOOGLE_API_KEY_34 }}
+          GOOGLE_API_KEY_35: ${{ secrets.GOOGLE_API_KEY_35 }}
+          GOOGLE_API_KEY_36: ${{ secrets.GOOGLE_API_KEY_36 }}
+          GOOGLE_API_KEY_37: ${{ secrets.GOOGLE_API_KEY_37 }}
+          GOOGLE_API_KEY_38: ${{ secrets.GOOGLE_API_KEY_38 }}
+          GOOGLE_API_KEY_39: ${{ secrets.GOOGLE_API_KEY_39 }}
+          GOOGLE_API_KEY_40: ${{ secrets.GOOGLE_API_KEY_40 }}
+          GOOGLE_API_KEY_41: ${{ secrets.GOOGLE_API_KEY_41 }}
+          GOOGLE_API_KEY_42: ${{ secrets.GOOGLE_API_KEY_42 }}
+          GOOGLE_API_KEY_43: ${{ secrets.GOOGLE_API_KEY_43 }}
+          GOOGLE_API_KEY_44: ${{ secrets.GOOGLE_API_KEY_44 }}
+          GOOGLE_API_KEY_45: ${{ secrets.GOOGLE_API_KEY_45 }}
+          GOOGLE_API_KEY_46: ${{ secrets.GOOGLE_API_KEY_46 }}
+          GOOGLE_API_KEY_47: ${{ secrets.GOOGLE_API_KEY_47 }}
+          GOOGLE_API_KEY_48: ${{ secrets.GOOGLE_API_KEY_48 }}
+          GOOGLE_API_KEY_49: ${{ secrets.GOOGLE_API_KEY_49 }}
+          GOOGLE_API_KEY_50: ${{ secrets.GOOGLE_API_KEY_50 }}
+        run: |
+          echo "🚀 Démarrage de la génération des rapports..."
+          python report_generator.py
+          echo "✅ Rapports générés"
+      
+      - name: 📤 Upload des Rapports générés
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapports-brvm-${{ github.run_number }}
+          path: |
+            Rapport_*.docx
+          retention-days: 90
+      
+      - name: 📊 Résumé de l'exécution
+        if: always()
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📈 RÉSUMÉ DE L'EXÉCUTION V9.0"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Run #: ${{ github.run_number }}"
+          echo "Base de données: Supabase (PostgreSQL)"
+          echo "Gestion: Clés API partagées intelligemment"
+          echo "═══════════════════════════════════════════════════════════"
+          
+          if [ -f "Rapport_Synthese_Investissement_BRVM_"*.docx ]; then
+            echo "✅ Rapports générés avec succès"
+            ls -lh Rapport_*.docx
+          else
+            echo "⚠️  Aucun rapport trouvé"
+          fi
+          
+          echo "═══════════════════════════════════════════════════════════"
