@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V9.0 - GESTION INTELLIGENTE DES CLÉS API
+# MODULE: FUNDAMENTAL ANALYZER V9.0 - VERSION FINALE
 # ==============================================================================
 
 import requests
@@ -15,10 +15,7 @@ import base64
 from collections import defaultdict
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import psycopg2
 
 # Import du gestionnaire de clés API
@@ -35,18 +32,8 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
-
-
-def _build_gemini_url(model: str) -> str:
-    """Construit l'URL d'appel pour le modèle Gemini cible."""
-
-    clean_model = model.strip()
-    return (
-        f"https://generativelanguage.googleapis.com/"
-        f"{GEMINI_API_VERSION}/models/{clean_model}:generateContent"
-    )
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_VERSION = "v1beta"
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -127,24 +114,10 @@ class BRVMAnalyzer:
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
         if not conn: 
-            logging.error("❌ Impossible de charger la mémoire")
             return
         
         try:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'fundamental_analysis'
-                    );
-                """)
-                table_exists = cur.fetchone()[0]
-                
-                if not table_exists:
-                    logging.warning("⚠️  Table 'fundamental_analysis' n'existe pas")
-                    self.analysis_memory = set()
-                    return
-                
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
                 urls = cur.fetchall()
                 self.analysis_memory = {row[0] for row in urls}
@@ -200,7 +173,6 @@ class BRVMAnalyzer:
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
             chrome_options.add_argument('user-agent=Mozilla/5.0')
             
             seleniumwire_options = {
@@ -289,7 +261,6 @@ class BRVMAnalyzer:
                         except:
                             continue
                 except Exception as e:
-                    logging.error(f"   ⚠️  Erreur page {link}: {e}")
                     continue
             
             logging.info(f"   ✅ {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
@@ -308,15 +279,13 @@ class BRVMAnalyzer:
         return None
 
     def _analyze_pdf_with_api(self, company_id, symbol, report):
-        """Analyse un PDF avec l'API Gemini - Gestion intelligente des clés"""
+        """Analyse un PDF avec l'API Gemini"""
         pdf_url = report['url']
         
-        # Vérification mémoire
         if pdf_url in self.analysis_memory:
             logging.info(f"    ⏭️  Déjà analysé")
             return None
         
-        # Double vérification DB
         conn = self.connect_to_db()
         if conn:
             try:
@@ -331,7 +300,6 @@ class BRVMAnalyzer:
         
         logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
         
-        # Télécharger le PDF une seule fois
         try:
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
@@ -347,11 +315,10 @@ Concentre-toi sur :
 - **Résultat Net** : Évolution et facteurs
 - **Dividendes** : Proposé, payé ou perspectives
 - **Performance Opérationnelle** : Rentabilité
-- **Perspectives** : Points clés pour investisseurs
+- **Perspectives** : Points clés
 
 Si une info manque, mentionne-le clairement."""
         
-        # Boucle de retry avec toutes les clés disponibles
         max_attempts = len(self.api_manager.get_available_keys())
         attempts = 0
         
@@ -365,10 +332,9 @@ Si une info manque, mentionne-le clairement."""
             key_num = self.current_api_key['number']
             logging.info(f"    🤖 Tentative avec clé #{key_num}")
             
-            # Gestion rate limit
             self.api_manager.handle_rate_limit()
             
-            api_url =_build_gemini_url(GEMINI_MODEL)
+            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             headers = {
                 "Content-Type": "application/json",
@@ -410,18 +376,7 @@ Si une info manque, mentionne-le clairement."""
                     continue
                 
                 elif response.status_code == 404:
-                    error_detail = ""
-                    try:
-                        error_detail = response.json().get("error", {}).get("message", "")
-                    except ValueError:
-                        error_detail = response.text[:200]
-
-                    logging.error(
-                        "    ❌ 404 avec clé #%s - %s",
-                        key_num,
-                        error_detail or "Endpoint ou modèle introuvable",
-                    )
-                    self.api_manager.mark_key_exhausted(key_num)
+                    logging.error(f"    ❌ 404 avec clé #{key_num}")
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
@@ -450,17 +405,15 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.0 - GESTION INTELLIGENTE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.0 - FINALE)")
         logging.info("="*80)
         
         conn = None
         try:
-            # Afficher les stats initiales
             stats = self.api_manager.get_statistics()
             logging.info(f"📊 Clés disponibles: {stats['available']}/{stats['total']}")
             
             self._load_analysis_memory_from_db()
-            logging.info(f"📊 Mémoire: {len(self.analysis_memory)} rapport(s) déjà analysé(s)")
             
             self.setup_selenium()
             if not self.driver: 
@@ -477,11 +430,8 @@ Si une info manque, mentionne-le clairement."""
             
             self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
             
-            logging.info("\n🔍 Phase 1: Collecte rapports...")
+            logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
-            
-            total_reports = sum(len(r) for r in all_reports.values())
-            logging.info(f"\n📊 {total_reports} rapport(s) trouvé(s)")
             
             logging.info(f"\n🤖 Phase 2: Analyse IA...")
             
@@ -516,7 +466,6 @@ Si une info manque, mentionne-le clairement."""
                 
                 total_skipped += len(already)
             
-            # Stats finales
             final_stats = self.api_manager.get_statistics()
             
             logging.info("\n✅ Traitement terminé")
