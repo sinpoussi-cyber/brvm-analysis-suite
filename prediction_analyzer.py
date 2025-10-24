@@ -1,6 +1,5 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER - ALGORITHME HYBRIDE (SUPABASE UNIQUEMENT)
-# Prédiction sur 20 jours ouvrés (Lundi-Vendredi)
+# MODULE: PREDICTION ANALYZER V9.0 - PRÉDICTIONS JOUR PAR JOUR (20 JOURS)
 # ==============================================================================
 
 import psycopg2
@@ -20,148 +19,133 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# --- Connexion PostgreSQL ---
 def connect_to_db():
     try:
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
             host=DB_HOST, port=DB_PORT
         )
-        logging.info("✅ Connexion PostgreSQL réussie.")
+        logging.info("✅ Connexion PostgreSQL réussie")
         return conn
     except Exception as e:
         logging.error(f"❌ Erreur connexion DB: {e}")
         return None
 
-# --- Génération des jours ouvrés (Lundi-Vendredi) ---
 def generate_business_days(start_date, num_days=20):
-    """
-    Génère les 20 prochains jours ouvrables (Lundi-Vendredi)
-    Standard international pour les prédictions boursières
-    """
+    """Génère les 20 prochains jours ouvrables (Lun-Ven)"""
     business_days = []
     current_date = start_date + timedelta(days=1)
     
     while len(business_days) < num_days:
-        # 0=Lundi, 1=Mardi, 2=Mercredi, 3=Jeudi, 4=Vendredi, 5=Samedi, 6=Dimanche
-        weekday = current_date.weekday()
-        
-        # Lundi(0) au Vendredi(4) - Jours ouvrables standard
-        if 0 <= weekday <= 4:
+        if 0 <= current_date.weekday() <= 4:  # Lun-Ven
             business_days.append(current_date)
-        
         current_date += timedelta(days=1)
     
     return business_days
 
-# --- Algorithme Hybride de Prédiction ---
-def hybrid_prediction(prices, dates):
+def hybrid_prediction_daily(prices, dates):
     """
-    Algorithme hybride combinant 3 méthodes :
-    1. Régression Linéaire (40%)
-    2. Tendance Récente (30%)
-    3. Moyenne Mobile Pondérée (30%)
+    Algorithme hybride générant une prédiction POUR CHAQUE jour
+    
+    Returns:
+        dict: 20 prédictions avec dates, prix, fourchettes, confiance
     """
     if len(prices) < 100:
-        logging.warning("Pas assez de données pour prédiction (< 100 jours)")
+        logging.warning("Pas assez de données (< 100 jours)")
         return None
     
-    # Prendre les 100 derniers jours
     prices_100 = prices[-100:].values
     dates_100 = dates[-100:]
     
-    # Convertir les dates en nombres (jours depuis le début)
     days = np.arange(len(prices_100)).reshape(-1, 1)
-    
-    # Dernière valeur connue
     last_price = prices_100[-1]
     
-    # Récupérer la dernière date correctement
     last_date_value = dates_100.iloc[-1]
-    
-    # Si c'est déjà un datetime.date, on l'utilise directement
     if isinstance(last_date_value, datetime):
         last_date = last_date_value.date()
     else:
-        last_date = last_date_value  # C'est déjà un date object
+        last_date = last_date_value
     
-    # Générer les 20 prochains jours ouvrés
     future_business_days = generate_business_days(last_date, num_days=20)
-    future_days = np.arange(len(prices_100), len(prices_100) + 20).reshape(-1, 1)
     
-    # ═══════════════════════════════════════════════════════════════════
-    # MÉTHODE 1 : RÉGRESSION LINÉAIRE (40%)
-    # ═══════════════════════════════════════════════════════════════════
-    model = LinearRegression()
-    model.fit(days, prices_100)
-    prediction_linear = model.predict(future_days).flatten()
+    daily_predictions = []
+    daily_lower_bounds = []
+    daily_upper_bounds = []
+    daily_confidence = []
     
-    # ═══════════════════════════════════════════════════════════════════
-    # MÉTHODE 2 : TENDANCE RÉCENTE (30%)
-    # Basée sur les 30 derniers jours
-    # ═══════════════════════════════════════════════════════════════════
-    prices_30 = prices_100[-30:]
-    trend_recent = (prices_30[-1] - prices_30[0]) / 30
-    prediction_trend = np.array([last_price + trend_recent * (i + 1) for i in range(20)])
+    for day_offset in range(1, 21):
+        future_day = np.array([[len(prices_100) + day_offset - 1]])
+        
+        # MÉTHODE 1 : Régression Linéaire (40%)
+        model = LinearRegression()
+        model.fit(days, prices_100)
+        pred_linear = model.predict(future_day)[0]
+        
+        # MÉTHODE 2 : Tendance Récente (30%)
+        prices_30 = prices_100[-30:]
+        trend = (prices_30[-1] - prices_30[0]) / 30
+        pred_trend = last_price + (trend * day_offset)
+        
+        # MÉTHODE 3 : Moyenne Mobile Pondérée (30%)
+        weights = np.exp(np.linspace(-1, 0, 30))
+        weights = weights / weights.sum()
+        weighted_avg = np.average(prices_30, weights=weights)
+        drift = (weighted_avg - prices_30[0]) / 30
+        pred_weighted = weighted_avg + (drift * day_offset)
+        
+        # PRÉDICTION FINALE
+        pred_final = (
+            0.4 * pred_linear +
+            0.3 * pred_trend +
+            0.3 * pred_weighted
+        )
+        
+        # INTERVALLE DE CONFIANCE
+        volatility = np.std(prices_30)
+        time_factor = 1 + (day_offset - 1) * 0.05
+        confidence_interval = volatility * time_factor
+        lower = pred_final - confidence_interval
+        upper = pred_final + confidence_interval
+        
+        # NIVEAU DE CONFIANCE
+        volatility_pct = (volatility / last_price) * 100
+        
+        if day_offset <= 5:
+            confidence = "Élevée" if volatility_pct < 3 else "Moyenne" if volatility_pct < 6 else "Faible"
+        elif day_offset <= 10:
+            confidence = "Moyenne" if volatility_pct < 3 else "Faible"
+        else:
+            confidence = "Faible" if volatility_pct > 4 else "Moyenne"
+        
+        daily_predictions.append(pred_final)
+        daily_lower_bounds.append(lower)
+        daily_upper_bounds.append(upper)
+        daily_confidence.append(confidence)
     
-    # ═══════════════════════════════════════════════════════════════════
-    # MÉTHODE 3 : MOYENNE MOBILE PONDÉRÉE (30%)
-    # Poids exponentiels (plus récent = plus important)
-    # ═══════════════════════════════════════════════════════════════════
-    weights = np.exp(np.linspace(-1, 0, 30))
-    weights = weights / weights.sum()  # Normaliser
-    weighted_avg = np.average(prices_30, weights=weights)
-    
-    # Extrapoler avec la moyenne pondérée
-    drift = weighted_avg - prices_30[0]
-    prediction_weighted = np.array([weighted_avg + drift * (i + 1) / 30 for i in range(20)])
-    
-    # ═══════════════════════════════════════════════════════════════════
-    # PRÉDICTION FINALE (Combinaison pondérée)
-    # ═══════════════════════════════════════════════════════════════════
-    prediction_final = (
-        0.4 * prediction_linear +
-        0.3 * prediction_trend +
-        0.3 * prediction_weighted
-    )
-    
-    # Calculer l'intervalle de confiance (± 5%)
-    confidence_interval = prediction_final * 0.05
-    lower_bound = prediction_final - confidence_interval
-    upper_bound = prediction_final + confidence_interval
-    
-    # Calculer la variation moyenne prévue
-    avg_change = (prediction_final[-1] - last_price) / last_price * 100
+    avg_change = ((daily_predictions[-1] - last_price) / last_price) * 100
     
     return {
         'dates': future_business_days,
-        'predictions': prediction_final,
-        'lower_bound': lower_bound,
-        'upper_bound': upper_bound,
+        'predictions': daily_predictions,
+        'lower_bound': daily_lower_bounds,
+        'upper_bound': daily_upper_bounds,
+        'confidence_per_day': daily_confidence,
         'last_price': last_price,
         'avg_change_percent': avg_change,
-        'confidence': 'Moyenne' if abs(avg_change) < 5 else 'Faible' if abs(avg_change) > 10 else 'Élevée'
+        'overall_confidence': 'Moyenne' if abs(avg_change) < 5 else 'Faible'
     }
 
-# --- Sauvegarde dans PostgreSQL ---
 def save_predictions_to_db(conn, company_id, symbol, prediction_data):
-    """Sauvegarde les prédictions dans la table predictions"""
+    """Sauvegarde les 20 prédictions dans PostgreSQL"""
     try:
         with conn.cursor() as cur:
-            # Supprimer les anciennes prédictions pour cette société
             cur.execute("DELETE FROM predictions WHERE company_id = %s", (company_id,))
             
-            # Insérer les nouvelles prédictions
             for i, pred_date in enumerate(prediction_data['dates']):
                 cur.execute("""
                     INSERT INTO predictions (
-                        company_id, 
-                        prediction_date, 
-                        predicted_price, 
-                        lower_bound, 
-                        upper_bound,
-                        confidence_level,
-                        created_at
+                        company_id, prediction_date, predicted_price, 
+                        lower_bound, upper_bound, confidence_level, created_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                 """, (
@@ -170,25 +154,23 @@ def save_predictions_to_db(conn, company_id, symbol, prediction_data):
                     float(prediction_data['predictions'][i]),
                     float(prediction_data['lower_bound'][i]),
                     float(prediction_data['upper_bound'][i]),
-                    prediction_data['confidence']
+                    prediction_data['confidence_per_day'][i]
                 ))
             
             conn.commit()
-            logging.info(f"   ✅ PostgreSQL: 20 prédictions sauvegardées pour {symbol}")
+            logging.info(f"   ✅ 20 prédictions sauvegardées pour {symbol}")
             return True
     
     except Exception as e:
-        logging.error(f"❌ Erreur sauvegarde prédictions DB pour {symbol}: {e}")
+        logging.error(f"❌ Erreur sauvegarde {symbol}: {e}")
         conn.rollback()
         return False
 
-# --- Traitement par société ---
 def process_company_prediction(conn, company_id, symbol):
     """Génère et sauvegarde les prédictions pour une société"""
     logging.info(f"--- Prédiction: {symbol} ---")
     
     try:
-        # Récupérer les 100 derniers jours de données
         query = """
             SELECT trade_date, price 
             FROM historical_data 
@@ -199,37 +181,31 @@ def process_company_prediction(conn, company_id, symbol):
         df = pd.read_sql(query, conn, params=(company_id,))
         
         if len(df) < 100:
-            logging.warning(f"   ⚠️  Pas assez de données ({len(df)} jours < 100)")
+            logging.warning(f"   ⚠️  Données insuffisantes ({len(df)} jours)")
             return False
         
-        # Inverser pour avoir du plus ancien au plus récent
         df = df.iloc[::-1].reset_index(drop=True)
-        
-        # Générer les prédictions
-        prediction_data = hybrid_prediction(df['price'], df['trade_date'])
+        prediction_data = hybrid_prediction_daily(df['price'], df['trade_date'])
         
         if prediction_data is None:
             return False
         
-        # Afficher un résumé
         logging.info(f"   📊 Prix actuel: {prediction_data['last_price']:.2f} F CFA")
-        logging.info(f"   📊 Prix prédit J+20: {prediction_data['predictions'][-1]:.2f} F CFA")
-        logging.info(f"   📊 Variation prévue: {prediction_data['avg_change_percent']:.2f}%")
-        logging.info(f"   📊 Confiance: {prediction_data['confidence']}")
+        logging.info(f"   📊 J+1: {prediction_data['predictions'][0]:.2f} F CFA ({prediction_data['confidence_per_day'][0]})")
+        logging.info(f"   📊 J+10: {prediction_data['predictions'][9]:.2f} F CFA ({prediction_data['confidence_per_day'][9]})")
+        logging.info(f"   📊 J+20: {prediction_data['predictions'][-1]:.2f} F CFA ({prediction_data['confidence_per_day'][-1]})")
+        logging.info(f"   📊 Variation totale: {prediction_data['avg_change_percent']:.2f}%")
         
-        # Sauvegarder dans PostgreSQL
         save_predictions_to_db(conn, company_id, symbol, prediction_data)
-        
         return True
     
     except Exception as e:
-        logging.error(f"❌ Erreur prédiction {symbol}: {e}")
+        logging.error(f"❌ Erreur {symbol}: {e}")
         return False
 
-# --- Fonction principale ---
 def run_prediction_analysis():
     logging.info("="*80)
-    logging.info("🔮 ÉTAPE 3: PRÉDICTIONS (ALGORITHME HYBRIDE - SUPABASE UNIQUEMENT)")
+    logging.info("🔮 ÉTAPE 3: PRÉDICTIONS (V9.0 - 20 PRÉDICTIONS/SOCIÉTÉ)")
     logging.info("="*80)
     
     conn = connect_to_db()
@@ -237,7 +213,6 @@ def run_prediction_analysis():
         return
     
     try:
-        # Récupérer toutes les sociétés
         with conn.cursor() as cur:
             cur.execute("SELECT id, symbol FROM companies ORDER BY symbol;")
             companies = cur.fetchall()
@@ -252,10 +227,11 @@ def run_prediction_analysis():
         logging.info("\n" + "="*80)
         logging.info(f"✅ Prédictions terminées")
         logging.info(f"📊 Succès: {success_count}/{len(companies)} sociétés")
+        logging.info(f"📊 Total prédictions: {success_count * 20} (20 par société)")
         logging.info("="*80)
     
     except Exception as e:
-        logging.error(f"❌ Erreur critique: {e}", exc_info=True)
+        logging.error(f"❌ Erreur: {e}", exc_info=True)
     finally:
         if conn:
             conn.close()
