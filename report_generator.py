@@ -1,5 +1,11 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V9.0 - VERSION FINALE
+# MODULE: COMPREHENSIVE REPORT GENERATOR V9.1 - VERSION CORRIGÉE
+# ==============================================================================
+# CORRECTIONS:
+# - Meilleure gestion des réponses API vides
+# - Validation structure JSON de réponse
+# - Gestion explicite des timeouts
+# - Retry logic améliorée
 # ==============================================================================
 
 import psycopg2
@@ -40,6 +46,13 @@ class ComprehensiveReportGenerator:
         return None
 
     def _call_gemini_with_retry(self, prompt):
+        """
+        Appel API Gemini avec retry - VERSION CORRIGÉE
+        CORRECTIONS:
+        - Validation complète de la structure de réponse
+        - Gestion des réponses vides
+        - Meilleur logging des erreurs
+        """
         available_keys = self.api_manager.get_available_keys()
         
         if not available_keys:
@@ -75,34 +88,109 @@ class ComprehensiveReportGenerator:
             }
             
             try:
-                response = requests.post(api_url, headers=headers, json=request_body, timeout=90)
+                response = requests.post(
+                    api_url, 
+                    headers=headers, 
+                    json=request_body, 
+                    timeout=90
+                )
 
                 if response.status_code == 200:
-                    return response.json()['candidates'][0]['content']['parts'][0]['text']
+                    try:
+                        response_json = response.json()
+                        
+                        # ✅ CORRECTION: Validation complète de la structure
+                        if not response_json:
+                            logging.error(f"    ❌ Réponse JSON vide (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        if 'candidates' not in response_json:
+                            logging.error(f"    ❌ Pas de 'candidates' dans réponse (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        candidates = response_json['candidates']
+                        if not candidates or len(candidates) == 0:
+                            logging.error(f"    ❌ Liste candidates vide (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        candidate = candidates[0]
+                        if 'content' not in candidate:
+                            logging.error(f"    ❌ Pas de 'content' dans candidate (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        content = candidate['content']
+                        if 'parts' not in content or not content['parts']:
+                            logging.error(f"    ❌ Pas de 'parts' dans content (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        text = content['parts'][0].get('text', '')
+                        
+                        if not text or len(text.strip()) == 0:
+                            logging.error(f"    ❌ Texte vide dans réponse (clé #{key_num})")
+                            self.api_manager.move_to_next_key()
+                            attempts += 1
+                            continue
+                        
+                        # Succès !
+                        return text
+                        
+                    except (KeyError, IndexError, TypeError) as e:
+                        logging.error(f"    ❌ Erreur parsing JSON (clé #{key_num}): {e}")
+                        logging.error(f"    Réponse brute: {str(response_json)[:200]}")
+                        self.api_manager.move_to_next_key()
+                        attempts += 1
+                        continue
                 
                 elif response.status_code == 429:
+                    logging.warning(f"    ⚠️  Quota épuisé (clé #{key_num})")
                     self.api_manager.mark_key_exhausted(key_num)
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
                 
                 elif response.status_code in [404, 403]:
+                    logging.error(f"    ❌ Erreur {response.status_code} (clé #{key_num})")
                     self.api_manager.mark_key_exhausted(key_num)
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
                 
                 else:
+                    logging.error(f"    ❌ Erreur {response.status_code} (clé #{key_num})")
+                    logging.error(f"    Réponse: {response.text[:200]}")
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
-                    
-            except Exception as e:
-                logging.error(f"❌ Exception clé #{key_num}: {e}")
+            
+            except requests.exceptions.Timeout:
+                logging.error(f"    ⏱️  Timeout (clé #{key_num})")
                 self.api_manager.move_to_next_key()
                 attempts += 1
+                continue
+                
+            except requests.exceptions.ConnectionError as e:
+                logging.error(f"    ❌ Erreur connexion (clé #{key_num}): {e}")
+                self.api_manager.move_to_next_key()
+                attempts += 1
+                continue
+                
+            except Exception as e:
+                logging.error(f"    ❌ Exception (clé #{key_num}): {e}")
+                self.api_manager.move_to_next_key()
+                attempts += 1
+                continue
         
-        return "Erreur d'analyse : Toutes les clés API ont échoué."
+        return "Erreur d'analyse : Toutes les tentatives ont échoué."
 
     def _get_all_data_from_db(self):
         logging.info("📂 Récupération des données (100 derniers jours)...")
@@ -312,7 +400,7 @@ Analyses:
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
         meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION})\n")
         meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.0")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.1")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -349,7 +437,7 @@ Analyses:
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.0 - FINALE)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.1 - CORRIGÉE)")
         logging.info("="*80)
 
         stats = self.api_manager.get_statistics()
