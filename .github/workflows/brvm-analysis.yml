@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V9.0 - 30 Clés API
+name: BRVM Analysis Suite V9.1 - 30 Clés API (CORRIGÉ)
 
 on:
   schedule:
@@ -26,26 +26,35 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🌐 Installation Chrome/Chromedriver
+      - name: 🌐 Installation Chrome/Chromedriver (MÉTHODE CORRIGÉE)
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip
           
-          # Installation de Chrome
-          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
+          # ✅ CORRECTION: Installation Chrome (méthode moderne)
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
           
           # Installation de Chromedriver
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+')
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
-          wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O chromedriver.zip
+          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
+          CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1)
+          
+          # Télécharger Chromedriver compatible
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
+          wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR_VERSION}" -O version.txt && \
+          CHROMEDRIVER_VERSION=$(cat version.txt) && \
+          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" -O chromedriver.zip
           
           unzip -q chromedriver.zip
-          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          if [ -d "chromedriver-linux64" ]; then
+            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          else
+            sudo mv chromedriver /usr/local/bin/
+          fi
           sudo chmod +x /usr/local/bin/chromedriver
-          rm -rf chromedriver-linux64 chromedriver.zip
+          
+          # Nettoyage
+          rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
           
           echo "✅ Chrome et Chromedriver installés"
           google-chrome --version
@@ -61,6 +70,7 @@ jobs:
         run: |
           echo "✅ Secrets DB configurés"
           echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Version: 9.1 (Corrigée)"
           echo "Nombre de clés API: 30"
       
       - name: 📊 ÉTAPE 1 - Collecte de Données
@@ -198,7 +208,7 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 RÉSUMÉ DE L'EXÉCUTION V9.0 (30 CLÉS API)"
+          echo "📈 RÉSUMÉ DE L'EXÉCUTION V9.1 (30 CLÉS API - CORRIGÉE)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run #: ${{ github.run_number }}"
@@ -216,8 +226,9 @@ jobs:
           fi
           
           echo "═══════════════════════════════════════════════════════════"
-          echo "📊 CAPACITÉ AVEC 30 CLÉS:"
-          echo "   • Analyse fondamentale: ~15-20 rapports/exécution"
-          echo "   • Génération rapports: 46 sociétés garanties"
-          echo "   • Marge de sécurité: Excellente"
+          echo "📊 CORRECTIONS APPLIQUÉES:"
+          echo "   • Installation Chrome modernisée"
+          echo "   • Selenium-wire v5.x compatible"
+          echo "   • Validation réponses API renforcée"
+          echo "   • Versions dépendances épinglées"
           echo "═══════════════════════════════════════════════════════════"
