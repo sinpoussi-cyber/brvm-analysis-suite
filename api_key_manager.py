@@ -1,9 +1,6 @@
 # ==============================================================================
 # MODULE: API KEY MANAGER - GESTIONNAIRE CENTRALISÉ DES CLÉS API GEMINI
 # ==============================================================================
-# Ce module gère intelligemment l'utilisation des clés API entre les différents
-# modules (fundamental_analyzer et report_generator)
-# ==============================================================================
 
 import os
 import json
