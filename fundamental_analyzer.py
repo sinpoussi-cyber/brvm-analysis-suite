@@ -1,5 +1,10 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V9.0 - VERSION FINALE
+# MODULE: FUNDAMENTAL ANALYZER V9.1 - VERSION CORRIGÉE
+# ==============================================================================
+# CORRECTIONS:
+# - Fix selenium-wire options (compatibilité v5.x)
+# - Amélioration gestion erreurs Selenium
+# - Timeout explicites pour toutes les requêtes
 # ==============================================================================
 
 import requests
@@ -16,9 +21,9 @@ from collections import defaultdict
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
 
-# Import du gestionnaire de clés API
 from api_key_manager import APIKeyManager
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -93,7 +98,6 @@ class BRVMAnalyzer:
         self.company_ids = {}
         self.newly_analyzed_reports = []
         
-        # ✅ Gestionnaire de clés API
         self.api_manager = APIKeyManager('fundamental_analyzer')
         self.current_api_key = None
 
@@ -102,7 +106,7 @@ class BRVMAnalyzer:
         try:
             conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
-                host=DB_HOST, port=DB_PORT
+                host=DB_HOST, port=DB_PORT, connect_timeout=10
             )
             return conn
         except Exception as e:
@@ -164,7 +168,7 @@ class BRVMAnalyzer:
                 conn.close()
 
     def setup_selenium(self):
-        """Configuration Selenium"""
+        """Configuration Selenium - VERSION CORRIGÉE"""
         try:
             logging.info("🌐 Configuration Selenium...")
             
@@ -173,11 +177,15 @@ class BRVMAnalyzer:
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('user-agent=Mozilla/5.0')
+            chrome_options.add_argument('--disable-extensions')
+            chrome_options.add_argument('--disable-software-rasterizer')
+            chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
             
+            # ✅ CORRECTION: Options selenium-wire compatibles v5.x
             seleniumwire_options = {
-                'verify_ssl': False,
-                'suppress_connection_errors': True
+                'disable_encoding': True,  # Désactive compression
+                'suppress_connection_errors': True,  # Ignore erreurs SSL
+                'connection_timeout': 30  # Timeout connexion
             }
             
             self.driver = webdriver.Chrome(
@@ -185,6 +193,7 @@ class BRVMAnalyzer:
                 seleniumwire_options=seleniumwire_options
             )
             self.driver.set_page_load_timeout(30)
+            self.driver.implicitly_wait(10)
             
             logging.info("   ✅ Selenium configuré")
             return True
@@ -219,9 +228,12 @@ class BRVMAnalyzer:
             company_links = []
             elements = self.driver.find_elements(By.TAG_NAME, 'a')
             for elem in elements:
-                href = elem.get_attribute('href')
-                if href and '/societe/' in href:
-                    company_links.append(href)
+                try:
+                    href = elem.get_attribute('href')
+                    if href and '/societe/' in href:
+                        company_links.append(href)
+                except:
+                    continue
             
             company_links = list(set(company_links))
             logging.info(f"   📊 {len(company_links)} page(s) trouvée(s)")
@@ -260,7 +272,15 @@ class BRVMAnalyzer:
                                         break
                         except:
                             continue
+                            
+                except TimeoutException:
+                    logging.warning(f"   ⏱️  Timeout page {idx}")
+                    continue
+                except WebDriverException as e:
+                    logging.warning(f"   ⚠️  Erreur WebDriver page {idx}: {e}")
+                    continue
                 except Exception as e:
+                    logging.warning(f"   ⚠️  Erreur page {idx}: {e}")
                     continue
             
             logging.info(f"   ✅ {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
@@ -361,12 +381,20 @@ Si une info manque, mentionne-le clairement."""
                 
                 if response.status_code == 200:
                     response_json = response.json()
-                    analysis_text = response_json['candidates'][0]['content']['parts'][0]['text']
                     
-                    if "erreur" not in analysis_text.lower():
-                        if self._save_to_db(company_id, report, analysis_text):
-                            self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                            return True
+                    # ✅ CORRECTION: Vérification de la structure de réponse
+                    if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                        candidate = response_json['candidates'][0]
+                        if 'content' in candidate and 'parts' in candidate['content']:
+                            analysis_text = candidate['content']['parts'][0]['text']
+                            
+                            if "erreur" not in analysis_text.lower():
+                                if self._save_to_db(company_id, report, analysis_text):
+                                    self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
+                                    return True
+                    
+                    logging.warning(f"    ⚠️  Réponse API malformée")
+                    return False
                 
                 elif response.status_code == 429:
                     logging.warning(f"    ⚠️  Quota épuisé pour clé #{key_num}")
@@ -394,6 +422,11 @@ Si une info manque, mentionne-le clairement."""
                     attempts += 1
                     continue
                     
+            except requests.exceptions.Timeout:
+                logging.error(f"    ⏱️  Timeout clé #{key_num}")
+                self.api_manager.move_to_next_key()
+                attempts += 1
+                continue
             except Exception as e:
                 logging.error(f"    ❌ Exception clé #{key_num}: {e}")
                 self.api_manager.move_to_next_key()
@@ -405,7 +438,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.0 - FINALE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.1 - CORRIGÉE)")
         logging.info("="*80)
         
         conn = None
@@ -415,8 +448,8 @@ Si une info manque, mentionne-le clairement."""
             
             self._load_analysis_memory_from_db()
             
-            self.setup_selenium()
-            if not self.driver: 
+            if not self.setup_selenium():
+                logging.error("❌ Impossible d'initialiser Selenium")
                 return {}, []
             
             conn = self.connect_to_db()
@@ -499,8 +532,11 @@ Si une info manque, mentionne-le clairement."""
             return {}, []
         
         finally:
-            if self.driver: 
-                self.driver.quit()
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
             if conn and not conn.closed: 
                 conn.close()
 
