@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# SCRIPT DE DIAGNOSTIC AUTOMATIQUE - API GEMINI
+# SCRIPT DE DIAGNOSTIC AUTOMATIQUE - API GEMINI (VERSION 50 CLÉS)
 # ==============================================================================
 # Ce script diagnostique automatiquement les problèmes avec l'API Gemini
 # et propose des solutions concrètes.
+# Version: 9.1 - Support de 50 clés API
 # ==============================================================================
 
 import os
@@ -69,9 +70,9 @@ class GeminiDiagnostic:
         self.successes = []
         
     def load_api_keys(self):
-        """Charge toutes les clés API disponibles"""
+        """Charge toutes les clés API disponibles (1 à 50)"""
         print_info("Chargement des clés API...")
-        for i in range(1, 34):
+        for i in range(1, 51):  # ✅ MIS À JOUR pour 50 clés
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
                 self.api_keys.append({
@@ -188,7 +189,7 @@ class GeminiDiagnostic:
         files_to_check = {
             'fundamental_analyzer.py': {
                 'required_strings': [
-                    'GEMINI_API_VERSION =os.environ.get',
+                    'GEMINI_API_VERSION',
                     'x-goog-api-key',
                     'api_key.strip()'
                 ],
@@ -199,7 +200,7 @@ class GeminiDiagnostic:
             },
             'report_generator.py': {
                 'required_strings': [
-                    'GEMINI_API_VERSION =os.environ.get',
+                    'GEMINI_API_VERSION',
                     'x-goog-api-key',
                     'api_key.strip()'
                 ],
@@ -245,7 +246,7 @@ class GeminiDiagnostic:
     
     def diagnose_api_keys(self):
         """Diagnostique toutes les clés API"""
-        print_header("Diagnostic des Clés API")
+        print_header("Diagnostic des Clés API (50 clés)")
         
         if not self.api_keys:
             print_error("Aucune clé à diagnostiquer")
@@ -307,7 +308,7 @@ class GeminiDiagnostic:
         
         # Tester la liste des modèles disponibles
         print_info("Test de l'accès aux modèles...")
-        url =f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models"
+        url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models"
         headers = {"x-goog-api-key": test_key}
         
         try:
@@ -423,7 +424,7 @@ class GeminiDiagnostic:
         if any("manquant" in issue.lower() for issue in self.issues):
             print("\n🔧 PROBLÈME: Fichiers non à jour")
             print("   Solutions:")
-            print("   • Télécharger la version 7.4 des fichiers")
+            print("   • Télécharger la version 9.1 des fichiers")
             print("   • Remplacer fundamental_analyzer.py")
             print("   • Remplacer report_generator.py")
             print("   • Relancer ce diagnostic")
@@ -431,7 +432,7 @@ class GeminiDiagnostic:
         if any("obsolète" in issue.lower() for issue in self.issues):
             print("\n🔧 PROBLÈME: Configuration obsolète")
             print("   Solutions:")
-            print("   • Mettre à jour vers v7.4")
+            print("   • Mettre à jour vers v9.1")
             print("   • Remplacer 'v2beta' par 'v1beta'")
             print("   • Remplacer query param par header x-goog-api-key")
         
@@ -462,7 +463,7 @@ def main():
     """Fonction principale"""
     print(f"{Colors.BOLD}")
     print("╔════════════════════════════════════════════════════════════╗")
-    print("║     DIAGNOSTIC AUTOMATIQUE - API GEMINI v7.4              ║")
+    print("║     DIAGNOSTIC AUTOMATIQUE - API GEMINI v9.1 (50 CLÉS)   ║")
     print("║     Détection et résolution des problèmes                  ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print(f"{Colors.ENDC}")
@@ -475,6 +476,7 @@ def main():
         print_info("Configurez vos clés API avec:")
         print("   export GOOGLE_API_KEY_1='votre_clé'")
         print("   export GOOGLE_API_KEY_2='votre_clé'")
+        print("   ... jusqu'à GOOGLE_API_KEY_50")
         return 1
     
     # Étape 2: Vérifier les fichiers
