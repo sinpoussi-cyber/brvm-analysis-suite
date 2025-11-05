@@ -27,9 +27,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI CORRIGÉE
-GEMINI_MODEL = "gemini-1.5-flash"  # Sans "-latest"
-GEMINI_API_VERSION = "v1beta"  # ⚠️ CORRECTION: v1beta (PAS v1)
+# ✅ CONFIGURATION GEMINI (surchageable via variables d'environnement)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -155,17 +155,17 @@ class ComprehensiveReportGenerator:
                     try:
                         error_detail = response.json()
                         error_msg = error_detail.get('error', {}).get('message', 'Endpoint introuvable')
-                        logging.error(f"    ❌ 404 - {error_msg}")
-                        logging.error(f"    URL: {api_url}")
-                        logging.error(f"    Modèle: {GEMINI_MODEL}")
-                        logging.error(f"    Version API: {GEMINI_API_VERSION}")
-                    except:
-                        logging.error(f"    ❌ 404 - Endpoint ou modèle introuvable")
-                    
-                    self.api_manager.mark_key_exhausted(key_num)
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
+                        except Exception:
+                        error_msg = 'Endpoint ou modèle introuvable'
+
+                    logging.error(f"    ❌ 404 - {error_msg}")
+                    logging.error(f"    URL: {api_url}")
+                    logging.error(f"    Modèle: {GEMINI_MODEL}")
+                    logging.error(f"    Version API: {GEMINI_API_VERSION}")
+                    logging.error("    ⚠️  Vérifiez la configuration GEMINI_MODEL/GEMINI_API_VERSION.")
+
+                    return ("Erreur configuration Gemini : modèle ou version API invalide. "
+                            "Veuillez mettre à jour GEMINI_MODEL/GEMINI_API_VERSION.")
                 
                 elif response.status_code == 403:
                     logging.error(f"    ❌ 403 (clé #{key_num})")
