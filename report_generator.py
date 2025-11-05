@@ -155,7 +155,7 @@ class ComprehensiveReportGenerator:
                     try:
                         error_detail = response.json()
                         error_msg = error_detail.get('error', {}).get('message', 'Endpoint introuvable')
-                        except Exception:
+                    except Exception:
                         error_msg = 'Endpoint ou modèle introuvable'
 
                     logging.error(f"    ❌ 404 - {error_msg}")
