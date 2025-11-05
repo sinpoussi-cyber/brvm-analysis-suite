@@ -30,7 +30,7 @@ DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI CORRIGÉE
 GEMINI_MODEL = "gemini-1.5-flash"  # ⚠️ SANS "-latest"
-GEMINI_API_VERSION = "v1beta"
+GEMINI_API_VERSION = "v1"  # ⚠️ v1 pour gemini-1.5-flash (v1beta ne marche pas)
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
