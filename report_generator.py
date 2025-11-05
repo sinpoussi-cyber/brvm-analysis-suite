@@ -1,10 +1,9 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V9.2 - VERSION FINALE CORRIGÉE
+# MODULE: COMPREHENSIVE REPORT GENERATOR V9.3 - CORRECTION FINALE API v1beta
 # ==============================================================================
-# CORRECTIONS CRITIQUES:
-# - Modèle changé: gemini-1.5-flash (au lieu de gemini-1.5-flash-latest)
-# - Version API: v1beta (confirmé fonctionnel)
-# - Meilleure gestion des erreurs 404 avec diagnostic
+# CORRECTION CRITIQUE:
+# - Version API changée: v1beta (au lieu de v1)
+# - Le modèle gemini-1.5-flash nécessite v1beta
 # ==============================================================================
 
 import psycopg2
@@ -29,8 +28,8 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI CORRIGÉE
-GEMINI_MODEL = "gemini-1.5-flash"  # ⚠️ SANS "-latest"
-GEMINI_API_VERSION = "v1"  # ⚠️ v1 pour gemini-1.5-flash (v1beta ne marche pas)
+GEMINI_MODEL = "gemini-1.5-flash"  # Sans "-latest"
+GEMINI_API_VERSION = "v1beta"  # ⚠️ CORRECTION: v1beta (PAS v1)
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
@@ -47,7 +46,7 @@ class ComprehensiveReportGenerator:
 
     def _call_gemini_with_retry(self, prompt):
         """
-        Appel API Gemini avec retry - VERSION CORRIGÉE
+        Appel API Gemini avec retry - VERSION CORRIGÉE v1beta
         """
         available_keys = self.api_manager.get_available_keys()
         
@@ -66,7 +65,7 @@ class ComprehensiveReportGenerator:
             key_num = self.current_api_key['number']
             self.api_manager.handle_rate_limit()
             
-            # ✅ URL CORRIGÉE
+            # ✅ URL CORRIGÉE avec v1beta
             api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             headers = {
@@ -153,13 +152,13 @@ class ComprehensiveReportGenerator:
                     continue
                 
                 elif response.status_code == 404:
-                    # ✅ MEILLEURE GESTION DU 404
                     try:
                         error_detail = response.json()
                         error_msg = error_detail.get('error', {}).get('message', 'Endpoint introuvable')
                         logging.error(f"    ❌ 404 - {error_msg}")
                         logging.error(f"    URL: {api_url}")
                         logging.error(f"    Modèle: {GEMINI_MODEL}")
+                        logging.error(f"    Version API: {GEMINI_API_VERSION}")
                     except:
                         logging.error(f"    ❌ 404 - Endpoint ou modèle introuvable")
                     
@@ -409,7 +408,7 @@ Analyses:
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
         meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION})\n")
         meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.2")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.3")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -446,7 +445,7 @@ Analyses:
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.2 - CORRIGÉE)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.3 - CORRECTION v1beta)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
         logging.info("="*80)
 
