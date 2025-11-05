@@ -24,6 +24,7 @@ def main():
     logging.info("Version: 4.1 Final (Corrections API Gemini + SQL)")
     logging.info("Base de données: Supabase (PostgreSQL)")
     logging.info("Modèle IA: gemini-1.5-flash-latest")
+    logging.info("Clés API: 50 clés disponibles")
     logging.info("="*80)
 
     # --- Étape 1 : Collecte des données (SUPABASE) ---
@@ -67,7 +68,7 @@ def main():
         logging.info("="*80)
         
         # Vérifier qu'au moins une clé API existe
-        api_keys_available = any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 23))
+        api_keys_available = any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 51))
         
         if api_keys_available:
             analyzer = fundamental_analyzer.BRVMAnalyzer()
@@ -76,7 +77,7 @@ def main():
             logging.info(f"   📊 Nouvelles analyses : {len(new_fundamental_analyses)}")
         else:
             logging.warning("⚠️  Aucune clé API Gemini trouvée")
-            logging.warning("   Étape 4 ignorée - Configurez GOOGLE_API_KEY_1 à GOOGLE_API_KEY_22")
+            logging.warning("   Étape 4 ignorée - Configurez GOOGLE_API_KEY_1 à GOOGLE_API_KEY_50")
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 4 : {e}", exc_info=True)
         logging.info("   Passage à l'étape suivante...")
@@ -89,7 +90,7 @@ def main():
         logging.info("="*80)
         
         # Vérifier qu'au moins une clé API existe
-        api_keys_available = any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 23))
+        api_keys_available = any(os.environ.get(f'GOOGLE_API_KEY_{i}') for i in range(1, 51))
         
         if api_keys_available:
             DB_NAME = os.environ.get('DB_NAME')
@@ -111,7 +112,7 @@ def main():
             logging.info("✅ Rapports générés avec succès")
         else:
             logging.warning("⚠️  Aucune clé API Gemini trouvée")
-            logging.warning("   Étape 5 ignorée - Configurez GOOGLE_API_KEY_1 à GOOGLE_API_KEY_22")
+            logging.warning("   Étape 5 ignorée - Configurez GOOGLE_API_KEY_1 à GOOGLE_API_KEY_50")
     except Exception as e:
         logging.error(f"❌ Échec à l'étape 5 : {e}", exc_info=True)
     finally:
@@ -124,6 +125,8 @@ def main():
     logging.info("="*80)
     logging.info("✅ Architecture : Supabase (PostgreSQL) uniquement")
     logging.info("✅ Modèle IA : gemini-1.5-flash-latest (API v1)")
+    logging.info("✅ Clés API : 50 clés disponibles")
+    logging.info("✅ Capacité : 750 requêtes/minute, 75,000 requêtes/jour")
     logging.info("📊 Tables mises à jour :")
     logging.info("   • companies (sociétés cotées)")
     logging.info("   • historical_data (données de marché)")
