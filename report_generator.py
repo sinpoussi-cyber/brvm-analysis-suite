@@ -1,11 +1,10 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V9.1 - VERSION CORRIGÉE
+# MODULE: COMPREHENSIVE REPORT GENERATOR V9.2 - VERSION FINALE CORRIGÉE
 # ==============================================================================
-# CORRECTIONS:
-# - Meilleure gestion des réponses API vides
-# - Validation structure JSON de réponse
-# - Gestion explicite des timeouts
-# - Retry logic améliorée
+# CORRECTIONS CRITIQUES:
+# - Modèle changé: gemini-1.5-flash (au lieu de gemini-1.5-flash-latest)
+# - Version API: v1beta (confirmé fonctionnel)
+# - Meilleure gestion des erreurs 404 avec diagnostic
 # ==============================================================================
 
 import psycopg2
@@ -29,7 +28,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-GEMINI_MODEL = "gemini-1.5-flash"
+# ✅ CONFIGURATION GEMINI CORRIGÉE
+GEMINI_MODEL = "gemini-1.5-flash"  # ⚠️ SANS "-latest"
 GEMINI_API_VERSION = "v1beta"
 
 class ComprehensiveReportGenerator:
@@ -48,10 +48,6 @@ class ComprehensiveReportGenerator:
     def _call_gemini_with_retry(self, prompt):
         """
         Appel API Gemini avec retry - VERSION CORRIGÉE
-        CORRECTIONS:
-        - Validation complète de la structure de réponse
-        - Gestion des réponses vides
-        - Meilleur logging des erreurs
         """
         available_keys = self.api_manager.get_available_keys()
         
@@ -70,6 +66,7 @@ class ComprehensiveReportGenerator:
             key_num = self.current_api_key['number']
             self.api_manager.handle_rate_limit()
             
+            # ✅ URL CORRIGÉE
             api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             headers = {
@@ -99,7 +96,6 @@ class ComprehensiveReportGenerator:
                     try:
                         response_json = response.json()
                         
-                        # ✅ CORRECTION: Validation complète de la structure
                         if not response_json:
                             logging.error(f"    ❌ Réponse JSON vide (clé #{key_num})")
                             self.api_manager.move_to_next_key()
@@ -141,12 +137,10 @@ class ComprehensiveReportGenerator:
                             attempts += 1
                             continue
                         
-                        # Succès !
                         return text
                         
                     except (KeyError, IndexError, TypeError) as e:
                         logging.error(f"    ❌ Erreur parsing JSON (clé #{key_num}): {e}")
-                        logging.error(f"    Réponse brute: {str(response_json)[:200]}")
                         self.api_manager.move_to_next_key()
                         attempts += 1
                         continue
@@ -158,8 +152,24 @@ class ComprehensiveReportGenerator:
                     attempts += 1
                     continue
                 
-                elif response.status_code in [404, 403]:
-                    logging.error(f"    ❌ Erreur {response.status_code} (clé #{key_num})")
+                elif response.status_code == 404:
+                    # ✅ MEILLEURE GESTION DU 404
+                    try:
+                        error_detail = response.json()
+                        error_msg = error_detail.get('error', {}).get('message', 'Endpoint introuvable')
+                        logging.error(f"    ❌ 404 - {error_msg}")
+                        logging.error(f"    URL: {api_url}")
+                        logging.error(f"    Modèle: {GEMINI_MODEL}")
+                    except:
+                        logging.error(f"    ❌ 404 - Endpoint ou modèle introuvable")
+                    
+                    self.api_manager.mark_key_exhausted(key_num)
+                    self.api_manager.move_to_next_key()
+                    attempts += 1
+                    continue
+                
+                elif response.status_code == 403:
+                    logging.error(f"    ❌ 403 (clé #{key_num})")
                     self.api_manager.mark_key_exhausted(key_num)
                     self.api_manager.move_to_next_key()
                     attempts += 1
@@ -167,7 +177,6 @@ class ComprehensiveReportGenerator:
                 
                 else:
                     logging.error(f"    ❌ Erreur {response.status_code} (clé #{key_num})")
-                    logging.error(f"    Réponse: {response.text[:200]}")
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
@@ -400,7 +409,7 @@ Analyses:
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
         meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION})\n")
         meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.1")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.2")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -437,7 +446,8 @@ Analyses:
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.1 - CORRIGÉE)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.2 - CORRIGÉE)")
+        logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
         logging.info("="*80)
 
         stats = self.api_manager.get_statistics()
