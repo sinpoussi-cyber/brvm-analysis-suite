@@ -1,6 +1,8 @@
 # ==============================================================================
 # MODULE: API KEY MANAGER - GESTIONNAIRE CENTRALISÉ DES CLÉS API GEMINI
 # ==============================================================================
+# Version: 9.1 - Compatible avec 50 clés API (supporte jusqu'à 100)
+# ==============================================================================
 
 import os
 import json
@@ -35,8 +37,11 @@ class APIKeyManager:
         self._load_state()
         
     def _load_all_keys(self):
-        """Charge toutes les clés API disponibles (1 à 100)"""
-        for i in range(1, 101):
+        """
+        Charge toutes les clés API disponibles (1 à 100)
+        ✅ Compatible avec 50 clés configurées (et plus si nécessaire)
+        """
+        for i in range(1, 101):  # Support jusqu'à 100 clés
             key = os.environ.get(f'GOOGLE_API_KEY_{i}')
             if key:
                 self.all_keys.append({
