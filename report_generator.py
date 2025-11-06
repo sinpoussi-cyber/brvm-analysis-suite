@@ -29,16 +29,49 @@ DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI (surchageable via variables d'environnement)
 # "gemini-1.5-flash-latest" n'est pas disponible sur l'API v1beta. Nous
-# utilisons donc la version stable explicitement nommée.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+# utilisons donc la version stable explicitement nommée. Si l'API renvoie
+# un 404, on essaie automatiquement des modèles/API connus.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1")
+
+GEMINI_MODEL_FALLBACKS = [
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-latest",
+]
+
+GEMINI_API_VERSION_FALLBACKS = [
+    "v1",
+    "v1beta",
+]
 
 class ComprehensiveReportGenerator:
     def __init__(self, db_conn):
         self.db_conn = db_conn
         self.api_manager = APIKeyManager('report_generator')
         self.current_api_key = None
+        self.gemini_model = GEMINI_MODEL
+        self.gemini_api_version = GEMINI_API_VERSION
 
+    def _iter_gemini_configs(self):
+        models = []
+        if self.gemini_model:
+            models.append(self.gemini_model)
+        for fallback in GEMINI_MODEL_FALLBACKS:
+            if fallback not in models:
+                models.append(fallback)
+
+        versions = []
+        if self.gemini_api_version:
+            versions.append(self.gemini_api_version)
+        for fallback in GEMINI_API_VERSION_FALLBACKS:
+            if fallback not in versions:
+                versions.append(fallback)
+
+        for version in versions:
+            for model in models:
+                yield model, version
+                
     def _get_next_api_key(self):
         key_info = self.api_manager.get_next_key()
         if key_info:
@@ -46,15 +79,12 @@ class ComprehensiveReportGenerator:
             return key_info['key']
         return None
 
-    def _call_gemini_with_retry(self, prompt):
-        """
-        Appel API Gemini avec retry - VERSION CORRIGÉE v1beta
-        """
+    def _call_gemini_with_config(self, prompt, model, version):
         available_keys = self.api_manager.get_available_keys()
         
         if not available_keys:
-            return "Analyse IA non disponible (toutes les clés épuisées)."
-        
+            return False, "Analyse IA non disponible (toutes les clés épuisées)."
+            
         max_attempts = len(available_keys)
         attempts = 0
         
@@ -62,13 +92,12 @@ class ComprehensiveReportGenerator:
             api_key = self._get_next_api_key()
             
             if not api_key:
-                return "Erreur d'analyse : Toutes les clés API ont échoué."
-            
+                 return False, "Erreur d'analyse : Toutes les clés API ont échoué."
+                
             key_num = self.current_api_key['number']
             self.api_manager.handle_rate_limit()
-            
-            # ✅ URL CORRIGÉE avec v1beta
-            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
+
+            api_url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent"
             
             headers = {
                 "Content-Type": "application/json",
@@ -87,8 +116,8 @@ class ComprehensiveReportGenerator:
             
             try:
                 response = requests.post(
-                    api_url, 
-                    headers=headers, 
+                    api_url,
+                    headers=headers,
                     json=request_body, 
                     timeout=90
                 )
@@ -138,7 +167,7 @@ class ComprehensiveReportGenerator:
                             attempts += 1
                             continue
                         
-                        return text
+                        return True, text
                         
                     except (KeyError, IndexError, TypeError) as e:
                         logging.error(f"    ❌ Erreur parsing JSON (clé #{key_num}): {e}")
@@ -162,12 +191,11 @@ class ComprehensiveReportGenerator:
 
                     logging.error(f"    ❌ 404 - {error_msg}")
                     logging.error(f"    URL: {api_url}")
-                    logging.error(f"    Modèle: {GEMINI_MODEL}")
-                    logging.error(f"    Version API: {GEMINI_API_VERSION}")
+                    logging.error(f"    Modèle: {model}")
+                    logging.error(f"    Version API: {version}")
                     logging.error("    ⚠️  Vérifiez la configuration GEMINI_MODEL/GEMINI_API_VERSION.")
 
-                    return ("Erreur configuration Gemini : modèle ou version API invalide. "
-                            "Veuillez mettre à jour GEMINI_MODEL/GEMINI_API_VERSION.")
+                    return False, "__CONFIG_404__"
                 
                 elif response.status_code == 403:
                     logging.error(f"    ❌ 403 (clé #{key_num})")
@@ -200,8 +228,38 @@ class ComprehensiveReportGenerator:
                 attempts += 1
                 continue
         
-        return "Erreur d'analyse : Toutes les tentatives ont échoué."
+        return False, "Erreur d'analyse : Toutes les clés API ont échoué."
 
+    def _call_gemini_with_retry(self, prompt):
+        """
+        Appel API Gemini avec retry - VERSION CORRIGÉE v1beta
+        """
+        last_error_message = None
+
+        for model, version in self._iter_gemini_configs():
+            success, result = self._call_gemini_with_config(prompt, model, version)
+
+            if success:
+                if (model != self.gemini_model) or (version != self.gemini_api_version):
+                    logging.info(
+                        f"✅ [report_generator] Configuration Gemini mise à jour -> Modèle: {model}, Version: {version}"
+                    )
+                    self.gemini_model = model
+                    self.gemini_api_version = version
+                return result
+
+            if result == "__CONFIG_404__":
+                last_error_message = ("Erreur configuration Gemini : modèle ou version API invalide. "
+                                      "Passage au modèle/version suivant.")
+                continue
+
+            last_error_message = result
+
+        return last_error_message or (
+            "Erreur configuration Gemini : aucun modèle ou version valide trouvé. "
+            "Veuillez vérifier GEMINI_MODEL/GEMINI_API_VERSION."
+        )
+        
     def _get_all_data_from_db(self):
         logging.info("📂 Récupération des données (100 derniers jours)...")
         
