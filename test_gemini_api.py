@@ -7,7 +7,7 @@ import requests
 import logging
 import time
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 
@@ -38,25 +38,25 @@ def test_gemini_api_key(api_key, key_number):
     
     # ✅ CONFIGURATION CORRIGÉE
     test_configs = [
-        # Option 1 :configuration par défaut basée sur les variables d'environnement
+        # Option 1 : configuration par défaut basée sur les variables d'environnement
         {
             "url": build_gemini_url(GEMINI_MODEL, GEMINI_API_VERSION),
             "model": GEMINI_MODEL,
             "version": GEMINI_API_VERSION,
             "use_header": True,  # Utiliser x-goog-api-key dans le header
         },
-        # Option 2 : v1beta avec gemini-1.5-flash-latest
+        # Option 2 : v1beta avec gemini-1.5-flash
         {
-            "url": build_gemini_url("gemini-1.5-flash-latest", "v1beta"),
-            "model": "gemini-1.5-flash-latest",
+            "url": build_gemini_url("gemini-1.5-flash", "v1beta"),
+            "model": "gemini-1.5-flash",
             "version": "v1beta",
             "use_header": True,
         },
-        # Option 3 : v1 avec gemini-1.5-flash
+        # Option 3 : v1beta avec gemini-1.5-pro
         {
-            "url":build_gemini_url("gemini-1.5-flash", "v1"),
-            "model": "gemini-1.5-flash",
-            "version": "v1",
+            "url": build_gemini_url("gemini-1.5-pro", "v1beta"),
+            "model": "gemini-1.5-pro",
+            "version": "v1beta",
             "use_header": True,
         },
         # Option 4 : v1 avec gemini-pro (plus ancien mais stable)
@@ -112,7 +112,7 @@ def test_gemini_api_key(api_key, key_number):
                     logging.info(f"    ⚠️  Réponse reçue mais format inattendu: {e}")
                     
             elif response.status_code == 404:
-                                error_detail = ""
+                error_detail = ""
                 try:
                     error_detail = response.json().get("error", {}).get("message", "")
                 except ValueError:
