@@ -10,8 +10,8 @@ import requests
 import sys
 
 # ✅ CONFIGURATION CORRIGÉE
-GEMINI_MODEL = "gemini-1.5-flash"  # Sans "-latest"
-GEMINI_API_VERSION = "v1"  # v1 pour gemini-1.5-flash
+GEMINI_MODEL = "gemini-1.5-flash"  # Sans suffixe "-latest"
+GEMINI_API_VERSION = "v1beta"  # Version recommandée pour Gemini 1.5
 
 def test_single_key():
     """Test rapide avec une seule clé"""
