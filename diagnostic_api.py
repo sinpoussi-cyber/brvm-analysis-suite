@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 
