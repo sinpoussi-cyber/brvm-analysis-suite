@@ -28,21 +28,21 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI (surchageable via variables d'environnement)
-# "gemini-1.5-flash-latest" n'est pas disponible sur l'API v1beta. Nous
-# utilisons donc la version stable explicitement nommée. Si l'API renvoie
-# un 404, on essaie automatiquement des modèles/API connus.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1")
+# Les modèles suffixés (-001/-002/-latest) sont progressivement retirés.
+# On privilégie désormais les noms stables documentés par Google (ex: "gemini-1.5-flash").
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 GEMINI_MODEL_FALLBACKS = [
-    "gemini-1.5-flash-002",
-    "gemini-1.5-flash-001",
+    "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+    "gemini-pro",
 ]
 
 GEMINI_API_VERSION_FALLBACKS = [
-    "v1",
     "v1beta",
+    "v1",
 ]
 
 class ComprehensiveReportGenerator:
@@ -466,7 +466,9 @@ Analyses:
         
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(f"Propulsé par {GEMINI_MODEL} (API {GEMINI_API_VERSION})\n")
+        meta.add_run(
+            f"Propulsé par {self.gemini_model} (API {self.gemini_api_version})\n"
+        )
         meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables\n")
         meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.3")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -506,7 +508,9 @@ Analyses:
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
         logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.3 - CORRECTION v1beta)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
+        logging.info(
+            f"🤖 Modèle: {self.gemini_model} | API: {self.gemini_api_version}"
+        )
         logging.info("="*80)
 
         stats = self.api_manager.get_statistics()
