@@ -28,7 +28,9 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION GEMINI (surchageable via variables d'environnement)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# "gemini-1.5-flash-latest" n'est pas disponible sur l'API v1beta. Nous
+# utilisons donc la version stable explicitement nommée.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 class ComprehensiveReportGenerator:
