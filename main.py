@@ -23,7 +23,10 @@ def main():
     logging.info("="*80)
     logging.info("Version: 4.1 Final (Corrections API Gemini + SQL)")
     logging.info("Base de données: Supabase (PostgreSQL)")
-    logging.info("Modèle IA: gemini-1.5-flash-latest")
+    logging.info(
+        "Modèle IA par défaut: "
+        f"{report_generator.GEMINI_MODEL} (API {report_generator.GEMINI_API_VERSION})"
+    )
     logging.info("Clés API: 50 clés disponibles")
     logging.info("="*80)
 
@@ -84,6 +87,7 @@ def main():
 
     # --- Étape 5 : Génération du rapport de synthèse ---
     db_connection = None
+    final_report_generator = None
     try:
         logging.info("\n" + "="*80)
         logging.info("ÉTAPE 5/5 : GÉNÉRATION DES RAPPORTS")
@@ -124,7 +128,15 @@ def main():
     logging.info("🎉 SUITE D'ANALYSE BRVM COMPLÈTE TERMINÉE")
     logging.info("="*80)
     logging.info("✅ Architecture : Supabase (PostgreSQL) uniquement")
-    logging.info("✅ Modèle IA : gemini-1.5-flash-latest (API v1)")
+    final_model = (
+        final_report_generator.gemini_model if final_report_generator else report_generator.GEMINI_MODEL
+    )
+    final_version = (
+        final_report_generator.gemini_api_version
+        if final_report_generator
+        else report_generator.GEMINI_API_VERSION
+    )
+    logging.info(f"✅ Modèle IA : {final_model} (API {final_version})")
     logging.info("✅ Clés API : 50 clés disponibles")
     logging.info("✅ Capacité : 750 requêtes/minute, 75,000 requêtes/jour")
     logging.info("📊 Tables mises à jour :")
