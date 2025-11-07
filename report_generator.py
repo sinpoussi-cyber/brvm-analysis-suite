@@ -28,22 +28,22 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI - CORRIGÉE (Décembre 2024)
+# ✅ CONFIGURATION GEMINI - CORRIGÉE pour clés AI Studio (Novembre 2024)
+# Les clés gratuites AI Studio fonctionnent avec v1beta
 # Utiliser UNIQUEMENT les noms de modèles EXACTS de l'API
 # Documentation officielle: https://ai.google.dev/gemini-api/docs/models
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 # ✅ FALLBACKS CORRIGÉS - Seulement les modèles qui existent réellement
 GEMINI_MODEL_FALLBACKS = [
     "gemini-1.5-flash",      # Modèle principal recommandé
     "gemini-1.5-pro",        # Alternative plus puissante
-    "gemini-1.5-flash-8b",   # Alternative légère (v1beta uniquement)
 ]
 
 GEMINI_API_VERSION_FALLBACKS = [
-    "v1",        # API stable (recommandée)
-    "v1beta",    # API beta (plus de fonctionnalités)
+    "v1beta",    # API beta (pour clés AI Studio gratuites)
+    "v1",        # API stable (pour clés Cloud Console payantes)
 ]
 
 class ComprehensiveReportGenerator:
