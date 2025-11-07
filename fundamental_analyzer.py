@@ -1,12 +1,11 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V9.2 - VERSION CORRIGÉE (Décembre 2024)
+# MODULE: FUNDAMENTAL ANALYZER V9.6 - VERSION FINALE (10 Clés AI Studio)
 # ==============================================================================
-# CORRECTIONS:
-# - Nom du modèle corrigé: gemini-1.5-flash (sans suffixes)
-# - API v1 (stable) au lieu de v1beta
-# - Fix selenium-wire options (compatibilité v5.x)
-# - Amélioration gestion erreurs Selenium
-# - Timeout explicites pour toutes les requêtes
+# CONFIGURATION FINALE:
+# - Support de 10 clés API Gemini (AI Studio)
+# - API v1beta (pour clés AI Studio)
+# - Nom du modèle: gemini-1.5-flash (sans suffixes)
+# - Capacité: 150 requêtes/minute (10 × 15)
 # ==============================================================================
 
 import requests
@@ -38,9 +37,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI - CORRIGÉE pour clés AI Studio (Novembre 2024)
-# Les clés gratuites AI Studio fonctionnent avec v1beta
-# Utiliser les noms de modèles EXACTS de l'API (sans suffixes -latest, -001, etc.)
+# ✅ CONFIGURATION GEMINI FINALE - 10 Clés AI Studio
+# Documentation: https://ai.google.dev/gemini-api/docs/models
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
@@ -172,7 +170,7 @@ class BRVMAnalyzer:
                 conn.close()
 
     def setup_selenium(self):
-        """Configuration Selenium - VERSION CORRIGÉE"""
+        """Configuration Selenium"""
         try:
             logging.info("🌐 Configuration Selenium...")
             
@@ -185,7 +183,6 @@ class BRVMAnalyzer:
             chrome_options.add_argument('--disable-software-rasterizer')
             chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
             
-            # ✅ CORRECTION: Options selenium-wire compatibles v5.x
             seleniumwire_options = {
                 'disable_encoding': True,
                 'suppress_connection_errors': True,
@@ -358,7 +355,6 @@ Si une info manque, mentionne-le clairement."""
             
             self.api_manager.handle_rate_limit()
             
-            # ✅ URL CORRIGÉE avec le bon nom de modèle
             api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             headers = {
@@ -387,7 +383,6 @@ Si une info manque, mentionne-le clairement."""
                 if response.status_code == 200:
                     response_json = response.json()
                     
-                    # ✅ CORRECTION: Vérification de la structure de réponse
                     if 'candidates' in response_json and len(response_json['candidates']) > 0:
                         candidate = response_json['candidates'][0]
                         if 'content' in candidate and 'parts' in candidate['content']:
@@ -444,7 +439,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.2 - CORRIGÉE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.6 - 10 Clés)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
         logging.info("="*80)
         
@@ -452,6 +447,7 @@ Si une info manque, mentionne-le clairement."""
         try:
             stats = self.api_manager.get_statistics()
             logging.info(f"📊 Clés disponibles: {stats['available']}/{stats['total']}")
+            logging.info(f"⚡ Capacité: {stats['available'] * 15} requêtes/minute")
             
             self._load_analysis_memory_from_db()
             
