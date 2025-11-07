@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V9.4 - 50 Clés API (CORRECTION FINALE - Décembre 2024)
+name: BRVM Analysis Suite V9.5 - 50 Clés API (CORRECTION AI STUDIO - Novembre 2024)
 
 on:
   schedule:
@@ -69,11 +69,11 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           # ✅ CONFIGURATION GEMINI CORRIGÉE
           GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1"
+          GEMINI_API_VERSION: "v1beta"
         run: |
           echo "✅ Secrets DB configurés"
           echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Version: 9.4 (Correction finale - Décembre 2024)"
+          echo "Version: 9.5 (Correction finale - Novembre 2024 - Clés AI Studio)"
           echo "✅ Modèle Gemini: gemini-1.5-flash (API v1)"
           echo "Nombre de clés API: 50"
       
@@ -122,7 +122,7 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           # ✅ CONFIGURATION GEMINI CORRIGÉE
           GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1"
+          GEMINI_API_VERSION: "v1beta"
           # ✅ VOS 50 CLÉS API GEMINI
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
@@ -190,7 +190,7 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           # ✅ CONFIGURATION GEMINI CORRIGÉE
           GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1"
+          GEMINI_API_VERSION: "v1beta"
           # ✅ MÊMES 50 CLÉS (le système utilisera celles non épuisées)
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
