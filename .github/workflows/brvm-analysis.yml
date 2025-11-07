@@ -1,15 +1,14 @@
-name: BRVM Analysis Suite V9.5 - 50 Clés API (CORRECTION AI STUDIO - Novembre 2024)
+name: BRVM Analysis Suite V9.6 - 10 Clés API (VERSION FINALE)
 
 on:
   schedule:
-    # Exécution TOUS LES JOURS à 06h00 GMT
-    - cron: '0 6 * * *'
-  workflow_dispatch:  # Permet lancement manuel
+    - cron: '0 6 * * *'  # Tous les jours à 06h00 GMT
+  workflow_dispatch:
 
 jobs:
   brvm-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # 3 heures max
+    timeout-minutes: 180
     
     steps:
       - name: 🔥 Checkout du code
@@ -26,20 +25,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🌐 Installation Chrome/Chromedriver (MÉTHODE CORRIGÉE)
+      - name: 🌐 Installation Chrome/Chromedriver
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip
-          
-          # ✅ CORRECTION: Installation Chrome (méthode moderne)
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
           
-          # Installation de Chromedriver
           CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
           CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1)
           
-          # Télécharger Chromedriver compatible
           wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
           wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR_VERSION}" -O version.txt && \
           CHROMEDRIVER_VERSION=$(cat version.txt) && \
@@ -53,29 +48,11 @@ jobs:
           fi
           sudo chmod +x /usr/local/bin/chromedriver
           
-          # Nettoyage
           rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
           
           echo "✅ Chrome et Chromedriver installés"
           google-chrome --version
           chromedriver --version
-      
-      - name: 🔐 Configuration des secrets de base de données
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          # ✅ CONFIGURATION GEMINI CORRIGÉE
-          GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1beta"
-        run: |
-          echo "✅ Secrets DB configurés"
-          echo "Heure d'exécution: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Version: 9.5 (Correction finale - Novembre 2024 - Clés AI Studio)"
-          echo "✅ Modèle Gemini: gemini-1.5-flash (API v1)"
-          echo "Nombre de clés API: 50"
       
       - name: 📊 ÉTAPE 1 - Collecte de Données
         env:
@@ -111,19 +88,17 @@ jobs:
         run: |
           echo "🚀 Démarrage des prédictions..."
           python prediction_analyzer.py
-          echo "✅ Prédictions terminées (20 jours par société)"
+          echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (50 Clés API - CORRIGÉE)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (10 Clés)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          # ✅ CONFIGURATION GEMINI CORRIGÉE
           GEMINI_MODEL: "gemini-1.5-flash"
           GEMINI_API_VERSION: "v1beta"
-          # ✅ VOS 50 CLÉS API GEMINI
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -134,64 +109,21 @@ jobs:
           GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
-          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
-          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
-          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
-          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
-          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
-          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
-          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
-          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
-          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
-          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
-          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
-          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
-          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
-          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
-          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
-          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
-          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
-          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
-          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
-          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
-          GOOGLE_API_KEY_34: ${{ secrets.GOOGLE_API_KEY_34 }}
-          GOOGLE_API_KEY_35: ${{ secrets.GOOGLE_API_KEY_35 }}
-          GOOGLE_API_KEY_36: ${{ secrets.GOOGLE_API_KEY_36 }}
-          GOOGLE_API_KEY_37: ${{ secrets.GOOGLE_API_KEY_37 }}
-          GOOGLE_API_KEY_38: ${{ secrets.GOOGLE_API_KEY_38 }}
-          GOOGLE_API_KEY_39: ${{ secrets.GOOGLE_API_KEY_39 }}
-          GOOGLE_API_KEY_40: ${{ secrets.GOOGLE_API_KEY_40 }}
-          GOOGLE_API_KEY_41: ${{ secrets.GOOGLE_API_KEY_41 }}
-          GOOGLE_API_KEY_42: ${{ secrets.GOOGLE_API_KEY_42 }}
-          GOOGLE_API_KEY_43: ${{ secrets.GOOGLE_API_KEY_43 }}
-          GOOGLE_API_KEY_44: ${{ secrets.GOOGLE_API_KEY_44 }}
-          GOOGLE_API_KEY_45: ${{ secrets.GOOGLE_API_KEY_45 }}
-          GOOGLE_API_KEY_46: ${{ secrets.GOOGLE_API_KEY_46 }}
-          GOOGLE_API_KEY_47: ${{ secrets.GOOGLE_API_KEY_47 }}
-          GOOGLE_API_KEY_48: ${{ secrets.GOOGLE_API_KEY_48 }}
-          GOOGLE_API_KEY_49: ${{ secrets.GOOGLE_API_KEY_49 }}
-          GOOGLE_API_KEY_50: ${{ secrets.GOOGLE_API_KEY_50 }}
         run: |
-          echo "🚀 Démarrage de l'analyse fondamentale avec 50 clés API..."
-          echo "🔧 Configuration : gemini-1.5-flash (API v1)"
-          echo "✅ Correction erreur 404 appliquée"
+          echo "🚀 Démarrage de l'analyse fondamentale avec 10 clés..."
+          echo "⚡ Capacité: 150 requêtes/minute (10 × 15)"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération des Rapports (CORRIGÉE)
+      - name: 📝 ÉTAPE 5 - Génération des Rapports (10 Clés)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          # ✅ CONFIGURATION GEMINI CORRIGÉE
           GEMINI_MODEL: "gemini-1.5-flash"
           GEMINI_API_VERSION: "v1beta"
-          # ✅ MÊMES 50 CLÉS (le système utilisera celles non épuisées)
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
           GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
@@ -202,92 +134,34 @@ jobs:
           GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
           GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
           GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
-          GOOGLE_API_KEY_11: ${{ secrets.GOOGLE_API_KEY_11 }}
-          GOOGLE_API_KEY_12: ${{ secrets.GOOGLE_API_KEY_12 }}
-          GOOGLE_API_KEY_13: ${{ secrets.GOOGLE_API_KEY_13 }}
-          GOOGLE_API_KEY_14: ${{ secrets.GOOGLE_API_KEY_14 }}
-          GOOGLE_API_KEY_15: ${{ secrets.GOOGLE_API_KEY_15 }}
-          GOOGLE_API_KEY_16: ${{ secrets.GOOGLE_API_KEY_16 }}
-          GOOGLE_API_KEY_17: ${{ secrets.GOOGLE_API_KEY_17 }}
-          GOOGLE_API_KEY_18: ${{ secrets.GOOGLE_API_KEY_18 }}
-          GOOGLE_API_KEY_19: ${{ secrets.GOOGLE_API_KEY_19 }}
-          GOOGLE_API_KEY_20: ${{ secrets.GOOGLE_API_KEY_20 }}
-          GOOGLE_API_KEY_21: ${{ secrets.GOOGLE_API_KEY_21 }}
-          GOOGLE_API_KEY_22: ${{ secrets.GOOGLE_API_KEY_22 }}
-          GOOGLE_API_KEY_23: ${{ secrets.GOOGLE_API_KEY_23 }}
-          GOOGLE_API_KEY_24: ${{ secrets.GOOGLE_API_KEY_24 }}
-          GOOGLE_API_KEY_25: ${{ secrets.GOOGLE_API_KEY_25 }}
-          GOOGLE_API_KEY_26: ${{ secrets.GOOGLE_API_KEY_26 }}
-          GOOGLE_API_KEY_27: ${{ secrets.GOOGLE_API_KEY_27 }}
-          GOOGLE_API_KEY_28: ${{ secrets.GOOGLE_API_KEY_28 }}
-          GOOGLE_API_KEY_29: ${{ secrets.GOOGLE_API_KEY_29 }}
-          GOOGLE_API_KEY_30: ${{ secrets.GOOGLE_API_KEY_30 }}
-          GOOGLE_API_KEY_31: ${{ secrets.GOOGLE_API_KEY_31 }}
-          GOOGLE_API_KEY_32: ${{ secrets.GOOGLE_API_KEY_32 }}
-          GOOGLE_API_KEY_33: ${{ secrets.GOOGLE_API_KEY_33 }}
-          GOOGLE_API_KEY_34: ${{ secrets.GOOGLE_API_KEY_34 }}
-          GOOGLE_API_KEY_35: ${{ secrets.GOOGLE_API_KEY_35 }}
-          GOOGLE_API_KEY_36: ${{ secrets.GOOGLE_API_KEY_36 }}
-          GOOGLE_API_KEY_37: ${{ secrets.GOOGLE_API_KEY_37 }}
-          GOOGLE_API_KEY_38: ${{ secrets.GOOGLE_API_KEY_38 }}
-          GOOGLE_API_KEY_39: ${{ secrets.GOOGLE_API_KEY_39 }}
-          GOOGLE_API_KEY_40: ${{ secrets.GOOGLE_API_KEY_40 }}
-          GOOGLE_API_KEY_41: ${{ secrets.GOOGLE_API_KEY_41 }}
-          GOOGLE_API_KEY_42: ${{ secrets.GOOGLE_API_KEY_42 }}
-          GOOGLE_API_KEY_43: ${{ secrets.GOOGLE_API_KEY_43 }}
-          GOOGLE_API_KEY_44: ${{ secrets.GOOGLE_API_KEY_44 }}
-          GOOGLE_API_KEY_45: ${{ secrets.GOOGLE_API_KEY_45 }}
-          GOOGLE_API_KEY_46: ${{ secrets.GOOGLE_API_KEY_46 }}
-          GOOGLE_API_KEY_47: ${{ secrets.GOOGLE_API_KEY_47 }}
-          GOOGLE_API_KEY_48: ${{ secrets.GOOGLE_API_KEY_48 }}
-          GOOGLE_API_KEY_49: ${{ secrets.GOOGLE_API_KEY_49 }}
-          GOOGLE_API_KEY_50: ${{ secrets.GOOGLE_API_KEY_50 }}
         run: |
           echo "🚀 Démarrage de la génération des rapports..."
-          echo "🔧 Configuration : gemini-1.5-flash (API v1)"
-          echo "📊 Utilisation des clés non épuisées par l'étape 4"
           python report_generator.py
           echo "✅ Rapports générés"
       
-      - name: 📤 Upload des Rapports générés
+      - name: 📤 Upload des Rapports
         uses: actions/upload-artifact@v4
         with:
           name: rapports-brvm-${{ github.run_number }}
-          path: |
-            Rapport_*.docx
+          path: Rapport_*.docx
           retention-days: 90
       
-      - name: 📊 Résumé de l'exécution
+      - name: 📊 Résumé
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 RÉSUMÉ DE L'EXÉCUTION V9.4 (50 CLÉS API - CORRECTION FINALE)"
+          echo "📈 BRVM ANALYSIS SUITE V9.6 (10 Clés API)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Run #: ${{ github.run_number }}"
-          echo "Base de données: Supabase (PostgreSQL)"
-          echo "Clés API Gemini: 50 clés disponibles"
-          echo "✅ Modèle Gemini: gemini-1.5-flash (CORRIGÉ)"
-          echo "✅ Version API: v1 (stable)"
-          echo "Capacité théorique: 750 requêtes/minute (50 x 15)"
-          echo "Capacité quotidienne: ~75,000 requêtes/jour"
+          echo "Run: ${{ github.run_number }}"
+          echo "Modèle: gemini-1.5-flash (API v1beta)"
+          echo "Clés API: 10 clés"
+          echo "Capacité: 150 req/min | 15,000 req/jour"
           echo "═══════════════════════════════════════════════════════════"
-          
-          if [ -f "Rapport_Synthese_Investissement_BRVM_"*.docx ]; then
+          if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés avec succès"
             ls -lh Rapport_*.docx
           else
             echo "⚠️  Aucun rapport trouvé"
           fi
-          
-          echo "═══════════════════════════════════════════════════════════"
-          echo "📊 CORRECTIONS APPLIQUÉES (V9.4 - DÉCEMBRE 2024):"
-          echo "   • ✅ Nom du modèle corrigé: gemini-1.5-flash"
-          echo "   • ✅ API v1 (stable) au lieu de v1beta"
-          echo "   • ✅ Suppression des suffixes -latest, -001, -002"
-          echo "   • ✅ Erreur 404 résolue définitivement"
-          echo "   • Installation Chrome modernisée"
-          echo "   • Selenium-wire v5.x compatible"
-          echo "   • Validation réponses API renforcée"
-          echo "   • 50 clés API pour capacité maximale"
           echo "═══════════════════════════════════════════════════════════"
