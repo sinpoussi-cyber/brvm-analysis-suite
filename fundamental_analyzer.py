@@ -1,7 +1,9 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V9.1 - VERSION CORRIGÉE
+# MODULE: FUNDAMENTAL ANALYZER V9.2 - VERSION CORRIGÉE (Décembre 2024)
 # ==============================================================================
 # CORRECTIONS:
+# - Nom du modèle corrigé: gemini-1.5-flash (sans suffixes)
+# - API v1 (stable) au lieu de v1beta
 # - Fix selenium-wire options (compatibilité v5.x)
 # - Amélioration gestion erreurs Selenium
 # - Timeout explicites pour toutes les requêtes
@@ -36,9 +38,10 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI
-GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_API_VERSION = "v1beta"
+# ✅ CONFIGURATION GEMINI - CORRIGÉE (Décembre 2024)
+# Utiliser les noms de modèles EXACTS de l'API (sans suffixes -latest, -001, etc.)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1")
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -183,9 +186,9 @@ class BRVMAnalyzer:
             
             # ✅ CORRECTION: Options selenium-wire compatibles v5.x
             seleniumwire_options = {
-                'disable_encoding': True,  # Désactive compression
-                'suppress_connection_errors': True,  # Ignore erreurs SSL
-                'connection_timeout': 30  # Timeout connexion
+                'disable_encoding': True,
+                'suppress_connection_errors': True,
+                'connection_timeout': 30
             }
             
             self.driver = webdriver.Chrome(
@@ -354,6 +357,7 @@ Si une info manque, mentionne-le clairement."""
             
             self.api_manager.handle_rate_limit()
             
+            # ✅ URL CORRIGÉE avec le bon nom de modèle
             api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
             
             headers = {
@@ -404,7 +408,8 @@ Si une info manque, mentionne-le clairement."""
                     continue
                 
                 elif response.status_code == 404:
-                    logging.error(f"    ❌ 404 avec clé #{key_num}")
+                    logging.error(f"    ❌ 404 avec clé #{key_num} - Modèle: {GEMINI_MODEL}, API: {GEMINI_API_VERSION}")
+                    logging.error(f"    URL: {api_url}")
                     self.api_manager.move_to_next_key()
                     attempts += 1
                     continue
@@ -438,7 +443,8 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.1 - CORRIGÉE)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.2 - CORRIGÉE)")
+        logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
         logging.info("="*80)
         
         conn = None
