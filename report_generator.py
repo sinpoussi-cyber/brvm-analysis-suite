@@ -1,9 +1,10 @@
 # ==============================================================================
-# MODULE: COMPREHENSIVE REPORT GENERATOR V9.3 - CORRECTION FINALE API v1beta
+# MODULE: COMPREHENSIVE REPORT GENERATOR V9.4 - CORRECTION FINALE (Décembre 2024)
 # ==============================================================================
 # CORRECTION CRITIQUE:
-# - Version API changée: v1beta (au lieu de v1)
-# - Le modèle gemini-1.5-flash nécessite v1beta
+# - Nom du modèle corrigé: gemini-1.5-flash (sans suffixes)
+# - API v1 (stable) par défaut
+# - Suppression des noms de modèles invalides dans les fallbacks
 # ==============================================================================
 
 import psycopg2
@@ -27,22 +28,22 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (surchageable via variables d'environnement)
-# Les modèles suffixés (-001/-002/-latest) sont progressivement retirés.
-# On privilégie désormais les noms stables documentés par Google (ex: "gemini-1.5-flash").
+# ✅ CONFIGURATION GEMINI - CORRIGÉE (Décembre 2024)
+# Utiliser UNIQUEMENT les noms de modèles EXACTS de l'API
+# Documentation officielle: https://ai.google.dev/gemini-api/docs/models
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1")
 
+# ✅ FALLBACKS CORRIGÉS - Seulement les modèles qui existent réellement
 GEMINI_MODEL_FALLBACKS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro",
-    "gemini-pro",
+    "gemini-1.5-flash",      # Modèle principal recommandé
+    "gemini-1.5-pro",        # Alternative plus puissante
+    "gemini-1.5-flash-8b",   # Alternative légère (v1beta uniquement)
 ]
 
 GEMINI_API_VERSION_FALLBACKS = [
-    "v1beta",
-    "v1",
+    "v1",        # API stable (recommandée)
+    "v1beta",    # API beta (plus de fonctionnalités)
 ]
 
 class ComprehensiveReportGenerator:
@@ -54,6 +55,7 @@ class ComprehensiveReportGenerator:
         self.gemini_api_version = GEMINI_API_VERSION
 
     def _iter_gemini_configs(self):
+        """Itère sur toutes les combinaisons modèle/version valides"""
         models = []
         if self.gemini_model:
             models.append(self.gemini_model)
@@ -73,6 +75,7 @@ class ComprehensiveReportGenerator:
                 yield model, version
                 
     def _get_next_api_key(self):
+        """Obtient la prochaine clé API disponible"""
         key_info = self.api_manager.get_next_key()
         if key_info:
             self.current_api_key = key_info
@@ -80,6 +83,7 @@ class ComprehensiveReportGenerator:
         return None
 
     def _call_gemini_with_config(self, prompt, model, version):
+        """Appel API Gemini avec une configuration spécifique"""
         available_keys = self.api_manager.get_available_keys()
         
         if not available_keys:
@@ -97,6 +101,7 @@ class ComprehensiveReportGenerator:
             key_num = self.current_api_key['number']
             self.api_manager.handle_rate_limit()
 
+            # ✅ URL CORRIGÉE avec le bon format
             api_url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent"
             
             headers = {
@@ -231,9 +236,7 @@ class ComprehensiveReportGenerator:
         return False, "Erreur d'analyse : Toutes les clés API ont échoué."
 
     def _call_gemini_with_retry(self, prompt):
-        """
-        Appel API Gemini avec retry - VERSION CORRIGÉE v1beta
-        """
+        """Appel API Gemini avec retry sur différentes configurations"""
         last_error_message = None
 
         for model, version in self._iter_gemini_configs():
@@ -261,6 +264,7 @@ class ComprehensiveReportGenerator:
         )
         
     def _get_all_data_from_db(self):
+        """Récupère toutes les données depuis la base"""
         logging.info("📂 Récupération des données (100 derniers jours)...")
         
         query = """
@@ -297,6 +301,7 @@ class ComprehensiveReportGenerator:
         return company_data
 
     def _get_predictions_from_db(self, symbol):
+        """Récupère les prédictions pour une société"""
         try:
             query = """
             SELECT prediction_date, predicted_price, lower_bound, upper_bound, confidence_level
@@ -312,6 +317,7 @@ class ComprehensiveReportGenerator:
             return None
 
     def _analyze_price_evolution(self, df_prices):
+        """Analyse l'évolution du prix avec l'IA"""
         if df_prices.empty or df_prices['price'].isnull().all():
             return "Données de prix insuffisantes."
         
@@ -342,6 +348,7 @@ Résumé:
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_predictions_detailed(self, df_predictions, current_price):
+        """Analyse les prédictions avec l'IA"""
         if df_predictions is None or df_predictions.empty:
             return "Aucune prédiction disponible."
         
@@ -390,6 +397,7 @@ Fournis une analyse concise avec :
         return self._call_gemini_with_retry(prompt)
 
     def _analyze_technical_indicators(self, series_indicators):
+        """Analyse les indicateurs techniques avec l'IA"""
         mm = series_indicators.get('mm_decision', 'N/A')
         bollinger = series_indicators.get('bollinger_decision', 'N/A')
         macd = series_indicators.get('macd_decision', 'N/A')
@@ -411,6 +419,7 @@ Fournis une analyse concise avec signal clair."""
         return self._call_gemini_with_retry(prompt)
 
     def _summarize_fundamental_analysis(self, summaries):
+        """Synthétise les analyses fondamentales avec l'IA"""
         if not summaries or summaries == "Aucune analyse fondamentale disponible.":
             return summaries
         
@@ -426,6 +435,7 @@ Analyses:
         return self._call_gemini_with_retry(prompt)
 
     def _add_predictions_table(self, doc, df_predictions):
+        """Ajoute le tableau des prédictions au document"""
         if df_predictions is None or df_predictions.empty:
             return
         
@@ -457,6 +467,7 @@ Analyses:
         doc.add_paragraph()
 
     def _create_main_report(self, company_analyses):
+        """Crée le rapport Word final"""
         logging.info("📝 Création du rapport de synthèse...")
         
         doc = Document()
@@ -466,11 +477,9 @@ Analyses:
         
         meta = doc.add_paragraph()
         meta.add_run(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}\n").bold = True
-        meta.add_run(
-            f"Propulsé par {self.gemini_model} (API {self.gemini_api_version})\n"
-        )
+        meta.add_run(f"Propulsé par {self.gemini_model} (API {self.gemini_api_version})\n")
         meta.add_run(f"Analyse sur 100 jours | Prédictions 20 jours ouvrables\n")
-        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.3")
+        meta.add_run(f"Base de données : Supabase (PostgreSQL) | Version : 9.4")
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
@@ -506,11 +515,10 @@ Analyses:
         return output_filename
 
     def generate_all_reports(self, new_fundamental_analyses):
+        """Fonction principale de génération"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.3 - CORRECTION v1beta)")
-        logging.info(
-            f"🤖 Modèle: {self.gemini_model} | API: {self.gemini_api_version}"
-        )
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.4 - CORRIGÉE)")
+        logging.info(f"🤖 Modèle: {self.gemini_model} | API: {self.gemini_api_version}")
         logging.info("="*80)
 
         stats = self.api_manager.get_statistics()
