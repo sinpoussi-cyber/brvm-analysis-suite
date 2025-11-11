@@ -1,11 +1,10 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V9.7 - CORRECTION TIMEOUT SQL
+# MODULE: REPORT GENERATOR V11.0 - CLAUDE API
 # ==============================================================================
-# CORRECTIONS:
-# - Requête SQL optimisée (évite timeout)
-# - Limite 30 derniers jours au lieu de 100
-# - Index utilisés pour performance
-# - Gestion gracieuse si pas de données
+# CONFIGURATION:
+# - API Anthropic Claude 3.5 Sonnet
+# - 1 seule clé API
+# - Requête SQL optimisée (30 jours)
 # ==============================================================================
 
 import os
@@ -19,8 +18,6 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import requests
 import time
 
-from api_key_manager import APIKeyManager
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Configuration & Secrets ---
@@ -30,27 +27,17 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI FINALE
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
-
-# ✅ FALLBACKS CORRIGÉS
-GEMINI_MODEL_FALLBACKS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-]
-
-GEMINI_API_VERSION_FALLBACKS = [
-    "v1beta",
-    "v1",
-]
+# ✅ CONFIGURATION CLAUDE API
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 
 class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
-        self.api_manager = APIKeyManager('report_generator')
-        self.current_api_key = None
+        self.request_count = 0
+        self.last_request_time = None
         
         # Connexion DB
         try:
@@ -58,7 +45,7 @@ class BRVMReportGenerator:
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
                 host=DB_HOST, port=DB_PORT,
                 connect_timeout=10,
-                options='-c statement_timeout=45000'  # 45 secondes max
+                options='-c statement_timeout=45000'
             )
             logging.info("✅ Connexion DB établie")
         except Exception as e:
@@ -66,16 +53,11 @@ class BRVMReportGenerator:
             raise
 
     def _get_all_data_from_db(self):
-        """
-        Récupération optimisée des données (évite timeout)
-        CORRECTION: Limite à 30 derniers jours au lieu de 100
-        """
+        """Récupération optimisée des données (30 derniers jours)"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
         
-        # Date limite: 30 jours en arrière
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         
-        # ✅ REQUÊTE SQL OPTIMISÉE (évite timeout)
         query = f"""
         WITH recent_data AS (
             SELECT 
@@ -123,40 +105,21 @@ class BRVMReportGenerator:
             return df
             
         except psycopg2.errors.QueryCanceled:
-            logging.error("❌ Timeout SQL - requête trop longue")
-            logging.info("💡 Tentative avec requête ultra-simple...")
-            
-            # ✅ FALLBACK: Requête ultra-simple si timeout
-            simple_query = """
-            SELECT 
-                c.symbol, 
-                c.name as company_name,
-                NULL as trade_date,
-                NULL as price,
-                NULL as mm_decision,
-                NULL as bollinger_decision,
-                NULL as macd_decision,
-                NULL as rsi_decision,
-                NULL as stochastic_decision,
-                NULL as fundamental_summaries
-            FROM companies c
-            ORDER BY c.symbol;
-            """
-            
+            logging.error("❌ Timeout SQL")
+            simple_query = """SELECT c.symbol, c.name as company_name FROM companies c ORDER BY c.symbol;"""
             try:
                 df = pd.read_sql(simple_query, self.db_conn)
                 logging.info(f"   ✅ Mode dégradé: {len(df)} société(s)")
                 return df
             except Exception as e:
-                logging.error(f"❌ Échec requête fallback: {e}")
+                logging.error(f"❌ Échec fallback: {e}")
                 return pd.DataFrame()
-                
         except Exception as e:
-            logging.error(f"❌ Erreur requête SQL: {e}")
+            logging.error(f"❌ Erreur SQL: {e}")
             return pd.DataFrame()
 
     def _get_predictions_from_db(self):
-        """Récupération des prédictions (optimisée)"""
+        """Récupération des prédictions"""
         logging.info("🔮 Récupération des prédictions...")
         
         query = """
@@ -186,16 +149,20 @@ class BRVMReportGenerator:
             logging.error(f"❌ Erreur prédictions: {e}")
             return pd.DataFrame()
 
-    def _get_next_api_key(self):
-        """Obtient la prochaine clé API"""
-        key_info = self.api_manager.get_next_key()
-        if key_info:
-            self.current_api_key = key_info
-            return key_info['key']
-        return None
+    def _handle_rate_limit(self):
+        """Gestion du rate limiting Claude (50 req/min)"""
+        now = time.time()
+        
+        if self.last_request_time:
+            elapsed = now - self.last_request_time
+            if elapsed < 1.2:
+                time.sleep(1.2 - elapsed)
+        
+        self.last_request_time = time.time()
+        self.request_count += 1
 
     def _generate_ia_analysis(self, symbol, data_dict):
-        """Génération analyse IA avec Gemini"""
+        """Génération analyse IA avec Claude"""
         
         # Construire contexte
         context_parts = [f"Société: {symbol}"]
@@ -227,66 +194,49 @@ Fournis:
 
 Sois direct et factuel."""
 
-        max_attempts = len(self.api_manager.get_available_keys())
-        attempts = 0
+        # Gestion rate limiting
+        self._handle_rate_limit()
         
-        while attempts < max_attempts:
-            api_key = self._get_next_api_key()
+        # Appel API Claude
+        headers = {
+            "x-api-key": CLAUDE_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        
+        payload = {
+            "model": CLAUDE_MODEL,
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        }
+        
+        try:
+            response = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=30)
             
-            if not api_key:
-                logging.warning(f"    ⚠️  Aucune clé disponible pour {symbol}")
+            if response.status_code == 200:
+                data = response.json()
+                if 'content' in data and len(data['content']) > 0:
+                    text = data['content'][0]['text']
+                    logging.info(f"    ✅ {symbol}: Analyse générée")
+                    return text
+            
+            elif response.status_code == 429:
+                logging.warning(f"    ⚠️  Rate limit, attente 60s")
+                time.sleep(60)
                 return self._generate_fallback_analysis(symbol, data_dict)
             
-            key_num = self.current_api_key['number']
-            
-            self.api_manager.handle_rate_limit()
-            
-            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
-            
-            headers = {
-                "Content-Type": "application/json",
-                "x-goog-api-key": api_key
-            }
-            
-            request_body = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 1024,
-                }
-            }
-            
-            try:
-                response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
+            else:
+                logging.warning(f"    ⚠️  Erreur {response.status_code}")
+                return self._generate_fallback_analysis(symbol, data_dict)
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'candidates' in data and data['candidates']:
-                        text = data['candidates'][0]['content']['parts'][0]['text']
-                        logging.info(f"    ✅ {symbol}: Analyse générée (clé #{key_num})")
-                        return text
-                
-                elif response.status_code == 429:
-                    logging.warning(f"    ⚠️  Quota épuisé clé #{key_num}")
-                    self.api_manager.mark_key_exhausted(key_num)
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                
-                else:
-                    logging.warning(f"    ⚠️  Erreur {response.status_code} clé #{key_num}")
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                    
-            except Exception as e:
-                logging.error(f"    ❌ Exception clé #{key_num}: {e}")
-                self.api_manager.move_to_next_key()
-                attempts += 1
-                continue
-        
-        # Fallback si toutes les clés échouent
-        return self._generate_fallback_analysis(symbol, data_dict)
+        except Exception as e:
+            logging.error(f"    ❌ Exception: {e}")
+            return self._generate_fallback_analysis(symbol, data_dict)
 
     def _generate_fallback_analysis(self, symbol, data_dict):
         """Analyse de secours si API échoue"""
@@ -311,7 +261,7 @@ Sois direct et factuel."""
                 analysis += "Signaux techniques mixtes.\n\n"
         else:
             analysis += "**Recommandation**: CONSERVER\n"
-            analysis += "Données insuffisantes pour une recommandation.\n\n"
+            analysis += "Données insuffisantes.\n\n"
         
         analysis += "**Niveau de confiance**: Moyen\n"
         analysis += "**Niveau de risque**: Moyen\n"
@@ -333,12 +283,13 @@ Sois direct et factuel."""
         
         doc.add_paragraph()
         
-        # Table des matières
+        # Synthèse
         doc.add_heading('Synthèse Générale', level=1)
         doc.add_paragraph(f"Nombre de sociétés analysées: {len(all_analyses)}")
+        doc.add_paragraph(f"Analyse propulsée par Claude AI (Anthropic)")
         doc.add_paragraph()
         
-        # Analyses par société
+        # Analyses détaillées
         doc.add_heading('Analyses Détaillées', level=1)
         
         for symbol, analysis in sorted(all_analyses.items()):
@@ -356,18 +307,21 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V9.7 - CORRECTION TIMEOUT)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V11.0 - Claude API)")
+        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
         
-        stats = self.api_manager.get_statistics()
-        logging.info(f"📊 Clés disponibles: {stats['available']}/{stats['total']}")
+        if not CLAUDE_API_KEY:
+            logging.error("❌ CLAUDE_API_KEY non configurée")
+            return
+        
+        logging.info("✅ Clé Claude configurée")
         
         # Récupération données
         df = self._get_all_data_from_db()
         
         if df.empty:
-            logging.error("❌ Aucune donnée disponible - rapport impossible")
+            logging.error("❌ Aucune donnée - rapport impossible")
             return
         
         predictions_df = self._get_predictions_from_db()
@@ -414,10 +368,8 @@ Sois direct et factuel."""
         # Création document
         filename = self._create_word_document(all_analyses)
         
-        final_stats = self.api_manager.get_statistics()
         logging.info(f"\n✅ Rapport généré: {filename}")
-        logging.info(f"📊 Clés utilisées: {final_stats['used_by_module']}")
-        logging.info(f"📊 Clés disponibles: {final_stats['available']}")
+        logging.info(f"📊 Requêtes Claude: {self.request_count}")
 
     def __del__(self):
         """Fermeture connexion DB"""
