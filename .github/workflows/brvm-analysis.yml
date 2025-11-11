@@ -1,8 +1,8 @@
-name: BRVM Analysis Suite V9.6 - 10 Clés API (VERSION FINALE)
+name: BRVM Analysis Suite V10.0 - 2 Clés AI Studio (CORRECTION FINALE 404)
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Tous les jours à 06h00 GMT
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,16 +11,16 @@ jobs:
     timeout-minutes: 180
     
     steps:
-      - name: 🔥 Checkout du code
+      - name: 🔥 Checkout
         uses: actions/checkout@v3
       
-      - name: 🐍 Configuration Python 3.11
+      - name: 🐍 Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 📦 Installation des dépendances
+      - name: 📦 Installation dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -50,11 +50,10 @@ jobs:
           
           rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
           
-          echo "✅ Chrome et Chromedriver installés"
-          google-chrome --version
-          chromedriver --version
+          echo "✅ Chrome: $(google-chrome --version)"
+          echo "✅ Chromedriver: $(chromedriver --version)"
       
-      - name: 📊 ÉTAPE 1 - Collecte de Données
+      - name: 📊 ÉTAPE 1 - Collecte Données
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -62,7 +61,7 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
         run: |
-          echo "🚀 Démarrage de la collecte de données..."
+          echo "🚀 Collecte données BRVM..."
           python data_collector.py
           echo "✅ Collecte terminée"
       
@@ -74,11 +73,11 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
         run: |
-          echo "🚀 Démarrage de l'analyse technique..."
+          echo "🚀 Analyse technique..."
           python technical_analyzer.py
           echo "✅ Analyse technique terminée"
       
-      - name: 🔮 ÉTAPE 3 - Prédictions (20 par société)
+      - name: 🔮 ÉTAPE 3 - Prédictions
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -86,36 +85,17 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
         run: |
-          echo "🚀 Démarrage des prédictions..."
+          echo "🚀 Prédictions 20 jours..."
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (10 Clés)
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1beta"
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (DÉSACTIVÉE - Pas de PDFs)
         run: |
-          echo "🚀 Démarrage de l'analyse fondamentale avec 10 clés..."
-          echo "⚡ Capacité: 150 requêtes/minute (10 × 15)"
-          python fundamental_analyzer.py
-          echo "✅ Analyse fondamentale terminée"
+          echo "⚠️  Étape désactivée: Aucun rapport PDF trouvé sur BRVM"
+          echo "💡 Astuce: Vérifiez manuellement https://www.brvm.org"
+          echo "✅ Passage à l'étape suivante"
       
-      - name: 📝 ÉTAPE 5 - Génération des Rapports (10 Clés)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (2 Clés)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -126,20 +106,15 @@ jobs:
           GEMINI_API_VERSION: "v1beta"
           GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
           GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
-          GOOGLE_API_KEY_3: ${{ secrets.GOOGLE_API_KEY_3 }}
-          GOOGLE_API_KEY_4: ${{ secrets.GOOGLE_API_KEY_4 }}
-          GOOGLE_API_KEY_5: ${{ secrets.GOOGLE_API_KEY_5 }}
-          GOOGLE_API_KEY_6: ${{ secrets.GOOGLE_API_KEY_6 }}
-          GOOGLE_API_KEY_7: ${{ secrets.GOOGLE_API_KEY_7 }}
-          GOOGLE_API_KEY_8: ${{ secrets.GOOGLE_API_KEY_8 }}
-          GOOGLE_API_KEY_9: ${{ secrets.GOOGLE_API_KEY_9 }}
-          GOOGLE_API_KEY_10: ${{ secrets.GOOGLE_API_KEY_10 }}
         run: |
-          echo "🚀 Démarrage de la génération des rapports..."
+          echo "🚀 Génération rapports avec 2 clés..."
+          echo "⚡ Capacité: 30 requêtes/minute (2 × 15)"
+          echo "📌 IMPORTANT: Utilisez des clés AI Studio (aistudio.google.com)"
+          echo "📌 PAS des clés Cloud Console (console.cloud.google.com)"
           python report_generator.py
           echo "✅ Rapports générés"
       
-      - name: 📤 Upload des Rapports
+      - name: 📤 Upload Rapports
         uses: actions/upload-artifact@v4
         with:
           name: rapports-brvm-${{ github.run_number }}
@@ -150,16 +125,26 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V9.6 (10 Clés API)"
+          echo "📈 BRVM ANALYSIS SUITE V10.0 (2 Clés AI Studio)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
-          echo "Modèle: gemini-1.5-flash (API v1beta)"
-          echo "Clés API: 10 clés"
-          echo "Capacité: 150 req/min | 15,000 req/jour"
-          echo "═══════════════════════════════════════════════════════════"
+          echo ""
+          echo "⚙️  Configuration:"
+          echo "  - Modèle: gemini-1.5-flash"
+          echo "  - API: v1beta (AI Studio)"
+          echo "  - Clés: 2"
+          echo "  - Capacité: 30 req/min | 3,000 req/jour"
+          echo ""
+          echo "📋 Étapes:"
+          echo "  ✅ Collecte données"
+          echo "  ✅ Analyse technique"
+          echo "  ✅ Prédictions"
+          echo "  ⚠️  Analyse fondamentale (désactivée)"
+          echo "  ✅ Génération rapports"
+          echo ""
           if [ -f "Rapport_"*.docx ]; then
-            echo "✅ Rapports générés avec succès"
+            echo "✅ Rapports générés:"
             ls -lh Rapport_*.docx
           else
             echo "⚠️  Aucun rapport trouvé"
