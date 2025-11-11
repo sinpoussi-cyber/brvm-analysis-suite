@@ -1,11 +1,11 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V10.0 - VERSION FINALE (2 Clés AI Studio)
+# MODULE: FUNDAMENTAL ANALYZER V11.0 - CLAUDE API
 # ==============================================================================
-# CONFIGURATION FINALE:
-# - Support de 2 clés API Gemini (AI Studio)
-# - API v1beta (pour clés AI Studio)
-# - Nom du modèle: gemini-1.5-flash (sans suffixes)
-# - Capacité: 30 requêtes/minute (2 × 15)
+# CONFIGURATION:
+# - API Anthropic Claude 3.5 Sonnet
+# - 1 seule clé API nécessaire
+# - Analyse PDF native
+# - Stable et fiable
 # ==============================================================================
 
 import requests
@@ -25,8 +25,6 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
 
-from api_key_manager import APIKeyManager
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -37,10 +35,11 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI FINALE - 10 Clés AI Studio
-# Documentation: https://ai.google.dev/gemini-api/docs/models
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+# ✅ CONFIGURATION CLAUDE API
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -99,9 +98,8 @@ class BRVMAnalyzer:
         self.analysis_memory = set()
         self.company_ids = {}
         self.newly_analyzed_reports = []
-        
-        self.api_manager = APIKeyManager('fundamental_analyzer')
-        self.current_api_key = None
+        self.request_count = 0
+        self.last_request_time = None
 
     def connect_to_db(self):
         """Connexion à PostgreSQL (Supabase)"""
@@ -291,16 +289,20 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur recherche: {e}")
             return {}
 
-    def _get_next_api_key(self):
-        """Obtient la prochaine clé API disponible"""
-        key_info = self.api_manager.get_next_key()
-        if key_info:
-            self.current_api_key = key_info
-            return key_info['key']
-        return None
+    def _handle_rate_limit(self):
+        """Gestion du rate limiting Claude (50 req/min)"""
+        now = time.time()
+        
+        if self.last_request_time:
+            elapsed = now - self.last_request_time
+            if elapsed < 1.2:  # 50 req/min = 1.2s entre requêtes
+                time.sleep(1.2 - elapsed)
+        
+        self.last_request_time = time.time()
+        self.request_count += 1
 
-    def _analyze_pdf_with_api(self, company_id, symbol, report):
-        """Analyse un PDF avec l'API Gemini"""
+    def _analyze_pdf_with_claude(self, company_id, symbol, report):
+        """Analyse un PDF avec Claude API"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -321,14 +323,16 @@ class BRVMAnalyzer:
         
         logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
         
+        # Téléchargement du PDF
         try:
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
-            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
+            pdf_data = base64.standard_b64encode(pdf_response.content).decode('utf-8')
         except Exception as e:
             logging.error(f"    ❌ Erreur téléchargement PDF: {e}")
             return False
         
+        # Prompt d'analyse
         prompt = """Tu es un analyste financier expert. Analyse ce rapport financier et fournis une synthèse concise en français.
 
 Concentre-toi sur :
@@ -340,115 +344,88 @@ Concentre-toi sur :
 
 Si une info manque, mentionne-le clairement."""
         
-        max_attempts = len(self.api_manager.get_available_keys())
-        attempts = 0
+        # Gestion du rate limiting
+        self._handle_rate_limit()
         
-        while attempts < max_attempts:
-            api_key = self._get_next_api_key()
+        # Appel API Claude
+        headers = {
+            "x-api-key": CLAUDE_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        
+        payload = {
+            "model": CLAUDE_MODEL,
+            "max_tokens": 2048,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_data
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        try:
+            response = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=120)
             
-            if not api_key:
-                logging.error("    ❌ Aucune clé API disponible")
+            if response.status_code == 200:
+                data = response.json()
+                
+                if 'content' in data and len(data['content']) > 0:
+                    analysis_text = data['content'][0]['text']
+                    
+                    if self._save_to_db(company_id, report, analysis_text):
+                        self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
+                        logging.info(f"    ✅ {symbol}: Analyse réussie")
+                        return True
+                
+                logging.warning(f"    ⚠️  Réponse Claude malformée")
                 return False
             
-            key_num = self.current_api_key['number']
-            logging.info(f"    🤖 Tentative avec clé #{key_num}")
+            elif response.status_code == 429:
+                logging.warning(f"    ⚠️  Rate limit atteint, attente 60s...")
+                time.sleep(60)
+                return False
             
-            self.api_manager.handle_rate_limit()
-            
-            api_url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
-            
-            headers = {
-                "Content-Type": "application/json",
-                "x-goog-api-key": api_key
-            }
-            
-            request_body = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt}, 
-                        {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}}
-                    ]
-                }],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "topK": 40,
-                    "topP": 0.95,
-                    "maxOutputTokens": 2048,
-                }
-            }
-            
-            try:
-                response = requests.post(api_url, headers=headers, json=request_body, timeout=120)
+            else:
+                logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
+                return False
                 
-                if response.status_code == 200:
-                    response_json = response.json()
-                    
-                    if 'candidates' in response_json and len(response_json['candidates']) > 0:
-                        candidate = response_json['candidates'][0]
-                        if 'content' in candidate and 'parts' in candidate['content']:
-                            analysis_text = candidate['content']['parts'][0]['text']
-                            
-                            if "erreur" not in analysis_text.lower():
-                                if self._save_to_db(company_id, report, analysis_text):
-                                    self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                                    return True
-                    
-                    logging.warning(f"    ⚠️  Réponse API malformée")
-                    return False
-                
-                elif response.status_code == 429:
-                    logging.warning(f"    ⚠️  Quota épuisé pour clé #{key_num}")
-                    self.api_manager.mark_key_exhausted(key_num)
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                
-                elif response.status_code == 404:
-                    logging.error(f"    ❌ 404 avec clé #{key_num} - Modèle: {GEMINI_MODEL}, API: {GEMINI_API_VERSION}")
-                    logging.error(f"    URL: {api_url}")
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                
-                elif response.status_code == 403:
-                    logging.error(f"    ❌ 403 avec clé #{key_num}")
-                    self.api_manager.mark_key_exhausted(key_num)
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                
-                else:
-                    logging.error(f"    ❌ Erreur {response.status_code}")
-                    self.api_manager.move_to_next_key()
-                    attempts += 1
-                    continue
-                    
-            except requests.exceptions.Timeout:
-                logging.error(f"    ⏱️  Timeout clé #{key_num}")
-                self.api_manager.move_to_next_key()
-                attempts += 1
-                continue
-            except Exception as e:
-                logging.error(f"    ❌ Exception clé #{key_num}: {e}")
-                self.api_manager.move_to_next_key()
-                attempts += 1
-                continue
-        
-        return False
+        except requests.exceptions.Timeout:
+            logging.error(f"    ⏱️  Timeout API Claude")
+            return False
+        except Exception as e:
+            logging.error(f"    ❌ Exception: {e}")
+            return False
 
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V10.0 - 2 Clés)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V11.0 - Claude API)")
+        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
+        
+        if not CLAUDE_API_KEY:
+            logging.error("❌ CLAUDE_API_KEY non configurée")
+            return {}, []
+        
+        logging.info("✅ Clé Claude configurée")
         
         conn = None
         try:
-            stats = self.api_manager.get_statistics()
-            logging.info(f"📊 Clés disponibles: {stats['available']}/{stats['total']}")
-            logging.info(f"⚡ Capacité: {stats['available'] * 15} requêtes/minute")
-            
             self._load_analysis_memory_from_db()
             
             if not self.setup_selenium():
@@ -494,7 +471,7 @@ Si une info manque, mentionne-le clairement."""
                 logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
                 
                 for report in new:
-                    result = self._analyze_pdf_with_api(company_id, symbol, report)
+                    result = self._analyze_pdf_with_claude(company_id, symbol, report)
                     if result is True:
                         total_analyzed += 1
                     elif result is None:
@@ -502,14 +479,10 @@ Si une info manque, mentionne-le clairement."""
                 
                 total_skipped += len(already)
             
-            final_stats = self.api_manager.get_statistics()
-            
             logging.info("\n✅ Traitement terminé")
             logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
             logging.info(f"📊 Rapports ignorés: {total_skipped}")
-            logging.info(f"📊 Clés utilisées: {final_stats['used_by_module']}")
-            logging.info(f"📊 Clés épuisées: {final_stats['exhausted']}")
-            logging.info(f"📊 Clés disponibles: {final_stats['available']}")
+            logging.info(f"📊 Requêtes Claude: {self.request_count}")
             
             conn = self.connect_to_db()
             if not conn: 
@@ -542,6 +515,7 @@ Si une info manque, mentionne-le clairement."""
                     pass
             if conn and not conn.closed: 
                 conn.close()
+
 
 if __name__ == "__main__":
     analyzer = BRVMAnalyzer()
