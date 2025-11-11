@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V10.0 - 2 Clés AI Studio (CORRECTION FINALE 404)
+name: BRVM Analysis Suite V11.0 - Claude API (SOLUTION FINALE)
 
 on:
   schedule:
@@ -89,28 +89,32 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (DÉSACTIVÉE - Pas de PDFs)
-        run: |
-          echo "⚠️  Étape désactivée: Aucun rapport PDF trouvé sur BRVM"
-          echo "💡 Astuce: Vérifiez manuellement https://www.brvm.org"
-          echo "✅ Passage à l'étape suivante"
-      
-      - name: 📝 ÉTAPE 5 - Génération Rapports (2 Clés)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Claude API)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          GEMINI_MODEL: "gemini-1.5-flash"
-          GEMINI_API_VERSION: "v1beta"
-          GOOGLE_API_KEY_1: ${{ secrets.GOOGLE_API_KEY_1 }}
-          GOOGLE_API_KEY_2: ${{ secrets.GOOGLE_API_KEY_2 }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          echo "🚀 Génération rapports avec 2 clés..."
-          echo "⚡ Capacité: 30 requêtes/minute (2 × 15)"
-          echo "📌 IMPORTANT: Utilisez des clés AI Studio (aistudio.google.com)"
-          echo "📌 PAS des clés Cloud Console (console.cloud.google.com)"
+          echo "🚀 Analyse fondamentale avec Claude..."
+          echo "🤖 Modèle: claude-3-5-sonnet-20241022"
+          echo "⚡ API Anthropic - Stable et fiable"
+          python fundamental_analyzer.py
+          echo "✅ Analyse fondamentale terminée"
+      
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Claude API)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          echo "🚀 Génération rapports avec Claude..."
+          echo "🤖 Modèle: claude-3-5-sonnet-20241022"
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -125,23 +129,23 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V10.0 (2 Clés AI Studio)"
+          echo "📈 BRVM ANALYSIS SUITE V11.0 (Claude API)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - Modèle: gemini-1.5-flash"
-          echo "  - API: v1beta (AI Studio)"
-          echo "  - Clés: 2"
-          echo "  - Capacité: 30 req/min | 3,000 req/jour"
+          echo "  - Modèle: claude-3-5-sonnet-20241022"
+          echo "  - API: Anthropic Claude"
+          echo "  - Clés: 1 seule clé nécessaire"
+          echo "  - Capacité: 50 requêtes/minute"
           echo ""
           echo "📋 Étapes:"
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
-          echo "  ⚠️  Analyse fondamentale (désactivée)"
-          echo "  ✅ Génération rapports"
+          echo "  ✅ Analyse fondamentale (Claude)"
+          echo "  ✅ Génération rapports (Claude)"
           echo ""
           if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés:"
