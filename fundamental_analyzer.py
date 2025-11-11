@@ -1,11 +1,11 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V9.6 - VERSION FINALE (10 Clés AI Studio)
+# MODULE: FUNDAMENTAL ANALYZER V10.0 - VERSION FINALE (2 Clés AI Studio)
 # ==============================================================================
 # CONFIGURATION FINALE:
-# - Support de 10 clés API Gemini (AI Studio)
+# - Support de 2 clés API Gemini (AI Studio)
 # - API v1beta (pour clés AI Studio)
 # - Nom du modèle: gemini-1.5-flash (sans suffixes)
-# - Capacité: 150 requêtes/minute (10 × 15)
+# - Capacité: 30 requêtes/minute (2 × 15)
 # ==============================================================================
 
 import requests
@@ -439,7 +439,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V9.6 - 10 Clés)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V10.0 - 2 Clés)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL} | API: {GEMINI_API_VERSION}")
         logging.info("="*80)
         
