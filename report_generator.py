@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V11.0 - CLAUDE API
+# MODULE: REPORT GENERATOR V11.0 - CLAUDE API (CORRIGÉ)
 # ==============================================================================
 
 import os
@@ -137,7 +137,13 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict):
-        """Génération analyse IA avec Claude"""
+        """Génération analyse IA avec Claude - VERSION CORRIGÉE"""
+        
+        # Obtenir la clé API
+        api_key = self.api_manager.get_api_key()
+        if not api_key:
+            logging.warning(f"    ⚠️  Aucune clé Claude disponible pour {symbol}")
+            return self._generate_fallback_analysis(symbol, data_dict)
         
         # Construire contexte
         context_parts = [f"Société: {symbol}"]
@@ -168,16 +174,10 @@ Fournis:
 4. **Niveau de risque**: Faible, Moyen ou Élevé
 
 Sois direct et factuel."""
-
-        # Obtenir la clé API
-        api_key = self.api_manager.get_api_key()
-        if not api_key:
-            logging.warning(f"    ⚠️  Aucune clé Claude disponible pour {symbol}")
-            return self._generate_fallback_analysis(symbol, data_dict)
         
         self.api_manager.handle_rate_limit()
         
-        # ✅ API CLAUDE
+        # ✅ API CLAUDE - FORMAT CORRIGÉ POUR MESSAGES SIMPLES
         api_url = "https://api.anthropic.com/v1/messages"
         
         headers = {
@@ -186,17 +186,25 @@ Sois direct et factuel."""
             "anthropic-version": "2023-06-01"
         }
         
+        # ⚠️ CORRECTION ICI : Format simplifié pour messages texte
         request_body = {
             "model": CLAUDE_MODEL,
             "max_tokens": 1024,
-            "messages": [{
-                "role": "user",
-                "content": prompt
-            }]
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         }
         
         try:
             response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
+            
+            # Debugging détaillé
+            if response.status_code != 200:
+                logging.error(f"    ❌ {symbol} - Code: {response.status_code}")
+                logging.error(f"    ❌ Réponse: {response.text[:200]}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -204,6 +212,13 @@ Sois direct et factuel."""
                     text = data['content'][0]['text']
                     logging.info(f"    ✅ {symbol}: Analyse générée")
                     return text
+                else:
+                    logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
+                    return self._generate_fallback_analysis(symbol, data_dict)
+            
+            elif response.status_code == 401:
+                logging.error(f"    ❌ Authentification échouée pour {symbol} - Vérifiez votre clé")
+                return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
                 logging.warning(f"    ⚠️  Rate limit pour {symbol}")
@@ -214,8 +229,11 @@ Sois direct et factuel."""
                 logging.warning(f"    ⚠️  Erreur {response.status_code} pour {symbol}")
                 return self._generate_fallback_analysis(symbol, data_dict)
                 
+        except requests.exceptions.Timeout:
+            logging.error(f"    ⏱️  Timeout pour {symbol}")
+            return self._generate_fallback_analysis(symbol, data_dict)
         except Exception as e:
-            logging.error(f"    ❌ Exception pour {symbol}: {e}")
+            logging.error(f"    ❌ Exception pour {symbol}: {str(e)}")
             return self._generate_fallback_analysis(symbol, data_dict)
 
     def _generate_fallback_analysis(self, symbol, data_dict):
