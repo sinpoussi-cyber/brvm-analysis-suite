@@ -1,11 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V11.0 - CLAUDE API
-# ==============================================================================
-# CONFIGURATION:
-# - API Claude (Anthropic)
-# - Modèle: claude-3-5-sonnet-20241022
-# - 1 seule clé nécessaire
-# - Capacité: 50 requêtes/minute
+# MODULE: FUNDAMENTAL ANALYZER V11.0 - CLAUDE API (CORRIGÉ)
 # ==============================================================================
 
 import requests
@@ -37,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+# ✅ CONFIGURATION CLAUDE (NOM CORRIGÉ)
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 
 
 class BRVMAnalyzer:
