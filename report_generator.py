@@ -24,8 +24,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+# ✅ CONFIGURATION CLAUDE (NOM CORRIGÉ)
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 
 
 class BRVMReportGenerator:
@@ -137,7 +137,7 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict):
-        """Génération analyse IA avec Claude - VERSION CORRIGÉE"""
+        """Génération analyse IA avec Claude"""
         
         # Obtenir la clé API
         api_key = self.api_manager.get_api_key()
@@ -177,7 +177,7 @@ Sois direct et factuel."""
         
         self.api_manager.handle_rate_limit()
         
-        # ✅ API CLAUDE - FORMAT CORRIGÉ POUR MESSAGES SIMPLES
+        # ✅ API CLAUDE
         api_url = "https://api.anthropic.com/v1/messages"
         
         headers = {
@@ -186,7 +186,6 @@ Sois direct et factuel."""
             "anthropic-version": "2023-06-01"
         }
         
-        # ⚠️ CORRECTION ICI : Format simplifié pour messages texte
         request_body = {
             "model": CLAUDE_MODEL,
             "max_tokens": 1024,
@@ -201,7 +200,6 @@ Sois direct et factuel."""
         try:
             response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
             
-            # Debugging détaillé
             if response.status_code != 200:
                 logging.error(f"    ❌ {symbol} - Code: {response.status_code}")
                 logging.error(f"    ❌ Réponse: {response.text[:200]}")
@@ -217,7 +215,7 @@ Sois direct et factuel."""
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 401:
-                logging.error(f"    ❌ Authentification échouée pour {symbol} - Vérifiez votre clé")
+                logging.error(f"    ❌ Authentification échouée pour {symbol}")
                 return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
