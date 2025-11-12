@@ -1,5 +1,5 @@
 # ==============================================================================
-# API KEY MANAGER V13.1 - GEMINI 2.0 FLASH (GESTION RATE LIMIT CORRIGÉE)
+# API KEY MANAGER V14.0 - GEMINI 2.0 FLASH (ROTATION CORRIGÉE)
 # ==============================================================================
 
 import os
@@ -11,14 +11,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 
 
 class APIKeyManager:
-    """Gestionnaire de clés API Gemini (2 clés avec rotation intelligente)"""
+    """Gestionnaire de clés API Gemini avec vraie rotation"""
     
     # État partagé entre toutes les instances
     _shared_state = {
         'api_keys': [],
         'current_key_index': 0,
-        'last_request_time': {},  # Par clé
-        'requests_count': {},  # Compteur par clé
+        'key_request_counts': {},  # Compteur par clé
+        'key_reset_times': {},     # Temps de reset par clé
         'usage_by_module': {}
     }
     
@@ -31,9 +31,9 @@ class APIKeyManager:
             if self.api_keys:
                 logging.info(f"✅ [{module_name}] {len(self.api_keys)} clé(s) Gemini chargée(s)")
                 # Initialiser les compteurs pour chaque clé
-                for i in range(len(self.api_keys)):
-                    self.last_request_time[i] = None
-                    self.requests_count[i] = 0
+                for key in self.api_keys:
+                    self.key_request_counts[key] = 0
+                    self.key_reset_times[key] = datetime.now()
             else:
                 logging.warning(f"⚠️  [{module_name}] Aucune clé Gemini trouvée")
     
@@ -45,94 +45,103 @@ class APIKeyManager:
                 self.api_keys.append(key)
     
     def get_api_key(self):
-        """Retourne la clé API courante"""
+        """Retourne une clé API disponible (avec rotation automatique)"""
         if not self.api_keys:
             return None
-        return self.api_keys[self.current_key_index]
-    
-    def rotate_to_next_key(self):
-        """Passe à la clé suivante (rotation)"""
-        if len(self.api_keys) <= 1:
-            return False
         
-        old_index = self.current_key_index
-        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-        
-        logging.info(f"🔄 [{self.module_name}] Rotation clé #{old_index + 1} → clé #{self.current_key_index + 1}")
-        return True
-    
-    def handle_rate_limit(self):
-        """
-        Gestion intelligente du rate limiting Gemini
-        - Limite : 15 requêtes par minute par clé (conservateur)
-        - Rotation automatique entre les clés
-        """
+        # Vérifier si la clé courante a besoin d'un reset
+        current_key = self.api_keys[self.current_key_index]
         now = datetime.now()
-        current_key = self.current_key_index
         
-        # Initialiser si première utilisation de cette clé
-        if self.last_request_time.get(current_key) is None:
-            self.last_request_time[current_key] = now
-            self.requests_count[current_key] = 0
+        # Reset du compteur après 60 secondes
+        if (now - self.key_reset_times[current_key]).total_seconds() >= 60:
+            self.key_request_counts[current_key] = 0
+            self.key_reset_times[current_key] = now
+            logging.info(f"🔄 [{self.module_name}] Clé #{self.current_key_index + 1} réinitialisée")
         
-        last_request = self.last_request_time[current_key]
-        time_since_last = (now - last_request).total_seconds()
-        
-        # Reset compteur si plus d'une minute s'est écoulée
-        if time_since_last >= 60:
-            self.requests_count[current_key] = 0
-            self.last_request_time[current_key] = now
-        
-        # Si on a atteint la limite pour cette clé, rotation
-        if self.requests_count[current_key] >= 15:
-            # Attendre le reste de la minute si c'est la dernière clé
-            if len(self.api_keys) == 1:
-                sleep_time = 60 - time_since_last
-                if sleep_time > 0:
-                    logging.warning(f"⏸️  [{self.module_name}] Pause rate limit: {sleep_time:.1f}s")
-                    time.sleep(sleep_time)
-                    self.requests_count[current_key] = 0
-                    self.last_request_time[current_key] = datetime.now()
-            else:
-                # Rotation vers la clé suivante
-                self.rotate_to_next_key()
-                current_key = self.current_key_index
+        # Si la clé courante a atteint la limite, passer à la suivante
+        if self.key_request_counts[current_key] >= 15:
+            # Essayer les autres clés
+            for _ in range(len(self.api_keys)):
+                self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+                next_key = self.api_keys[self.current_key_index]
                 
-                # Vérifier si la nouvelle clé est aussi limitée
-                if self.requests_count.get(current_key, 0) >= 15:
-                    last_req_new_key = self.last_request_time.get(current_key, now)
-                    time_since_new_key = (now - last_req_new_key).total_seconds()
-                    
-                    if time_since_new_key < 60:
-                        # Attendre que la nouvelle clé soit disponible
-                        sleep_time = 60 - time_since_new_key
-                        logging.warning(f"⏸️  [{self.module_name}] Toutes les clés limitées, pause: {sleep_time:.1f}s")
-                        time.sleep(sleep_time)
-                        self.requests_count[current_key] = 0
-                        self.last_request_time[current_key] = datetime.now()
-                    else:
-                        # Reset si plus d'une minute
-                        self.requests_count[current_key] = 0
-                        self.last_request_time[current_key] = now
+                # Vérifier si cette clé est disponible
+                if (now - self.key_reset_times[next_key]).total_seconds() >= 60:
+                    self.key_request_counts[next_key] = 0
+                    self.key_reset_times[next_key] = now
+                
+                if self.key_request_counts[next_key] < 15:
+                    logging.info(f"🔄 [{self.module_name}] Rotation → Clé #{self.current_key_index + 1}")
+                    return next_key
+            
+            # Si toutes les clés sont au max, attendre
+            wait_time = 60 - min(
+                (now - self.key_reset_times[k]).total_seconds() 
+                for k in self.api_keys
+            )
+            if wait_time > 0:
+                logging.warning(f"⏸️  [{self.module_name}] Toutes les clés en pause: {wait_time:.1f}s")
+                time.sleep(wait_time + 1)
+                # Reset toutes les clés
+                for key in self.api_keys:
+                    self.key_request_counts[key] = 0
+                    self.key_reset_times[key] = datetime.now()
         
-        # Petite pause entre chaque requête (4 secondes = 15 req/min max)
-        if time_since_last < 4:
-            sleep_time = 4 - time_since_last
-            time.sleep(sleep_time)
-        
-        # Incrémenter le compteur
-        self.requests_count[current_key] += 1
-        self.last_request_time[current_key] = datetime.now()
+        return current_key
+    
+    def record_request(self):
+        """Enregistre une requête pour la clé courante"""
+        current_key = self.api_keys[self.current_key_index]
+        self.key_request_counts[current_key] += 1
         
         if self.module_name not in self.usage_by_module:
             self.usage_by_module[self.module_name] = 0
         self.usage_by_module[self.module_name] += 1
+        
+        logging.debug(f"📊 Clé #{self.current_key_index + 1}: {self.key_request_counts[current_key]}/15 requêtes")
+    
+    def handle_rate_limit_response(self):
+        """Gère une réponse 429 (rate limit)"""
+        current_key = self.api_keys[self.current_key_index]
+        logging.warning(f"⚠️  [{self.module_name}] Rate limit détecté sur clé #{self.current_key_index + 1}")
+        
+        # Forcer le compteur au max pour cette clé
+        self.key_request_counts[current_key] = 15
+        
+        # Essayer de passer à une autre clé
+        original_index = self.current_key_index
+        for _ in range(len(self.api_keys) - 1):
+            self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+            next_key = self.api_keys[self.current_key_index]
+            
+            # Vérifier si cette clé est disponible
+            now = datetime.now()
+            if (now - self.key_reset_times[next_key]).total_seconds() >= 60:
+                self.key_request_counts[next_key] = 0
+                self.key_reset_times[next_key] = now
+            
+            if self.key_request_counts[next_key] < 15:
+                logging.info(f"✅ [{self.module_name}] Basculé sur clé #{self.current_key_index + 1}")
+                return True
+        
+        # Si aucune clé disponible, attendre
+        self.current_key_index = original_index
+        logging.warning(f"⏸️  [{self.module_name}] Pause 60s (toutes les clés limitées)")
+        time.sleep(60)
+        
+        # Reset toutes les clés
+        for key in self.api_keys:
+            self.key_request_counts[key] = 0
+            self.key_reset_times[key] = datetime.now()
+        
+        return True
     
     def get_statistics(self):
         """Statistiques d'utilisation"""
+        available = sum(1 for k in self.api_keys if self.key_request_counts[k] < 15)
         return {
             'total': len(self.api_keys),
-            'available': len(self.api_keys),
-            'current_key': self.current_key_index + 1,
+            'available': available,
             'used_by_module': self.usage_by_module.get(self.module_name, 0)
         }
