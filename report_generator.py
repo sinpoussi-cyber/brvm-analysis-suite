@@ -1,11 +1,6 @@
 # ==============================================================================
 # MODULE: REPORT GENERATOR V11.0 - CLAUDE API
 # ==============================================================================
-# CONFIGURATION:
-# - API Anthropic Claude 3.5 Sonnet
-# - 1 seule clé API
-# - Requête SQL optimisée (30 jours)
-# ==============================================================================
 
 import os
 import logging
@@ -18,6 +13,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import requests
 import time
 
+from api_key_manager import APIKeyManager
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Configuration & Secrets ---
@@ -27,17 +24,14 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE API
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
-CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+# ✅ CONFIGURATION CLAUDE
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
 
 
 class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
-        self.request_count = 0
-        self.last_request_time = None
+        self.api_manager = APIKeyManager('report_generator')
         
         # Connexion DB
         try:
@@ -53,7 +47,7 @@ class BRVMReportGenerator:
             raise
 
     def _get_all_data_from_db(self):
-        """Récupération optimisée des données (30 derniers jours)"""
+        """Récupération optimisée des données"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
         
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -106,16 +100,9 @@ class BRVMReportGenerator:
             
         except psycopg2.errors.QueryCanceled:
             logging.error("❌ Timeout SQL")
-            simple_query = """SELECT c.symbol, c.name as company_name FROM companies c ORDER BY c.symbol;"""
-            try:
-                df = pd.read_sql(simple_query, self.db_conn)
-                logging.info(f"   ✅ Mode dégradé: {len(df)} société(s)")
-                return df
-            except Exception as e:
-                logging.error(f"❌ Échec fallback: {e}")
-                return pd.DataFrame()
+            return pd.DataFrame()
         except Exception as e:
-            logging.error(f"❌ Erreur SQL: {e}")
+            logging.error(f"❌ Erreur requête SQL: {e}")
             return pd.DataFrame()
 
     def _get_predictions_from_db(self):
@@ -148,18 +135,6 @@ class BRVMReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur prédictions: {e}")
             return pd.DataFrame()
-
-    def _handle_rate_limit(self):
-        """Gestion du rate limiting Claude (50 req/min)"""
-        now = time.time()
-        
-        if self.last_request_time:
-            elapsed = now - self.last_request_time
-            if elapsed < 1.2:
-                time.sleep(1.2 - elapsed)
-        
-        self.last_request_time = time.time()
-        self.request_count += 1
 
     def _generate_ia_analysis(self, symbol, data_dict):
         """Génération analyse IA avec Claude"""
@@ -194,53 +169,53 @@ Fournis:
 
 Sois direct et factuel."""
 
-        # Gestion rate limiting
-        self._handle_rate_limit()
+        # Obtenir la clé API
+        api_key = self.api_manager.get_api_key()
+        if not api_key:
+            logging.warning(f"    ⚠️  Aucune clé Claude disponible pour {symbol}")
+            return self._generate_fallback_analysis(symbol, data_dict)
         
-        # Appel API Claude
+        self.api_manager.handle_rate_limit()
+        
+        # ✅ API CLAUDE
+        api_url = "https://api.anthropic.com/v1/messages"
+        
         headers = {
-            "x-api-key": CLAUDE_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
         }
         
-        payload = {
+        request_body = {
             "model": CLAUDE_MODEL,
             "max_tokens": 1024,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ]
-                }
-            ]
+            "messages": [{
+                "role": "user",
+                "content": prompt
+            }]
         }
         
         try:
-            response = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=30)
+            response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
             
             if response.status_code == 200:
                 data = response.json()
-                if 'content' in data and len(data['content']) > 0:
+                if 'content' in data and data['content']:
                     text = data['content'][0]['text']
                     logging.info(f"    ✅ {symbol}: Analyse générée")
                     return text
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit, attente 60s")
+                logging.warning(f"    ⚠️  Rate limit pour {symbol}")
                 time.sleep(60)
                 return self._generate_fallback_analysis(symbol, data_dict)
             
             else:
-                logging.warning(f"    ⚠️  Erreur {response.status_code}")
+                logging.warning(f"    ⚠️  Erreur {response.status_code} pour {symbol}")
                 return self._generate_fallback_analysis(symbol, data_dict)
                 
         except Exception as e:
-            logging.error(f"    ❌ Exception: {e}")
+            logging.error(f"    ❌ Exception pour {symbol}: {e}")
             return self._generate_fallback_analysis(symbol, data_dict)
 
     def _generate_fallback_analysis(self, symbol, data_dict):
@@ -266,7 +241,7 @@ Sois direct et factuel."""
                 analysis += "Signaux techniques mixtes.\n\n"
         else:
             analysis += "**Recommandation**: CONSERVER\n"
-            analysis += "Données insuffisantes.\n\n"
+            analysis += "Données insuffisantes pour une recommandation.\n\n"
         
         analysis += "**Niveau de confiance**: Moyen\n"
         analysis += "**Niveau de risque**: Moyen\n"
@@ -291,7 +266,6 @@ Sois direct et factuel."""
         # Synthèse
         doc.add_heading('Synthèse Générale', level=1)
         doc.add_paragraph(f"Nombre de sociétés analysées: {len(all_analyses)}")
-        doc.add_paragraph(f"Analyse propulsée par Claude AI (Anthropic)")
         doc.add_paragraph()
         
         # Analyses détaillées
@@ -316,17 +290,14 @@ Sois direct et factuel."""
         logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
         
-        if not CLAUDE_API_KEY:
-            logging.error("❌ CLAUDE_API_KEY non configurée")
-            return
-        
-        logging.info("✅ Clé Claude configurée")
+        stats = self.api_manager.get_statistics()
+        logging.info(f"📊 Clé Claude: {'✅ Configurée' if stats['available'] else '❌ Manquante'}")
         
         # Récupération données
         df = self._get_all_data_from_db()
         
         if df.empty:
-            logging.error("❌ Aucune donnée - rapport impossible")
+            logging.error("❌ Aucune donnée disponible - rapport impossible")
             return
         
         predictions_df = self._get_predictions_from_db()
@@ -373,8 +344,9 @@ Sois direct et factuel."""
         # Création document
         filename = self._create_word_document(all_analyses)
         
+        final_stats = self.api_manager.get_statistics()
         logging.info(f"\n✅ Rapport généré: {filename}")
-        logging.info(f"📊 Requêtes Claude: {self.request_count}")
+        logging.info(f"📊 Requêtes effectuées: {final_stats['used_by_module']}")
 
     def __del__(self):
         """Fermeture connexion DB"""
