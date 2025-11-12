@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V11.0 - Claude API (SOLUTION FINALE)
+name: BRVM Analysis Suite V11.0 - Claude API (CORRIGÉ)
 
 on:
   schedule:
@@ -97,10 +97,10 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          CLAUDE_MODEL: "claude-3-5-sonnet-20241022"
+          CLAUDE_MODEL: "claude-3-5-sonnet-20240620"
         run: |
           echo "🚀 Analyse fondamentale avec Claude..."
-          echo "🤖 Modèle: claude-3-5-sonnet-20241022"
+          echo "🤖 Modèle: claude-3-5-sonnet-20240620"
           echo "⚡ Capacité: 50 requêtes/minute"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
@@ -113,7 +113,7 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          CLAUDE_MODEL: "claude-3-5-sonnet-20241022"
+          CLAUDE_MODEL: "claude-3-5-sonnet-20240620"
         run: |
           echo "🚀 Génération rapports avec Claude..."
           python report_generator.py
@@ -137,7 +137,7 @@ jobs:
           echo ""
           echo "⚙️  Configuration:"
           echo "  - IA: Claude API (Anthropic)"
-          echo "  - Modèle: claude-3-5-sonnet-20241022"
+          echo "  - Modèle: claude-3-5-sonnet-20240620"
           echo "  - Capacité: 50 req/min"
           echo ""
           echo "📋 Étapes:"
