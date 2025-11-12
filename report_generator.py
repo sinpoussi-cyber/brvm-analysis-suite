@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V11.0 - CLAUDE API (CORRIGÉ)
+# MODULE: REPORT GENERATOR V13.0 - GEMINI 2.0 FLASH
 # ==============================================================================
 
 import os
@@ -24,8 +24,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE (NOM CORRIGÉ)
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
+# ✅ CONFIGURATION GEMINI
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
 
 class BRVMReportGenerator:
@@ -137,12 +137,12 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict):
-        """Génération analyse IA avec Claude"""
+        """Génération analyse IA avec Gemini"""
         
         # Obtenir la clé API
         api_key = self.api_manager.get_api_key()
         if not api_key:
-            logging.warning(f"    ⚠️  Aucune clé Claude disponible pour {symbol}")
+            logging.warning(f"    ⚠️  Aucune clé Gemini disponible pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         
         # Construire contexte
@@ -177,54 +177,38 @@ Sois direct et factuel."""
         
         self.api_manager.handle_rate_limit()
         
-        # ✅ API CLAUDE
-        api_url = "https://api.anthropic.com/v1/messages"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01"
-        }
+        # ✅ API GEMINI 2.0
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
-            "model": CLAUDE_MODEL,
-            "max_tokens": 1024,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
         }
         
         try:
-            response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
-            
-            if response.status_code != 200:
-                logging.error(f"    ❌ {symbol} - Code: {response.status_code}")
-                logging.error(f"    ❌ Réponse: {response.text[:200]}")
+            response = requests.post(api_url, json=request_body, timeout=30)
             
             if response.status_code == 200:
                 data = response.json()
-                if 'content' in data and data['content']:
-                    text = data['content'][0]['text']
-                    logging.info(f"    ✅ {symbol}: Analyse générée")
-                    return text
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    candidate = data['candidates'][0]
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        text = candidate['content']['parts'][0]['text']
+                        logging.info(f"    ✅ {symbol}: Analyse générée")
+                        return text
                 else:
                     logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
                     return self._generate_fallback_analysis(symbol, data_dict)
             
-            elif response.status_code == 401:
-                logging.error(f"    ❌ Authentification échouée pour {symbol}")
-                return self._generate_fallback_analysis(symbol, data_dict)
-            
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit pour {symbol}")
-                time.sleep(60)
+                logging.warning(f"    ⚠️  Rate limit pour {symbol}, rotation clé...")
+                self.api_manager.mark_key_failed()
+                time.sleep(5)
                 return self._generate_fallback_analysis(symbol, data_dict)
             
             else:
-                logging.warning(f"    ⚠️  Erreur {response.status_code} pour {symbol}")
+                logging.error(f"    ❌ Erreur {response.status_code} pour {symbol}: {response.text[:200]}")
                 return self._generate_fallback_analysis(symbol, data_dict)
                 
         except requests.exceptions.Timeout:
@@ -302,12 +286,12 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V11.0 - Claude API)")
-        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V13.0 - Gemini 2.0)")
+        logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
         stats = self.api_manager.get_statistics()
-        logging.info(f"📊 Clé Claude: {'✅ Configurée' if stats['available'] else '❌ Manquante'}")
+        logging.info(f"📊 Clés Gemini: {stats['available']}/{stats['total']} disponible(s)")
         
         # Récupération données
         df = self._get_all_data_from_db()
