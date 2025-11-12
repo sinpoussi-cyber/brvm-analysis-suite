@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V13.0 - GEMINI 2.0 FLASH
+# MODULE: FUNDAMENTAL ANALYZER V14.0 - GEMINI 2.0 FLASH (ROTATION CORRIGÉE)
 # ==============================================================================
 
 import requests
@@ -284,7 +284,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_gemini(self, company_id, symbol, report):
-        """Analyse un PDF avec Gemini 2.0 Flash API"""
+        """Analyse un PDF avec Gemini 2.0 Flash API (avec rotation des clés)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -325,13 +325,11 @@ Concentre-toi sur :
 
 Si une info manque, mentionne-le clairement."""
         
-        # Obtenir la clé API
+        # Obtenir la clé API (avec rotation automatique)
         api_key = self.api_manager.get_api_key()
         if not api_key:
-            logging.error(f"    ❌ Aucune clé Gemini trouvée")
+            logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
-        
-        self.api_manager.handle_rate_limit()
         
         # ✅ API GEMINI 2.0 FLASH
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
@@ -353,6 +351,9 @@ Si une info manque, mentionne-le clairement."""
         try:
             response = requests.post(api_url, json=request_body, timeout=120)
             
+            # Enregistrer la requête
+            self.api_manager.record_request()
+            
             if response.status_code == 200:
                 response_json = response.json()
                 
@@ -370,10 +371,11 @@ Si une info manque, mentionne-le clairement."""
                 return False
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit atteint, rotation clé...")
-                self.api_manager.mark_key_failed()
-                time.sleep(5)
-                return False
+                # Rate limit - gérer et réessayer
+                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol}")
+                self.api_manager.handle_rate_limit_response()
+                # Réessayer avec la nouvelle clé
+                return self._analyze_pdf_with_gemini(company_id, symbol, report)
             
             else:
                 logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
@@ -389,7 +391,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V13.0 - Gemini 2.0 Flash)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V14.0 - Gemini 2.0 Flash)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
@@ -418,7 +420,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 2.0)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 2.0 avec rotation clés)...")
             
             total_analyzed = 0
             total_skipped = 0
