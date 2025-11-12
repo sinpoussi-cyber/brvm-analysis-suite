@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V13.0 - GEMINI 2.0 FLASH
+# MODULE: REPORT GENERATOR V14.0 - GEMINI 2.0 FLASH (ROTATION CORRIGÉE)
 # ==============================================================================
 
 import os
@@ -137,9 +137,9 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict):
-        """Génération analyse IA avec Gemini"""
+        """Génération analyse IA avec Gemini (avec rotation des clés)"""
         
-        # Obtenir la clé API
+        # Obtenir la clé API (avec rotation automatique)
         api_key = self.api_manager.get_api_key()
         if not api_key:
             logging.warning(f"    ⚠️  Aucune clé Gemini disponible pour {symbol}")
@@ -175,8 +175,6 @@ Fournis:
 
 Sois direct et factuel."""
         
-        self.api_manager.handle_rate_limit()
-        
         # ✅ API GEMINI 2.0
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
@@ -188,6 +186,9 @@ Sois direct et factuel."""
         
         try:
             response = requests.post(api_url, json=request_body, timeout=30)
+            
+            # Enregistrer la requête
+            self.api_manager.record_request()
             
             if response.status_code == 200:
                 data = response.json()
@@ -202,10 +203,11 @@ Sois direct et factuel."""
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit pour {symbol}, rotation clé...")
-                self.api_manager.mark_key_failed()
-                time.sleep(5)
-                return self._generate_fallback_analysis(symbol, data_dict)
+                # Rate limit - gérer et réessayer
+                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol}")
+                self.api_manager.handle_rate_limit_response()
+                # Réessayer avec la nouvelle clé (récursion limitée à 1 fois)
+                return self._generate_ia_analysis(symbol, data_dict)
             
             else:
                 logging.error(f"    ❌ Erreur {response.status_code} pour {symbol}: {response.text[:200]}")
@@ -286,7 +288,7 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V13.0 - Gemini 2.0)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V14.0 - Gemini 2.0 Flash)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
@@ -303,7 +305,7 @@ Sois direct et factuel."""
         predictions_df = self._get_predictions_from_db()
         
         # Génération analyses IA
-        logging.info(f"🤖 Génération de {len(df)} analyse(s) IA...")
+        logging.info(f"🤖 Génération de {len(df)} analyse(s) IA avec rotation clés...")
         
         all_analyses = {}
         
