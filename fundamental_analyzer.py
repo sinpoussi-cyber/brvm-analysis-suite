@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V11.0 - CLAUDE API (CORRIGÉ)
+# MODULE: FUNDAMENTAL ANALYZER V13.0 - GEMINI 2.0 FLASH
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE (NOM CORRIGÉ)
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
+# ✅ CONFIGURATION GEMINI
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
 
 class BRVMAnalyzer:
@@ -283,8 +283,8 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur recherche: {e}")
             return {}
 
-    def _analyze_pdf_with_claude(self, company_id, symbol, report):
-        """Analyse un PDF avec Claude API"""
+    def _analyze_pdf_with_gemini(self, company_id, symbol, report):
+        """Analyse un PDF avec Gemini 2.0 Flash API"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -328,70 +328,59 @@ Si une info manque, mentionne-le clairement."""
         # Obtenir la clé API
         api_key = self.api_manager.get_api_key()
         if not api_key:
-            logging.error(f"    ❌ Aucune clé Claude trouvée")
+            logging.error(f"    ❌ Aucune clé Gemini trouvée")
             return False
         
         self.api_manager.handle_rate_limit()
         
-        # ✅ API CLAUDE
-        api_url = "https://api.anthropic.com/v1/messages"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01"
-        }
+        # ✅ API GEMINI 2.0 FLASH
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
-            "model": CLAUDE_MODEL,
-            "max_tokens": 2048,
-            "messages": [{
-                "role": "user",
-                "content": [
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
                     {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
+                        "inline_data": {
+                            "mime_type": "application/pdf",
                             "data": pdf_data
                         }
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt
                     }
                 ]
             }]
         }
         
         try:
-            response = requests.post(api_url, headers=headers, json=request_body, timeout=120)
+            response = requests.post(api_url, json=request_body, timeout=120)
             
             if response.status_code == 200:
                 response_json = response.json()
                 
-                if 'content' in response_json and len(response_json['content']) > 0:
-                    analysis_text = response_json['content'][0]['text']
-                    
-                    if self._save_to_db(company_id, report, analysis_text):
-                        self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                        logging.info(f"    ✅ {symbol}: Analyse générée")
-                        return True
+                if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                    candidate = response_json['candidates'][0]
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        analysis_text = candidate['content']['parts'][0]['text']
+                        
+                        if self._save_to_db(company_id, report, analysis_text):
+                            self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
+                            logging.info(f"    ✅ {symbol}: Analyse générée")
+                            return True
                 
-                logging.warning(f"    ⚠️  Réponse Claude malformée")
+                logging.warning(f"    ⚠️  Réponse Gemini malformée")
                 return False
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit atteint, pause...")
-                time.sleep(60)
+                logging.warning(f"    ⚠️  Rate limit atteint, rotation clé...")
+                self.api_manager.mark_key_failed()
+                time.sleep(5)
                 return False
             
             else:
-                logging.error(f"    ❌ Erreur {response.status_code}: {response.text}")
+                logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
                 return False
                 
         except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout API Claude")
+            logging.error(f"    ⏱️  Timeout API Gemini")
             return False
         except Exception as e:
             logging.error(f"    ❌ Exception: {e}")
@@ -400,14 +389,14 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V11.0 - Claude API)")
-        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V13.0 - Gemini 2.0 Flash)")
+        logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
         conn = None
         try:
             stats = self.api_manager.get_statistics()
-            logging.info(f"📊 Clé Claude: {'✅ Configurée' if stats['available'] else '❌ Manquante'}")
+            logging.info(f"📊 Clés Gemini: {stats['available']}/{stats['total']} disponible(s)")
             
             self._load_analysis_memory_from_db()
             
@@ -429,7 +418,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Claude)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 2.0)...")
             
             total_analyzed = 0
             total_skipped = 0
@@ -454,7 +443,7 @@ Si une info manque, mentionne-le clairement."""
                 logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
                 
                 for report in new:
-                    result = self._analyze_pdf_with_claude(company_id, symbol, report)
+                    result = self._analyze_pdf_with_gemini(company_id, symbol, report)
                     if result is True:
                         total_analyzed += 1
                     elif result is None:
