@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V16.0 - GEMINI 1.5 FLASH LATEST (11 CLÉS)
+# MODULE: FUNDAMENTAL ANALYZER V17.0 - GEMINI 1.5 FLASH-002 (API V1)
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (MODÈLE CORRECT)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# ✅ CONFIGURATION GEMINI (API V1 STABLE)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
 
 
 class BRVMAnalyzer:
@@ -284,7 +284,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_gemini(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Gemini 1.5 Flash Latest (avec limite de tentatives)"""
+        """Analyse un PDF avec Gemini 1.5 Flash-002 (API v1)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -334,8 +334,8 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ API GEMINI 1.5 FLASH LATEST
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ API GEMINI V1 (STABLE)
+        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
             "contents": [{
@@ -405,7 +405,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V16.0 - Gemini 1.5 Flash Latest)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V17.0 - Gemini 1.5 Flash-002)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
