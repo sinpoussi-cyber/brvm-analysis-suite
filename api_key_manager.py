@@ -1,5 +1,5 @@
 # ==============================================================================
-# API KEY MANAGER V15.0 - GEMINI 1.5 FLASH (7 CLÉS + LIMITE TENTATIVES)
+# API KEY MANAGER V16.0 - GEMINI 1.5 FLASH (SUPPORT 11 CLÉS)
 # ==============================================================================
 
 import os
@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 
 
 class APIKeyManager:
-    """Gestionnaire de clés API Gemini avec rotation intelligente (jusqu'à 10 clés)"""
+    """Gestionnaire de clés API Gemini avec rotation intelligente (jusqu'à 15 clés)"""
     
     # État partagé entre toutes les instances
     _shared_state = {
@@ -40,8 +40,8 @@ class APIKeyManager:
                 logging.warning(f"⚠️  [{module_name}] Aucune clé Gemini trouvée")
     
     def _load_keys(self):
-        """Charge jusqu'à 10 clés Gemini depuis les variables d'environnement"""
-        for i in range(1, 11):  # Support jusqu'à 10 clés
+        """Charge jusqu'à 15 clés Gemini depuis les variables d'environnement"""
+        for i in range(1, 16):  # Support jusqu'à 15 clés
             key = os.environ.get(f'GEMINI_API_KEY_{i}')
             if key:
                 self.api_keys.append(key)
