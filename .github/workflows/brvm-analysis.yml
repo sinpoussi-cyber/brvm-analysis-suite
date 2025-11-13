@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V16.0 - Gemini 1.5 Flash Latest (11 CLÉS)
+name: BRVM Analysis Suite V17.0 - Gemini 1.5 Flash-002 (11 CLÉS + API V1)
 
 on:
   schedule:
@@ -89,7 +89,7 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Gemini 1.5 Flash Latest)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Gemini 1.5 Flash-002)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -107,17 +107,17 @@ jobs:
           GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
           GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
           GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_MODEL: "gemini-1.5-flash-latest"
+          GEMINI_MODEL: "gemini-1.5-flash-002"
         run: |
-          echo "🚀 Analyse fondamentale avec Gemini 1.5 Flash Latest..."
-          echo "🤖 Modèle: gemini-1.5-flash-latest (STABLE + GRATUIT)"
+          echo "🚀 Analyse fondamentale avec Gemini 1.5 Flash-002..."
+          echo "🤖 Modèle: gemini-1.5-flash-002 (API v1 STABLE)"
           echo "🔑 Clés: 11 clés en rotation"
           echo "⚡ Capacité: 110 req/min total"
           echo "🛡️  Limite: 3 tentatives max par document"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Gemini 1.5 Flash Latest)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Gemini 1.5 Flash-002)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -135,9 +135,9 @@ jobs:
           GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
           GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
           GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_MODEL: "gemini-1.5-flash-latest"
+          GEMINI_MODEL: "gemini-1.5-flash-002"
         run: |
-          echo "🚀 Génération rapports avec Gemini 1.5 Flash Latest..."
+          echo "🚀 Génération rapports avec Gemini 1.5 Flash-002..."
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -152,14 +152,15 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V16.0 (Gemini 1.5 Flash - 11 CLÉS)"
+          echo "📈 BRVM ANALYSIS SUITE V17.0 (Gemini 1.5 Flash-002)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - IA: Google Gemini 1.5 Flash Latest"
-          echo "  - Modèle: gemini-1.5-flash-latest"
+          echo "  - IA: Google Gemini 1.5 Flash-002 (API v1)"
+          echo "  - Modèle: gemini-1.5-flash-002"
+          echo "  - API: v1 (STABLE)"
           echo "  - Clés: 11 clés API en rotation"
           echo "  - Limite: 3 tentatives max par société"
           echo "  - Capacité: 110 requêtes/minute"
