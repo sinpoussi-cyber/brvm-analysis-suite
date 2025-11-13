@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V13.0 - Gemini 2.0 Flash (GRATUIT)
+name: BRVM Analysis Suite V15.0 - Gemini 1.5 Flash (7 CLÉS + STABLE)
 
 on:
   schedule:
@@ -89,7 +89,7 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Gemini 2.0 Flash)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Gemini 1.5 Flash)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -98,17 +98,22 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_MODEL: "gemini-2.0-flash-exp"
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_MODEL: "gemini-1.5-flash"
         run: |
-          echo "🚀 Analyse fondamentale avec Gemini 2.0..."
-          echo "🤖 Modèle: gemini-2.0-flash-exp"
-          echo "📄 Lecture PDF: Native (Base64)"
-          echo "🔑 Clés: 2 clés en rotation"
-          echo "⚡ Capacité: 15 req/min par clé"
+          echo "🚀 Analyse fondamentale avec Gemini 1.5 Flash..."
+          echo "🤖 Modèle: gemini-1.5-flash (STABLE)"
+          echo "🔑 Clés: 7 clés en rotation"
+          echo "⚡ Capacité: 70 req/min total"
+          echo "🛡️  Limite: 3 tentatives max par document"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Gemini 2.0)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Gemini 1.5 Flash)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -117,9 +122,14 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_MODEL: "gemini-2.0-flash-exp"
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_MODEL: "gemini-1.5-flash"
         run: |
-          echo "🚀 Génération rapports avec Gemini 2.0..."
+          echo "🚀 Génération rapports avec Gemini 1.5 Flash..."
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -134,24 +144,24 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V13.0 (Gemini 2.0 Flash - GRATUIT)"
+          echo "📈 BRVM ANALYSIS SUITE V15.0 (Gemini 1.5 Flash - 7 CLÉS)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - IA: Google Gemini 2.0 Flash (GRATUIT)"
-          echo "  - Modèle: gemini-2.0-flash-exp"
-          echo "  - Lecture PDF: Native (Base64)"
-          echo "  - Clés: 2 clés en rotation"
-          echo "  - Capacité: 30 req/min total"
+          echo "  - IA: Google Gemini 1.5 Flash (STABLE + GRATUIT)"
+          echo "  - Modèle: gemini-1.5-flash"
+          echo "  - Clés: 7 clés en rotation"
+          echo "  - Limite: 3 tentatives max par société"
+          echo "  - Fallback: Analyse automatique"
           echo ""
           echo "📋 Étapes:"
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (Gemini 2.0)"
-          echo "  ✅ Génération rapports (Gemini 2.0)"
+          echo "  ✅ Analyse fondamentale (Gemini 1.5)"
+          echo "  ✅ Génération rapports (Gemini 1.5)"
           echo ""
           if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés:"
