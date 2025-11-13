@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V14.0 - GEMINI 2.0 FLASH (ROTATION CORRIGÉE)
+# MODULE: FUNDAMENTAL ANALYZER V15.0 - GEMINI 1.5 FLASH (LIMITE RÉCURSION)
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
+# ✅ CONFIGURATION GEMINI (MODÈLE STABLE)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 
 class BRVMAnalyzer:
@@ -283,8 +283,8 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur recherche: {e}")
             return {}
 
-    def _analyze_pdf_with_gemini(self, company_id, symbol, report):
-        """Analyse un PDF avec Gemini 2.0 Flash API (avec rotation des clés)"""
+    def _analyze_pdf_with_gemini(self, company_id, symbol, report, attempt=1, max_attempts=3):
+        """Analyse un PDF avec Gemini 1.5 Flash (avec limite de tentatives)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -303,7 +303,10 @@ class BRVMAnalyzer:
             finally:
                 conn.close()
         
-        logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
+        if attempt == 1:
+            logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
+        else:
+            logging.info(f"    🔄 Tentative {attempt}/{max_attempts}")
         
         # Télécharger le PDF
         try:
@@ -331,7 +334,7 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ API GEMINI 2.0 FLASH
+        # ✅ API GEMINI 1.5 FLASH (STABLE)
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
@@ -371,11 +374,22 @@ Si une info manque, mentionne-le clairement."""
                 return False
             
             elif response.status_code == 429:
-                # Rate limit - gérer et réessayer
-                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol}")
-                self.api_manager.handle_rate_limit_response()
-                # Réessayer avec la nouvelle clé
-                return self._analyze_pdf_with_gemini(company_id, symbol, report)
+                # Rate limit - gérer et réessayer AVEC LIMITE
+                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol} (tentative {attempt}/{max_attempts})")
+                
+                # Essayer de changer de clé
+                can_retry = self.api_manager.handle_rate_limit_response()
+                
+                # Réessayer SEULEMENT si < max_attempts ET qu'il y a une clé disponible
+                if attempt < max_attempts and can_retry:
+                    time.sleep(2)  # Petite pause
+                    return self._analyze_pdf_with_gemini(company_id, symbol, report, attempt + 1, max_attempts)
+                else:
+                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - UTILISATION DU FALLBACK")
+                    # Sauvegarder une analyse par défaut
+                    fallback_text = f"Analyse automatique indisponible pour ce rapport. Rapport: {report['titre']}"
+                    self._save_to_db(company_id, report, fallback_text)
+                    return False
             
             else:
                 logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
@@ -391,7 +405,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V14.0 - Gemini 2.0 Flash)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V15.0 - Gemini 1.5 Flash)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
@@ -420,7 +434,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 2.0 avec rotation clés)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 1.5 avec limite 3 tentatives)...")
             
             total_analyzed = 0
             total_skipped = 0
