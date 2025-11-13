@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V16.0 - GEMINI 1.5 FLASH LATEST (11 CLÉS)
+# MODULE: REPORT GENERATOR V17.0 - GEMINI 1.5 FLASH-002 (API V1)
 # ==============================================================================
 
 import os
@@ -24,8 +24,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (MODÈLE CORRECT)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# ✅ CONFIGURATION GEMINI (API V1 STABLE)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
 
 
 class BRVMReportGenerator:
@@ -178,8 +178,8 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ API GEMINI 1.5 FLASH LATEST
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ API GEMINI V1 (STABLE)
+        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
             "contents": [{
@@ -299,7 +299,7 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V16.0 - Gemini 1.5 Flash Latest)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V17.0 - Gemini 1.5 Flash-002)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
