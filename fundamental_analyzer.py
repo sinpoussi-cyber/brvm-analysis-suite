@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V17.0 - GEMINI 1.5 FLASH-002 (API V1)
+# MODULE: FUNDAMENTAL ANALYZER V18.0 - GEMINI 1.5 FLASH-002 (API V1BETA)
 # ==============================================================================
 
 import requests
@@ -31,7 +31,7 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (API V1 STABLE)
+# ✅ CONFIGURATION GEMINI (API V1BETA)
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
 
 
@@ -334,7 +334,7 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ CORRECTION: Utilisation de v1beta pour les modèles Gemini 1.5
+        # ✅ API GEMINI V1BETA (CORRECT)
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
@@ -405,7 +405,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V17.0 - Gemini 1.5 Flash-002)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V18.0 - Gemini 1.5 Flash-002)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
