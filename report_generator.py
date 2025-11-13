@@ -178,8 +178,8 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ API GEMINI V1 (STABLE)
-        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ CORRECTION: Utilisation de v1beta pour les modèles Gemini 1.5
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
             "contents": [{
