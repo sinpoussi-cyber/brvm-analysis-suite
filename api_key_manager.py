@@ -1,5 +1,5 @@
 # ==============================================================================
-# API KEY MANAGER V14.0 - GEMINI 2.0 FLASH (ROTATION CORRIGÉE)
+# API KEY MANAGER V15.0 - GEMINI 1.5 FLASH (7 CLÉS + LIMITE TENTATIVES)
 # ==============================================================================
 
 import os
@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 
 
 class APIKeyManager:
-    """Gestionnaire de clés API Gemini avec vraie rotation"""
+    """Gestionnaire de clés API Gemini avec rotation intelligente (jusqu'à 10 clés)"""
     
     # État partagé entre toutes les instances
     _shared_state = {
@@ -19,7 +19,8 @@ class APIKeyManager:
         'current_key_index': 0,
         'key_request_counts': {},  # Compteur par clé
         'key_reset_times': {},     # Temps de reset par clé
-        'usage_by_module': {}
+        'usage_by_module': {},
+        'failed_attempts_per_key': {}  # Compteur d'échecs par clé
     }
     
     def __init__(self, module_name='default'):
@@ -34,12 +35,13 @@ class APIKeyManager:
                 for key in self.api_keys:
                     self.key_request_counts[key] = 0
                     self.key_reset_times[key] = datetime.now()
+                    self.failed_attempts_per_key[key] = 0
             else:
                 logging.warning(f"⚠️  [{module_name}] Aucune clé Gemini trouvée")
     
     def _load_keys(self):
-        """Charge les clés Gemini depuis les variables d'environnement"""
-        for i in range(1, 3):  # 2 clés
+        """Charge jusqu'à 10 clés Gemini depuis les variables d'environnement"""
+        for i in range(1, 11):  # Support jusqu'à 10 clés
             key = os.environ.get(f'GEMINI_API_KEY_{i}')
             if key:
                 self.api_keys.append(key)
@@ -57,10 +59,11 @@ class APIKeyManager:
         if (now - self.key_reset_times[current_key]).total_seconds() >= 60:
             self.key_request_counts[current_key] = 0
             self.key_reset_times[current_key] = now
+            self.failed_attempts_per_key[current_key] = 0
             logging.info(f"🔄 [{self.module_name}] Clé #{self.current_key_index + 1} réinitialisée")
         
         # Si la clé courante a atteint la limite, passer à la suivante
-        if self.key_request_counts[current_key] >= 15:
+        if self.key_request_counts[current_key] >= 10:  # Limite conservatrice : 10 req/min
             # Essayer les autres clés
             for _ in range(len(self.api_keys)):
                 self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
@@ -70,8 +73,9 @@ class APIKeyManager:
                 if (now - self.key_reset_times[next_key]).total_seconds() >= 60:
                     self.key_request_counts[next_key] = 0
                     self.key_reset_times[next_key] = now
+                    self.failed_attempts_per_key[next_key] = 0
                 
-                if self.key_request_counts[next_key] < 15:
+                if self.key_request_counts[next_key] < 10:
                     logging.info(f"🔄 [{self.module_name}] Rotation → Clé #{self.current_key_index + 1}")
                     return next_key
             
@@ -87,6 +91,7 @@ class APIKeyManager:
                 for key in self.api_keys:
                     self.key_request_counts[key] = 0
                     self.key_reset_times[key] = datetime.now()
+                    self.failed_attempts_per_key[key] = 0
         
         return current_key
     
@@ -98,16 +103,29 @@ class APIKeyManager:
         if self.module_name not in self.usage_by_module:
             self.usage_by_module[self.module_name] = 0
         self.usage_by_module[self.module_name] += 1
+    
+    def record_failure(self):
+        """Enregistre un échec pour la clé courante"""
+        current_key = self.api_keys[self.current_key_index]
+        self.failed_attempts_per_key[current_key] += 1
         
-        logging.debug(f"📊 Clé #{self.current_key_index + 1}: {self.key_request_counts[current_key]}/15 requêtes")
+        # Si trop d'échecs consécutifs, forcer la rotation
+        if self.failed_attempts_per_key[current_key] >= 3:
+            logging.warning(f"⚠️  [{self.module_name}] Clé #{self.current_key_index + 1} : 3 échecs consécutifs, rotation forcée")
+            self.key_request_counts[current_key] = 10  # Forcer au max
+            return False
+        return True
     
     def handle_rate_limit_response(self):
-        """Gère une réponse 429 (rate limit)"""
+        """Gère une réponse 429 (rate limit) - SANS récursion infinie"""
         current_key = self.api_keys[self.current_key_index]
-        logging.warning(f"⚠️  [{self.module_name}] Rate limit détecté sur clé #{self.current_key_index + 1}")
+        logging.warning(f"⚠️  [{self.module_name}] Rate limit sur clé #{self.current_key_index + 1}")
+        
+        # Enregistrer l'échec
+        self.record_failure()
         
         # Forcer le compteur au max pour cette clé
-        self.key_request_counts[current_key] = 15
+        self.key_request_counts[current_key] = 10
         
         # Essayer de passer à une autre clé
         original_index = self.current_key_index
@@ -120,26 +138,21 @@ class APIKeyManager:
             if (now - self.key_reset_times[next_key]).total_seconds() >= 60:
                 self.key_request_counts[next_key] = 0
                 self.key_reset_times[next_key] = now
+                self.failed_attempts_per_key[next_key] = 0
             
-            if self.key_request_counts[next_key] < 15:
+            # Si cette clé a moins de 2 échecs, l'utiliser
+            if self.failed_attempts_per_key[next_key] < 2:
                 logging.info(f"✅ [{self.module_name}] Basculé sur clé #{self.current_key_index + 1}")
                 return True
         
-        # Si aucune clé disponible, attendre
+        # Si toutes les clés ont échoué, retourner False (pas de récursion)
         self.current_key_index = original_index
-        logging.warning(f"⏸️  [{self.module_name}] Pause 60s (toutes les clés limitées)")
-        time.sleep(60)
-        
-        # Reset toutes les clés
-        for key in self.api_keys:
-            self.key_request_counts[key] = 0
-            self.key_reset_times[key] = datetime.now()
-        
-        return True
+        logging.error(f"❌ [{self.module_name}] TOUTES LES CLÉS ONT ÉCHOUÉ - Utilisation du fallback")
+        return False
     
     def get_statistics(self):
         """Statistiques d'utilisation"""
-        available = sum(1 for k in self.api_keys if self.key_request_counts[k] < 15)
+        available = sum(1 for k in self.api_keys if self.failed_attempts_per_key[k] < 2)
         return {
             'total': len(self.api_keys),
             'available': available,
