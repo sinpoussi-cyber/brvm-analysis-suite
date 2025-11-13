@@ -284,7 +284,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_gemini(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Gemini 1.5 Flash-002 (API v1)"""
+        """Analyse un PDF avec Gemini 1.5 Flash-002 (API v1beta)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -334,8 +334,8 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ API GEMINI V1 (STABLE)
-        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ CORRECTION: Utilisation de v1beta pour les modèles Gemini 1.5
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
             "contents": [{
