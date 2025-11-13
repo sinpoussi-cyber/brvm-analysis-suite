@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V18.0 - GEMINI 1.5 FLASH-002 (API V1BETA)
+# MODULE: FUNDAMENTAL ANALYZER V17.0 - GEMINI 1.5 FLASH (API V1BETA) - CORRIGÉ
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (API V1BETA)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-002")
+# ✅ CORRECTION 2: Utilisation du nom de modèle public correct
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 
 class BRVMAnalyzer:
@@ -284,7 +284,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_gemini(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Gemini 1.5 Flash-002 (API v1beta)"""
+        """Analyse un PDF avec Gemini 1.5 Flash (API v1beta)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -334,7 +334,7 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ API GEMINI V1BETA (CORRECT)
+        # ✅ CORRECTION 1: Utilisation de v1beta pour les modèles Gemini 1.5
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
@@ -405,8 +405,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V18.0 - Gemini 1.5 Flash-002)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
+        logging.info(f"📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V17.0 - {GEMINI_MODEL})")
         logging.info("="*80)
         
         conn = None
