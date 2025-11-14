@@ -33,7 +33,6 @@ class BRVMReportGenerator:
         self.db_conn = None
         self.api_manager = APIKeyManager('report_generator')
         
-        # Connexion DB
         try:
             self.db_conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
@@ -47,87 +46,41 @@ class BRVMReportGenerator:
             raise
 
     def _get_all_data_from_db(self):
-        """Récupération optimisée des données"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
-        
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        
         query = f"""
-        WITH recent_data AS (
-            SELECT 
-                company_id,
-                id as historical_data_id,
-                trade_date,
-                price,
-                ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY trade_date DESC) as rn
-            FROM historical_data
-            WHERE trade_date >= '{date_limite}'
-        ),
-        latest_per_company AS (
-            SELECT * FROM recent_data WHERE rn = 1
-        )
-        SELECT
-            c.symbol, 
-            c.name as company_name,
-            lpc.trade_date, 
-            lpc.price,
-            ta.mm_decision, 
-            ta.bollinger_decision, 
-            ta.macd_decision,
-            ta.rsi_decision, 
-            ta.stochastic_decision,
-            (
-                SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC) 
-                FROM fundamental_analysis fa 
-                WHERE fa.company_id = c.id
-                LIMIT 5
-            ) as fundamental_summaries
+        SELECT c.symbol, c.name as company_name, lpc.trade_date, lpc.price,
+               ta.mm_decision, ta.bollinger_decision, ta.macd_decision,
+               ta.rsi_decision, ta.stochastic_decision,
+               (SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC) 
+                FROM fundamental_analysis fa WHERE fa.company_id = c.id LIMIT 5) as fundamental_summaries
         FROM companies c
-        LEFT JOIN latest_per_company lpc ON c.id = lpc.company_id
-        LEFT JOIN technical_analysis ta ON lpc.historical_data_id = ta.historical_data_id
+        LEFT JOIN (
+            SELECT *, ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY trade_date DESC) as rn
+            FROM historical_data WHERE trade_date >= '{date_limite}'
+        ) lpc ON c.id = lpc.company_id AND lpc.rn = 1
+        LEFT JOIN technical_analysis ta ON lpc.id = ta.historical_data_id
         ORDER BY c.symbol;
         """
-        
         try:
             df = pd.read_sql(query, self.db_conn)
-            
-            if df.empty:
-                logging.warning("⚠️  Aucune donnée récente trouvée")
-                return pd.DataFrame()
-            
             logging.info(f"   ✅ {len(df)} société(s) récupérée(s)")
             return df
-            
-        except psycopg2.errors.QueryCanceled:
-            logging.error("❌ Timeout SQL")
-            return pd.DataFrame()
         except Exception as e:
             logging.error(f"❌ Erreur requête SQL: {e}")
             return pd.DataFrame()
 
     def _get_predictions_from_db(self):
-        """Récupération des prédictions"""
         logging.info("🔮 Récupération des prédictions...")
-        
         query = """
-        WITH latest_predictions AS (
-            SELECT 
-                company_id,
-                prediction_date,
-                predicted_price,
-                ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY prediction_date DESC) as rn
-            FROM predictions
-            WHERE prediction_date >= CURRENT_DATE
-        )
-        SELECT 
-            c.symbol,
-            lp.prediction_date,
-            lp.predicted_price
+        SELECT c.symbol, lp.prediction_date, lp.predicted_price
         FROM companies c
-        LEFT JOIN latest_predictions lp ON c.id = lp.company_id AND lp.rn <= 20
+        LEFT JOIN (
+            SELECT *, ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY prediction_date ASC) as rn
+            FROM predictions WHERE prediction_date >= CURRENT_DATE
+        ) lp ON c.id = lp.company_id AND lp.rn <= 20
         ORDER BY c.symbol, lp.prediction_date;
         """
-        
         try:
             df = pd.read_sql(query, self.db_conn)
             logging.info(f"   ✅ {len(df)} prédiction(s)")
@@ -137,8 +90,6 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse IA avec Gemini (avec limite de tentatives)"""
-        
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
@@ -150,120 +101,76 @@ class BRVMReportGenerator:
         context_parts = [f"Société: {symbol}"]
         if data_dict.get('price'): context_parts.append(f"Prix actuel: {data_dict['price']:.0f} FCFA")
         if data_dict.get('technical_signals'): context_parts.append(f"Signaux techniques: {data_dict['technical_signals']}")
-        if data_dict.get('fundamental_summary'): context_parts.append(f"Analyse fondamentale:\n{data_dict['fundamental_summary'][:500]}")
+        if data_dict.get('fundamental_summary'): context_parts.append(f"Synthèse fondamentale:\n{data_dict['fundamental_summary'][:500]}")
         if data_dict.get('predictions'):
-            pred_text = ", ".join([f"{p['date']}: {p['price']:.0f}" for p in data_dict['predictions'][:5]])
-            context_parts.append(f"Prédictions: {pred_text}")
+            pred_text = ", ".join([f"{p['date'].strftime('%d/%m')}: {p['price']:.0f}" for p in data_dict['predictions'][:5]])
+            context_parts.append(f"Prédictions (J: PRIX): {pred_text}")
         context = "\n\n".join(context_parts)
         
-        prompt = f"""Analyse cette société BRVM et fournis UNE recommandation claire.
+        prompt = f"""Tu es un analyste financier expert de la BRVM. Analyse les données fournies pour la société et donne une recommandation d'investissement claire et concise.
 {context}
-Fournis:
-1. **Recommandation**: ACHAT, VENTE ou CONSERVER (1 mot)
-2. **Niveau de confiance**: Élevé, Moyen ou Faible
-3. **Justification**: 2-3 phrases concises
-4. **Niveau de risque**: Faible, Moyen ou Élevé
-Sois direct et factuel."""
+
+Format de réponse obligatoire :
+1.  **Recommandation** : ACHAT, VENTE, ou CONSERVER (un seul mot).
+2.  **Confiance** : Élevée, Moyenne, ou Faible.
+3.  **Justification** : 2-3 phrases expliquant ta décision, basées sur les données.
+4.  **Risque** : Faible, Moyen, ou Élevé."""
         
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
         headers = {'Content-Type': 'application/json', 'x-goog-api-key': api_key}
-        
         request_body = {"contents": [{"parts": [{"text": prompt}]}]}
         
         try:
             response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
-            
             self.api_manager.record_request()
             
             if response.status_code == 200:
                 data = response.json()
-                if 'candidates' in data and len(data['candidates']) > 0:
+                if 'candidates' in data and data['candidates']:
                     text = data['candidates'][0]['content']['parts'][0]['text']
                     logging.info(f"    ✅ {symbol}: Analyse générée")
                     return text
-                else:
-                    logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
-                    return self._generate_fallback_analysis(symbol, data_dict)
+                logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
+                return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
                 logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
-                can_retry = self.api_manager.handle_rate_limit_response()
-                if attempt < max_attempts and can_retry:
+                if attempt < max_attempts and self.api_manager.handle_rate_limit_response():
                     time.sleep(2)
                     return self._generate_ia_analysis(symbol, data_dict, attempt + 1, max_attempts)
                 else:
-                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
+                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives.")
                     return self._generate_fallback_analysis(symbol, data_dict)
-            
             else:
                 logging.error(f"    ❌ Erreur {response.status_code} pour {symbol}: {response.text[:200]}")
                 return self._generate_fallback_analysis(symbol, data_dict)
-                
-        except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout pour {symbol}")
-            return self._generate_fallback_analysis(symbol, data_dict)
-        except Exception as e:
+        except (requests.exceptions.Timeout, Exception) as e:
             logging.error(f"    ❌ Exception pour {symbol}: {str(e)}")
             return self._generate_fallback_analysis(symbol, data_dict)
 
     def _generate_fallback_analysis(self, symbol, data_dict):
-        """Analyse de secours si API échoue"""
-        analysis = f"**Analyse de {symbol}**\n\n"
-        
-        if data_dict.get('price'): analysis += f"Prix actuel: {data_dict['price']:.0f} FCFA\n\n"
-        if data_dict.get('technical_signals'):
-            signals = data_dict['technical_signals']
-            buy_count = signals.count('Achat')
-            sell_count = signals.count('Vente')
-            
-            if buy_count > sell_count:
-                analysis += "**Recommandation**: ACHAT\n"
-                analysis += "Signaux techniques majoritairement positifs.\n\n"
-            elif sell_count > buy_count:
-                analysis += "**Recommandation**: VENTE\n"
-                analysis += "Signaux techniques majoritairement négatifs.\n\n"
-            else:
-                analysis += "**Recommandation**: CONSERVER\n"
-                analysis += "Signaux techniques mixtes.\n\n"
-        else:
-            analysis += "**Recommandation**: CONSERVER\n"
-            analysis += "Données insuffisantes pour une recommandation.\n\n"
-        
-        analysis += "**Niveau de confiance**: Moyen\n"
-        analysis += "**Niveau de risque**: Moyen\n"
+        analysis = f"**Recommandation**: CONSERVER\n**Confiance**: Faible\n**Justification**: L'analyse automatique par IA a échoué. Une évaluation manuelle des données techniques et fondamentales est nécessaire.\n**Risque**: Moyen"
         return analysis
 
     def _create_word_document(self, all_analyses):
-        """Création du document Word"""
         logging.info("📄 Création du document Word...")
-        
         doc = Document()
-        
-        title = doc.add_heading('Rapport d\'Analyse BRVM', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        subtitle = doc.add_paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
+        doc.add_heading('Rapport d\'Analyse BRVM', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}").alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph()
-        doc.add_heading('Synthèse Générale', level=1)
-        doc.add_paragraph(f"Nombre de sociétés analysées: {len(all_analyses)}")
-        doc.add_paragraph()
-        doc.add_heading('Analyses Détaillées', level=1)
+        doc.add_heading('Analyses Détaillées par Société', level=1)
         
         for symbol, analysis in sorted(all_analyses.items()):
-            doc.add_heading(f"{symbol}", level=2)
+            doc.add_heading(symbol, level=2)
             doc.add_paragraph(analysis)
             doc.add_paragraph()
         
         filename = f"Rapport_Synthese_Investissement_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
-        
         logging.info(f"   ✅ Document créé: {filename}")
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
-        """Génération du rapport complet"""
         logging.info("="*80)
         logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V21.0 - {GEMINI_MODEL})")
         logging.info("="*80)
@@ -278,7 +185,7 @@ Sois direct et factuel."""
         
         predictions_df = self._get_predictions_from_db()
         
-        logging.info(f"🤖 Génération de {len(df)} analyse(s) IA avec limite 3 tentatives...")
+        logging.info(f"🤖 Génération de {len(df)} analyse(s) IA avec {GEMINI_MODEL}...")
         
         all_analyses = {}
         for idx, row in df.iterrows():
@@ -286,18 +193,10 @@ Sois direct et factuel."""
             
             data_dict = {
                 'price': row.get('price'),
-                'technical_signals': None,
                 'fundamental_summary': row.get('fundamental_summaries'),
-                'predictions': []
+                'technical_signals': ", ".join([s for s in [row.get('mm_decision'), row.get('bollinger_decision'), row.get('macd_decision'), row.get('rsi_decision'), row.get('stochastic_decision')] if s and s != 'Attendre']),
+                'predictions': [{'date': r['prediction_date'], 'price': r['predicted_price']} for _, r in predictions_df[predictions_df['symbol'] == symbol].iterrows()]
             }
-            
-            if row.get('mm_decision'):
-                signals = [s for s in [row.get('mm_decision'), row.get('bollinger_decision'), row.get('macd_decision'), row.get('rsi_decision'), row.get('stochastic_decision')] if s]
-                data_dict['technical_signals'] = ", ".join(signals)
-            
-            symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
-            if not symbol_predictions.empty:
-                data_dict['predictions'] = [{'date': r['prediction_date'], 'price': r['predicted_price']} for _, r in symbol_predictions.iterrows()]
             
             analysis = self._generate_ia_analysis(symbol, data_dict)
             all_analyses[symbol] = analysis
@@ -309,10 +208,8 @@ Sois direct et factuel."""
         logging.info(f"📊 Requêtes effectuées: {final_stats['used_by_module']}")
 
     def __del__(self):
-        """Fermeture connexion DB"""
         if self.db_conn and not self.db_conn.closed:
             self.db_conn.close()
-
 
 if __name__ == "__main__":
     try:
