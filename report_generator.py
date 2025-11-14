@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V20.0 - GEMINI 1.5 FLASH (CORRECTION FINALE)
+# MODULE: REPORT GENERATOR V21.0 - GEMINI-PRO (SOLUTION STABLE)
 # ==============================================================================
 
 import os
@@ -24,7 +24,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+# ✅ SOLUTION: Utilisation du modèle stable et universel gemini-pro
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-pro")
 
 
 class BRVMReportGenerator:
@@ -141,75 +142,45 @@ class BRVMReportGenerator:
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
-        # Obtenir la clé API (avec rotation automatique)
         api_key = self.api_manager.get_api_key()
         if not api_key:
             logging.warning(f"    ⚠️  Aucune clé Gemini disponible pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         
-        # Construire contexte
         context_parts = [f"Société: {symbol}"]
-        
-        if data_dict.get('price'):
-            context_parts.append(f"Prix actuel: {data_dict['price']:.0f} FCFA")
-        
-        if data_dict.get('technical_signals'):
-            context_parts.append(f"Signaux techniques: {data_dict['technical_signals']}")
-        
-        if data_dict.get('fundamental_summary'):
-            context_parts.append(f"Analyse fondamentale:\n{data_dict['fundamental_summary'][:500]}")
-        
+        if data_dict.get('price'): context_parts.append(f"Prix actuel: {data_dict['price']:.0f} FCFA")
+        if data_dict.get('technical_signals'): context_parts.append(f"Signaux techniques: {data_dict['technical_signals']}")
+        if data_dict.get('fundamental_summary'): context_parts.append(f"Analyse fondamentale:\n{data_dict['fundamental_summary'][:500]}")
         if data_dict.get('predictions'):
             pred_text = ", ".join([f"{p['date']}: {p['price']:.0f}" for p in data_dict['predictions'][:5]])
             context_parts.append(f"Prédictions: {pred_text}")
-        
         context = "\n\n".join(context_parts)
         
         prompt = f"""Analyse cette société BRVM et fournis UNE recommandation claire.
-
 {context}
-
 Fournis:
 1. **Recommandation**: ACHAT, VENTE ou CONSERVER (1 mot)
 2. **Niveau de confiance**: Élevé, Moyen ou Faible
 3. **Justification**: 2-3 phrases concises
 4. **Niveau de risque**: Faible, Moyen ou Élevé
-
 Sois direct et factuel."""
         
-        # ==============================================================================
-        # ✅ CORRECTION FINALE APPLIQUÉE ICI
-        # 1. L'URL n'inclut PAS la clé API
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        headers = {'Content-Type': 'application/json', 'x-goog-api-key': api_key}
         
-        # 2. La clé est passée dans un en-tête (header)
-        headers = {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': api_key
-        }
-        # ==============================================================================
-        
-        request_body = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
+        request_body = {"contents": [{"parts": [{"text": prompt}]}]}
         
         try:
-            # 3. L'en-tête est inclus dans l'appel `requests.post`
             response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
             
-            # Enregistrer la requête
             self.api_manager.record_request()
             
             if response.status_code == 200:
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
-                    candidate = data['candidates'][0]
-                    if 'content' in candidate and 'parts' in candidate['content']:
-                        text = candidate['content']['parts'][0]['text']
-                        logging.info(f"    ✅ {symbol}: Analyse générée")
-                        return text
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    logging.info(f"    ✅ {symbol}: Analyse générée")
+                    return text
                 else:
                     logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
                     return self._generate_fallback_analysis(symbol, data_dict)
@@ -239,9 +210,7 @@ Sois direct et factuel."""
         """Analyse de secours si API échoue"""
         analysis = f"**Analyse de {symbol}**\n\n"
         
-        if data_dict.get('price'):
-            analysis += f"Prix actuel: {data_dict['price']:.0f} FCFA\n\n"
-        
+        if data_dict.get('price'): analysis += f"Prix actuel: {data_dict['price']:.0f} FCFA\n\n"
         if data_dict.get('technical_signals'):
             signals = data_dict['technical_signals']
             buy_count = signals.count('Achat')
@@ -262,7 +231,6 @@ Sois direct et factuel."""
         
         analysis += "**Niveau de confiance**: Moyen\n"
         analysis += "**Niveau de risque**: Moyen\n"
-        
         return analysis
 
     def _create_word_document(self, all_analyses):
@@ -271,7 +239,6 @@ Sois direct et factuel."""
         
         doc = Document()
         
-        # En-tête
         title = doc.add_heading('Rapport d\'Analyse BRVM', 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
@@ -279,13 +246,9 @@ Sois direct et factuel."""
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         doc.add_paragraph()
-        
-        # Synthèse
         doc.add_heading('Synthèse Générale', level=1)
         doc.add_paragraph(f"Nombre de sociétés analysées: {len(all_analyses)}")
         doc.add_paragraph()
-        
-        # Analyses détaillées
         doc.add_heading('Analyses Détaillées', level=1)
         
         for symbol, analysis in sorted(all_analyses.items()):
@@ -293,7 +256,6 @@ Sois direct et factuel."""
             doc.add_paragraph(analysis)
             doc.add_paragraph()
         
-        # Sauvegarde
         filename = f"Rapport_Synthese_Investissement_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
         
@@ -303,30 +265,25 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V20.0 - {GEMINI_MODEL})")
+        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V21.0 - {GEMINI_MODEL})")
         logging.info("="*80)
         
         stats = self.api_manager.get_statistics()
         logging.info(f"📊 Clés Gemini: {stats['available']}/{stats['total']} disponible(s)")
         
-        # Récupération données
         df = self._get_all_data_from_db()
-        
         if df.empty:
             logging.error("❌ Aucune donnée disponible - rapport impossible")
             return
         
         predictions_df = self._get_predictions_from_db()
         
-        # Génération analyses IA
         logging.info(f"🤖 Génération de {len(df)} analyse(s) IA avec limite 3 tentatives...")
         
         all_analyses = {}
-        
         for idx, row in df.iterrows():
             symbol = row['symbol']
             
-            # Préparer contexte
             data_dict = {
                 'price': row.get('price'),
                 'technical_signals': None,
@@ -334,30 +291,17 @@ Sois direct et factuel."""
                 'predictions': []
             }
             
-            # Signaux techniques
             if row.get('mm_decision'):
-                signals = [
-                    row.get('mm_decision'),
-                    row.get('bollinger_decision'),
-                    row.get('macd_decision'),
-                    row.get('rsi_decision'),
-                    row.get('stochastic_decision')
-                ]
-                data_dict['technical_signals'] = ", ".join([s for s in signals if s])
+                signals = [s for s in [row.get('mm_decision'), row.get('bollinger_decision'), row.get('macd_decision'), row.get('rsi_decision'), row.get('stochastic_decision')] if s]
+                data_dict['technical_signals'] = ", ".join(signals)
             
-            # Prédictions
             symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
             if not symbol_predictions.empty:
-                data_dict['predictions'] = [
-                    {'date': row['prediction_date'], 'price': row['predicted_price']}
-                    for _, row in symbol_predictions.iterrows()
-                ]
+                data_dict['predictions'] = [{'date': r['prediction_date'], 'price': r['predicted_price']} for _, r in symbol_predictions.iterrows()]
             
-            # Génération analyse IA
             analysis = self._generate_ia_analysis(symbol, data_dict)
             all_analyses[symbol] = analysis
         
-        # Création document
         filename = self._create_word_document(all_analyses)
         
         final_stats = self.api_manager.get_statistics()
