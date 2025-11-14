@@ -99,7 +99,7 @@ jobs:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
           echo "🚀 Analyse fondamentale avec Claude 3.5 Sonnet..."
-          echo "🤖 Modèle: claude-3-5-sonnet-20241022"
+          echo "🤖 Modèle: claude-3-5-sonnet-20240620"
           echo "🔑 API: Anthropic Claude"
           echo "📄 Support: PDF direct + OCR intégré"
           echo "⚡ Capacité: 50 req/min (tier 1)"
