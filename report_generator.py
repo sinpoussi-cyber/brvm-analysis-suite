@@ -25,7 +25,7 @@ DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
 # ✅ CONFIGURATION CLAUDE API
-CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
+CLAUDE_MODEL = "claude-3-5-sonnet-20240620"
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 
