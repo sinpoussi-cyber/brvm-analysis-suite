@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V21.0 - Gemini 1.5 Flash (API V1 + 11 CLÉS)
+name: BRVM Analysis Suite V22.0 - Claude 3.5 Sonnet (1 CLÉ)
 
 on:
   schedule:
@@ -89,55 +89,34 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Gemini 1.5 Flash)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Claude 3.5 Sonnet)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
-          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
-          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
-          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
-          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
-          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
-          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
-          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
-          GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_MODEL: "gemini-1.5-flash"
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          echo "🚀 Analyse fondamentale avec Gemini 1.5 Flash..."
-          echo "🤖 Modèle: gemini-1.5-flash (API v1 STABLE)"
-          echo "🔑 Clés: 11 clés en rotation"
-          echo "⚡ Capacité: 110 req/min total"
+          echo "🚀 Analyse fondamentale avec Claude 3.5 Sonnet..."
+          echo "🤖 Modèle: claude-3-5-sonnet-20241022"
+          echo "🔑 API: Anthropic Claude"
+          echo "📄 Support: PDF direct + OCR intégré"
+          echo "⚡ Capacité: 50 req/min (tier 1)"
           echo "🛡️  Limite: 3 tentatives max par document"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Gemini 1.5 Flash)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Claude 3.5 Sonnet)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
-          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
-          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
-          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
-          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
-          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
-          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
-          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
-          GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_MODEL: "gemini-1.5-flash"
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          echo "🚀 Génération rapports avec Gemini 1.5 Flash..."
+          echo "🚀 Génération rapports avec Claude 3.5 Sonnet..."
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -152,26 +131,27 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V21.0 (Gemini 1.5 Flash)"
+          echo "📈 BRVM ANALYSIS SUITE V22.0 (Claude 3.5 Sonnet)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - IA: Google Gemini 1.5 Flash (API v1 STABLE)"
-          echo "  - Modèle: gemini-1.5-flash"
-          echo "  - API: v1 (pas v1beta)"
-          echo "  - Clés: 11 clés API en rotation"
+          echo "  - IA: Anthropic Claude 3.5 Sonnet"
+          echo "  - Modèle: claude-3-5-sonnet-20241022"
+          echo "  - API: Anthropic (stable et fiable)"
+          echo "  - Clés: 1 clé API"
           echo "  - Limite: 3 tentatives max par société"
-          echo "  - Capacité: 110 requêtes/minute"
+          echo "  - Capacité: 50 requêtes/minute"
+          echo "  - Support: PDF direct + OCR intégré"
           echo "  - Fallback: Analyse automatique"
           echo ""
           echo "📋 Étapes:"
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (Gemini 1.5)"
-          echo "  ✅ Génération rapports (Gemini 1.5)"
+          echo "  ✅ Analyse fondamentale (Claude 3.5)"
+          echo "  ✅ Génération rapports (Claude 3.5)"
           echo ""
           if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés:"
