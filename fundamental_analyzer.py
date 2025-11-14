@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V20.0 - GEMINI 1.5 FLASH LATEST (11 CLÉS)
+# MODULE: FUNDAMENTAL ANALYZER V21.0 - GEMINI 1.5 FLASH (API V1 + 11 CLÉS)
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (MODÈLE STABLE LATEST)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# ✅ CONFIGURATION GEMINI (API V1 STABLE)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 
 class BRVMAnalyzer:
@@ -284,7 +284,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_gemini(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Gemini 1.5 Flash Latest (API v1beta)"""
+        """Analyse un PDF avec Gemini 1.5 Flash (API v1)"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -334,8 +334,8 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Gemini disponible")
             return False
         
-        # ✅ API GEMINI V1BETA + MODÈLE LATEST
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ API GEMINI V1 (STABLE) - PAS V1BETA
+        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         request_body = {
             "contents": [{
@@ -405,7 +405,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V20.0 - Gemini 1.5 Flash Latest)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V21.0 - Gemini 1.5 Flash)")
         logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
         logging.info("="*80)
         
@@ -434,7 +434,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 1.5 Flash Latest avec limite 3 tentatives)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Gemini 1.5 Flash avec limite 3 tentatives)...")
             
             total_analyzed = 0
             total_skipped = 0
