@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V19.0 - GEMINI 1.5 FLASH (11 CLÉS)
+# MODULE: REPORT GENERATOR V20.0 - GEMINI 1.5 FLASH (CORRECTION FINALE)
 # ==============================================================================
 
 import os
@@ -24,7 +24,6 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (MODÈLE STABLE)
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 
@@ -178,8 +177,17 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ API GEMINI V1BETA + MODÈLE STABLE
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ==============================================================================
+        # ✅ CORRECTION FINALE APPLIQUÉE ICI
+        # 1. L'URL n'inclut PAS la clé API
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        
+        # 2. La clé est passée dans un en-tête (header)
+        headers = {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key
+        }
+        # ==============================================================================
         
         request_body = {
             "contents": [{
@@ -188,7 +196,8 @@ Sois direct et factuel."""
         }
         
         try:
-            response = requests.post(api_url, json=request_body, timeout=30)
+            # 3. L'en-tête est inclus dans l'appel `requests.post`
+            response = requests.post(api_url, headers=headers, json=request_body, timeout=30)
             
             # Enregistrer la requête
             self.api_manager.record_request()
@@ -206,15 +215,10 @@ Sois direct et factuel."""
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
-                # Rate limit - gérer et réessayer AVEC LIMITE
                 logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
-                
-                # Essayer de changer de clé
                 can_retry = self.api_manager.handle_rate_limit_response()
-                
-                # Réessayer SEULEMENT si < max_attempts ET qu'il y a une clé disponible
                 if attempt < max_attempts and can_retry:
-                    time.sleep(2)  # Petite pause
+                    time.sleep(2)
                     return self._generate_ia_analysis(symbol, data_dict, attempt + 1, max_attempts)
                 else:
                     logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
@@ -299,8 +303,7 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V19.0 - Gemini 1.5 Flash)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
+        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V20.0 - {GEMINI_MODEL})")
         logging.info("="*80)
         
         stats = self.api_manager.get_statistics()
