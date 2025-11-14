@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V21.0 - GEMINI 1.5 FLASH (API V1 + 11 CLÉS)
+# MODULE: REPORT GENERATOR V22.0 - CLAUDE 3.5 SONNET (1 CLÉ)
 # ==============================================================================
 
 import os
@@ -24,8 +24,9 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION GEMINI (API V1 STABLE)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+# ✅ CONFIGURATION CLAUDE API
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 
 class BRVMReportGenerator:
@@ -137,15 +138,15 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse IA avec Gemini (avec limite de tentatives)"""
+        """Génération analyse IA avec Claude (avec limite de tentatives)"""
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
-        # Obtenir la clé API (avec rotation automatique)
+        # Obtenir la clé API
         api_key = self.api_manager.get_api_key()
         if not api_key:
-            logging.warning(f"    ⚠️  Aucune clé Gemini disponible pour {symbol}")
+            logging.warning(f"    ⚠️  Aucune clé Claude disponible pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         
         # Construire contexte
@@ -178,43 +179,45 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ API GEMINI V1 (STABLE) - PAS V1BETA
-        api_url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+        # ✅ CLAUDE API 3.5 SONNET
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
         
         request_body = {
-            "contents": [{
-                "parts": [{"text": prompt}]
+            "model": CLAUDE_MODEL,
+            "max_tokens": 1024,
+            "messages": [{
+                "role": "user",
+                "content": prompt
             }]
         }
         
         try:
-            response = requests.post(api_url, json=request_body, timeout=30)
+            response = requests.post(CLAUDE_API_URL, headers=headers, json=request_body, timeout=30)
             
             # Enregistrer la requête
             self.api_manager.record_request()
             
             if response.status_code == 200:
                 data = response.json()
-                if 'candidates' in data and len(data['candidates']) > 0:
-                    candidate = data['candidates'][0]
-                    if 'content' in candidate and 'parts' in candidate['content']:
-                        text = candidate['content']['parts'][0]['text']
-                        logging.info(f"    ✅ {symbol}: Analyse générée")
-                        return text
+                if 'content' in data and len(data['content']) > 0:
+                    text = data['content'][0]['text']
+                    logging.info(f"    ✅ {symbol}: Analyse générée")
+                    return text
                 else:
                     logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
-                # Rate limit - gérer et réessayer AVEC LIMITE
+                # Rate limit
                 logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
                 
-                # Essayer de changer de clé
                 can_retry = self.api_manager.handle_rate_limit_response()
                 
-                # Réessayer SEULEMENT si < max_attempts ET qu'il y a une clé disponible
                 if attempt < max_attempts and can_retry:
-                    time.sleep(2)  # Petite pause
                     return self._generate_ia_analysis(symbol, data_dict, attempt + 1, max_attempts)
                 else:
                     logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
@@ -299,12 +302,12 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V21.0 - Gemini 1.5 Flash)")
-        logging.info(f"🤖 Modèle: {GEMINI_MODEL}")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V22.0 - Claude 3.5 Sonnet)")
+        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
         
         stats = self.api_manager.get_statistics()
-        logging.info(f"📊 Clés Gemini: {stats['available']}/{stats['total']} disponible(s)")
+        logging.info(f"📊 Clé Claude: {stats['available']}/{stats['total']} disponible")
         
         # Récupération données
         df = self._get_all_data_from_db()
