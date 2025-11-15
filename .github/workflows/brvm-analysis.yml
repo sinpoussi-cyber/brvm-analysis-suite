@@ -1,170 +1,44 @@
-name: BRVM Analysis Suite V23.0 - Claude 3 Opus (1 CLÉ)
+name: Analyse Quotidienne BRVM
 
 on:
   schedule:
-    - cron: '0 6 * * *'
-  workflow_dispatch:
+    - cron: '0 20 * * 1-5' # Exécution du Lundi au Vendredi à 20h00 UTC
+  workflow_dispatch: # Permet de lancer manuellement
 
 jobs:
-  brvm-analysis:
+  daily-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
     
     steps:
-      - name: 🔥 Checkout
+      - name: Checkout du code
         uses: actions/checkout@v3
-      
-      - name: 🐍 Python 3.11
+
+      - name: Mise en place de Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - name: 📦 Installation dépendances
+          python-version: '3.10'
+
+      - name: Installation des dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: 🌐 Installation Chrome/Chromedriver
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
           
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
-          CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1)
-          
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
-          wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR_VERSION}" -O version.txt && \
-          CHROMEDRIVER_VERSION=$(cat version.txt) && \
-          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" -O chromedriver.zip
-          
-          unzip -q chromedriver.zip
-          if [ -d "chromedriver-linux64" ]; then
-            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
-          else
-            sudo mv chromedriver /usr/local/bin/
-          fi
-          sudo chmod +x /usr/local/bin/chromedriver
-          
-          rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
-          
-          echo "✅ Chrome: $(google-chrome --version)"
-          echo "✅ Chromedriver: $(chromedriver --version)"
-      
-      - name: 📊 ÉTAPE 1 - Collecte Données
+      - name: Exécution de la suite d'analyse
+        # AJOUTÉ : Le bloc 'env' rend les secrets disponibles pour les scripts
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # <-- CETTE LIGNE CORRIGE L'ERREUR
         run: |
-          echo "🚀 Collecte données BRVM..."
-          python data_collector.py
-          echo "✅ Collecte terminée"
-      
-      - name: 📈 ÉTAPE 2 - Analyse Technique
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-        run: |
-          echo "🚀 Analyse technique..."
-          python technical_analyzer.py
-          echo "✅ Analyse technique terminée"
-      
-      - name: 🔮 ÉTAPE 3 - Prédictions
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-        run: |
-          echo "🚀 Prédictions 20 jours..."
-          python prediction_analyzer.py
-          echo "✅ Prédictions terminées"
-      
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Claude 3 Opus)
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-        run: |
-          echo "🚀 Analyse fondamentale avec Claude 3 Opus..."
-          echo "🤖 Modèle: claude-3-opus-20240229"
-          echo "🔑 API: Anthropic Claude"
-          echo "📄 Support: PDF direct + OCR intégré"
-          echo "⚡ Capacité: 50 req/min (tier 1)"
-          echo "🛡️  Limite: 3 tentatives max par document"
-          echo "💎 Qualité: Meilleure analyse financière"
-          python fundamental_analyzer.py
-          echo "✅ Analyse fondamentale terminée"
-      
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Claude 3 Opus)
-        env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-        run: |
-          echo "🚀 Génération rapports avec Claude 3 Opus..."
-          python report_generator.py
-          echo "✅ Rapports générés"
-      
-      - name: 📤 Upload Rapports
-        uses: actions/upload-artifact@v4
+          echo "🚀 Démarrage de la suite d'analyse BRVM avec OpenAI..."
+          python main.py
+
+      - name: Upload des rapports générés
+        uses: actions/upload-artifact@v3
         with:
-          name: rapports-brvm-${{ github.run_number }}
+          name: Rapports-Analyse-BRVM
           path: Rapport_*.docx
-          retention-days: 90
-      
-      - name: 📊 Résumé
-        if: always()
-        run: |
-          echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V23.0 (Claude 3 Opus)"
-          echo "═══════════════════════════════════════════════════════════"
-          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Run: ${{ github.run_number }}"
-          echo ""
-          echo "⚙️  Configuration:"
-          echo "  - IA: Anthropic Claude 3 Opus"
-          echo "  - Modèle: claude-3-opus-20240229"
-          echo "  - API: Anthropic (stable et fiable)"
-          echo "  - Clés: 1 clé API"
-          echo "  - Limite: 3 tentatives max par société"
-          echo "  - Capacité: 50 requêtes/minute"
-          echo "  - Support: PDF direct + OCR intégré"
-          echo "  - Qualité: ⭐⭐⭐⭐⭐ (Meilleure)"
-          echo "  - Fallback: Analyse automatique"
-          echo ""
-          echo "💰 Coût estimé:"
-          echo "  - Analyse fondamentale: ~$2.76 (46 PDFs)"
-          echo "  - Recommandations: ~$0.92 (46 sociétés)"
-          echo "  - Total: ~$3.68 par exécution"
-          echo "  - Crédit disponible: $5.00"
-          echo ""
-          echo "📋 Étapes:"
-          echo "  ✅ Collecte données"
-          echo "  ✅ Analyse technique"
-          echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (Claude 3 Opus)"
-          echo "  ✅ Génération rapports (Claude 3 Opus)"
-          echo ""
-          if [ -f "Rapport_"*.docx ]; then
-            echo "✅ Rapports générés:"
-            ls -lh Rapport_*.docx
-          else
-            echo "⚠️  Aucun rapport trouvé"
-          fi
-          echo "═══════════════════════════════════════════════════════════"
+          if-no-files-found: warn # Change en 'warn' pour ne pas faire échouer le job si aucun rapport n'est créé
