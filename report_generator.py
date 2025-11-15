@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V22.0 - CLAUDE 3.5 SONNET (1 CLÉ)
+# MODULE: REPORT GENERATOR V23.0 - CLAUDE 3 OPUS (1 CLÉ)
 # ==============================================================================
 
 import os
@@ -24,8 +24,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE API
-CLAUDE_MODEL = "claude-3-5-sonnet-20240620"
+# ✅ CONFIGURATION CLAUDE 3 OPUS (MEILLEURE QUALITÉ)
+CLAUDE_MODEL = "claude-3-opus-20240229"
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 
@@ -138,7 +138,7 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse IA avec Claude (avec limite de tentatives)"""
+        """Génération analyse IA avec Claude 3 Opus (avec limite de tentatives)"""
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
@@ -179,7 +179,7 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ CLAUDE API 3.5 SONNET
+        # ✅ CLAUDE 3 OPUS API
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
@@ -302,7 +302,7 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V22.0 - Claude 3.5 Sonnet)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V23.0 - Claude 3 Opus)")
         logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
         
