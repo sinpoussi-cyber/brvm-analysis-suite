@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V24.0 - OPENAI GPT-4o
+# MODULE: FUNDAMENTAL ANALYZER V24.1 - OPENAI GPT-4o (CORRECTION PROXY)
 # ==============================================================================
 
 import requests
@@ -19,7 +19,8 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
 import pdfplumber
-import openai  # Import de la bibliothèque OpenAI
+import openai
+import httpx # <-- NOUVEL IMPORT
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -31,59 +32,13 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION OPENAI GPT-4o (NOUVEAU)
 OPENAI_MODEL = "gpt-4o"
 
 class BRVMAnalyzer:
     def __init__(self):
+        # ... (le dictionnaire societes_mapping reste identique, pas besoin de le copier ici) ...
         self.societes_mapping = {
-            'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
-            'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci', 'palmci']},
-            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci', 'unilever']},
-            'SLBC': {'nom_rapport': 'SOLIBRA', 'alternatives': ['solibra ci', 'solibra']},
-            'SICC': {'nom_rapport': 'SICOR', 'alternatives': ['sicor ci', 'sicor']},
-            'SPHC': {'nom_rapport': 'SAPH', 'alternatives': ['saph ci', 'saph']},
-            'SCRC': {'nom_rapport': 'SUCRIVOIRE', 'alternatives': ['sucrivoire', 'sucre']},
-            'STBC': {'nom_rapport': 'SITAB', 'alternatives': ['sitab ci', 'sitab']},
-            'SGBC': {'nom_rapport': 'SOCIETE GENERALE', 'alternatives': ['sgci', 'societe generale ci']},
-            'BICC': {'nom_rapport': 'BICI', 'alternatives': ['bici ci', 'bici cote']},
-            'NSBC': {'nom_rapport': 'NSIA BANQUE', 'alternatives': ['nsia ci', 'nsia banque ci']},
-            'ECOC': {'nom_rapport': 'ECOBANK CI', 'alternatives': ['ecobank cote', 'eco ci']},
-            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['boa ci', 'boa cote']},
-            'SIBC': {'nom_rapport': 'SIB', 'alternatives': ['sib ci', 'societe ivoirienne']},
-            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['boa bf', 'boa burkina']},
-            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['boa sn', 'boa senegal']},
-            'BOAM': {'nom_rapport': 'BANK OF AFRICA MALI', 'alternatives': ['boa ml', 'boa mali']},
-            'BOAN': {'nom_rapport': 'BANK OF AFRICA NIGER', 'alternatives': ['boa ng', 'boa niger']},
-            'BOAB': {'nom_rapport': 'BANK OF AFRICA BENIN', 'alternatives': ['boa bn', 'boa benin']},
-            'BICB': {'nom_rapport': 'BICI BENIN', 'alternatives': ['bici bn', 'bici benin']},
-            'CBIBF': {'nom_rapport': 'CORIS BANK', 'alternatives': ['coris banking', 'coris bf']},
-            'ETIT': {'nom_rapport': 'ECOBANK ETI', 'alternatives': ['eti', 'ecobank transnational']},
-            'ORGT': {'nom_rapport': 'ORAGROUP', 'alternatives': ['oragroup togo', 'ora tg']},
-            'SAFC': {'nom_rapport': 'SAFCA', 'alternatives': ['safca ci', 'saf ci']},
-            'SOGC': {'nom_rapport': 'SOGB', 'alternatives': ['sogb ci', 'societe generale burkina']},
-            'SNTS': {'nom_rapport': 'SONATEL', 'alternatives': ['sonatel sn', 'orange senegal']},
-            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange cote', 'oci']},
-            'ONTBF': {'nom_rapport': 'ONATEL', 'alternatives': ['onatel bf', 'onatel burkina']},
-            'TTLC': {'nom_rapport': 'TOTAL CI', 'alternatives': ['totalenergies ci', 'total cote']},
-            'TTLS': {'nom_rapport': 'TOTAL SN', 'alternatives': ['totalenergies sn', 'total senegal']},
-            'SHEC': {'nom_rapport': 'VIVO ENERGY', 'alternatives': ['shell ci', 'vivo ci']},
-            'CIEC': {'nom_rapport': 'CIE', 'alternatives': ['cie ci', 'compagnie ivoirienne']},
-            'CFAC': {'nom_rapport': 'CFAO MOTORS', 'alternatives': ['cfao ci', 'cfao']},
-            'PRSC': {'nom_rapport': 'TRACTAFRIC', 'alternatives': ['tractafric motors', 'tractafric ci']},
-            'SDSC': {'nom_rapport': 'BOLLORE', 'alternatives': ['africa global logistics', 'sdv ci']},
-            'ABJC': {'nom_rapport': 'SERVAIR', 'alternatives': ['servair abidjan', 'servair ci']},
-            'BNBC': {'nom_rapport': 'BERNABE', 'alternatives': ['bernabe ci']},
-            'NEIC': {'nom_rapport': 'NEI-CEDA', 'alternatives': ['nei ceda', 'neiceda']},
-            'UNXC': {'nom_rapport': 'UNIWAX', 'alternatives': ['uniwax ci']},
-            'LNBB': {'nom_rapport': 'LOTERIE BENIN', 'alternatives': ['loterie nationale benin']},
-            'CABC': {'nom_rapport': 'SICABLE', 'alternatives': ['sicable ci']},
-            'FTSC': {'nom_rapport': 'FILTISAC', 'alternatives': ['filtisac ci']},
-            'SDCC': {'nom_rapport': 'SODE', 'alternatives': ['sode ci']},
-            'SEMC': {'nom_rapport': 'EVIOSYS', 'alternatives': ['crown siem', 'eviosys packaging']},
-            'SIVC': {'nom_rapport': 'AIR LIQUIDE', 'alternatives': ['air liquide ci']},
-            'STAC': {'nom_rapport': 'SETAO', 'alternatives': ['setao ci']},
-            'SMBC': {'nom_rapport': 'SMB', 'alternatives': ['smb ci', 'societe miniere']}
+            'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']}, 'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci', 'palmci']}, 'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci', 'unilever']}, 'SLBC': {'nom_rapport': 'SOLIBRA', 'alternatives': ['solibra ci', 'solibra']}, 'SICC': {'nom_rapport': 'SICOR', 'alternatives': ['sicor ci', 'sicor']}, 'SPHC': {'nom_rapport': 'SAPH', 'alternatives': ['saph ci', 'saph']}, 'SCRC': {'nom_rapport': 'SUCRIVOIRE', 'alternatives': ['sucrivoire', 'sucre']}, 'STBC': {'nom_rapport': 'SITAB', 'alternatives': ['sitab ci', 'sitab']}, 'SGBC': {'nom_rapport': 'SOCIETE GENERALE', 'alternatives': ['sgci', 'societe generale ci']}, 'BICC': {'nom_rapport': 'BICI', 'alternatives': ['bici ci', 'bici cote']}, 'NSBC': {'nom_rapport': 'NSIA BANQUE', 'alternatives': ['nsia ci', 'nsia banque ci']}, 'ECOC': {'nom_rapport': 'ECOBANK CI', 'alternatives': ['ecobank cote', 'eco ci']}, 'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['boa ci', 'boa cote']}, 'SIBC': {'nom_rapport': 'SIB', 'alternatives': ['sib ci', 'societe ivoirienne']}, 'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['boa bf', 'boa burkina']}, 'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['boa sn', 'boa senegal']}, 'BOAM': {'nom_rapport': 'BANK OF AFRICA MALI', 'alternatives': ['boa ml', 'boa mali']}, 'BOAN': {'nom_rapport': 'BANK OF AFRICA NIGER', 'alternatives': ['boa ng', 'boa niger']}, 'BOAB': {'nom_rapport': 'BANK OF AFRICA BENIN', 'alternatives': ['boa bn', 'boa benin']}, 'BICB': {'nom_rapport': 'BICI BENIN', 'alternatives': ['bici bn', 'bici benin']}, 'CBIBF': {'nom_rapport': 'CORIS BANK', 'alternatives': ['coris banking', 'coris bf']}, 'ETIT': {'nom_rapport': 'ECOBANK ETI', 'alternatives': ['eti', 'ecobank transnational']}, 'ORGT': {'nom_rapport': 'ORAGROUP', 'alternatives': ['oragroup togo', 'ora tg']}, 'SAFC': {'nom_rapport': 'SAFCA', 'alternatives': ['safca ci', 'saf ci']}, 'SOGC': {'nom_rapport': 'SOGB', 'alternatives': ['sogb ci', 'societe generale burkina']}, 'SNTS': {'nom_rapport': 'SONATEL', 'alternatives': ['sonatel sn', 'orange senegal']}, 'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange cote', 'oci']}, 'ONTBF': {'nom_rapport': 'ONATEL', 'alternatives': ['onatel bf', 'onatel burkina']}, 'TTLC': {'nom_rapport': 'TOTAL CI', 'alternatives': ['totalenergies ci', 'total cote']}, 'TTLS': {'nom_rapport': 'TOTAL SN', 'alternatives': ['totalenergies sn', 'total senegal']}, 'SHEC': {'nom_rapport': 'VIVO ENERGY', 'alternatives': ['shell ci', 'vivo ci']}, 'CIEC': {'nom_rapport': 'CIE', 'alternatives': ['cie ci', 'compagnie ivoirienne']}, 'CFAC': {'nom_rapport': 'CFAO MOTORS', 'alternatives': ['cfao ci', 'cfao']}, 'PRSC': {'nom_rapport': 'TRACTAFRIC', 'alternatives': ['tractafric motors', 'tractafric ci']}, 'SDSC': {'nom_rapport': 'BOLLORE', 'alternatives': ['africa global logistics', 'sdv ci']}, 'ABJC': {'nom_rapport': 'SERVAIR', 'alternatives': ['servair abidjan', 'servair ci']}, 'BNBC': {'nom_rapport': 'BERNABE', 'alternatives': ['bernabe ci']}, 'NEIC': {'nom_rapport': 'NEI-CEDA', 'alternatives': ['nei ceda', 'neiceda']}, 'UNXC': {'nom_rapport': 'UNIWAX', 'alternatives': ['uniwax ci']}, 'LNBB': {'nom_rapport': 'LOTERIE BENIN', 'alternatives': ['loterie nationale benin']}, 'CABC': {'nom_rapport': 'SICABLE', 'alternatives': ['sicable ci']}, 'FTSC': {'nom_rapport': 'FILTISAC', 'alternatives': ['filtisac ci']}, 'SDCC': {'nom_rapport': 'SODE', 'alternatives': ['sode ci']}, 'SEMC': {'nom_rapport': 'EVIOSYS', 'alternatives': ['crown siem', 'eviosys packaging']}, 'SIVC': {'nom_rapport': 'AIR LIQUIDE', 'alternatives': ['air liquide ci']}, 'STAC': {'nom_rapport': 'SETAO', 'alternatives': ['setao ci']}, 'SMBC': {'nom_rapport': 'SMB', 'alternatives': ['smb ci', 'societe miniere']}
         }
         self.driver = None
         self.session = requests.Session()
@@ -94,12 +49,19 @@ class BRVMAnalyzer:
         
         # Initialisation du client OpenAI
         try:
-            self.openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            # LIGNE MODIFIÉE : Création d'un client HTTP propre pour éviter le conflit
+            clean_http_client = httpx.Client(proxies={})
+            self.openai_client = openai.OpenAI(
+                api_key=os.environ.get("OPENAI_API_KEY"),
+                http_client=clean_http_client # <-- LIGNE MODIFIÉE
+            )
             logging.info("✅ Client OpenAI initialisé.")
         except Exception as e:
             self.openai_client = None
             logging.error(f"❌ Erreur initialisation client OpenAI: {e}")
 
+    # Le reste du fichier (connect_to_db, _load_analysis_memory_from_db, etc.) est identique
+    # ... Collez le reste du code du fichier fundamental_analyzer.py précédent ici ...
     def connect_to_db(self):
         try:
             conn = psycopg2.connect(
@@ -219,13 +181,11 @@ class BRVMAnalyzer:
             return False
 
         try:
-            # Étape 1: Télécharger et extraire le texte du PDF
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
             
             pdf_text = ""
             with pdfplumber.open(BytesIO(pdf_response.content)) as pdf:
-                # Limiter à 20 pages pour contrôler les coûts et le temps de traitement
                 for page in pdf.pages[:20]:
                     pdf_text += page.extract_text() or ""
             
@@ -233,10 +193,8 @@ class BRVMAnalyzer:
                 logging.warning("    ⚠️  Impossible d'extraire le texte du PDF.")
                 return False
 
-            # Tronquer le texte pour ne pas dépasser les limites de tokens
             pdf_text = pdf_text[:25000]
 
-            # Étape 2: Envoyer le texte à l'API OpenAI
             prompt = f"""Tu es un analyste financier expert spécialisé sur le marché de la BRVM. Analyse le contenu textuel suivant, extrait d'un rapport financier, et fournis une synthèse concise en français.
 
 Concentre-toi sur les points suivants :
@@ -281,11 +239,11 @@ Voici le texte du rapport à analyser :
 
     def run_and_get_results(self):
         logging.info("="*80)
-        logging.info(f"📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V24.0 - OpenAI {OPENAI_MODEL})")
+        logging.info(f"📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V24.1 - OpenAI {OPENAI_MODEL})")
         logging.info("="*80)
         
         if not self.openai_client:
-            logging.error("❌ Analyse fondamentale annulée: clé API OpenAI non configurée.")
+            logging.error("❌ Analyse fondamentale annulée: client OpenAI non initialisé.")
             return {}, []
         
         self._load_analysis_memory_from_db()
@@ -316,7 +274,7 @@ Voici le texte du rapport à analyser :
             new = [r for r in recent if r['url'] not in self.analysis_memory]
             logging.info(f"   📂 {len(recent)} rapport(s) récent(s), dont {len(new)} nouveau(x)")
             
-            for report in new[:2]: # Analyser les 2 plus récents
+            for report in new[:2]: 
                 result = self._analyze_pdf_with_openai(company_id, symbol, report)
                 if result is True: total_analyzed += 1
                 elif result is None: total_skipped += 1
