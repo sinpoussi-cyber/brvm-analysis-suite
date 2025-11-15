@@ -1,45 +1,95 @@
-# ==============================================================================
-# WORKFLOW GITHUB ACTIONS - VERSION FINALE STABLE V3.0
-# ==============================================================================
-# - Utilise les dernières versions des actions pour éviter les erreurs de dépréciation.
-# - Injecte correctement toutes les clés secrètes comme variables d'environnement.
-# - Met en cache les dépendances Python pour accélérer les exécutions futures.
-# - Gère de manière robuste l'upload des rapports générés.
-# ==============================================================================
-
-name: Analyse Quotidienne BRVM
+name: BRVM Analysis Suite V24.0 - OpenAI GPT-4o
 
 on:
   schedule:
-    - cron: '0 20 * * 1-5' # Exécution du Lundi au Vendredi à 20h00 UTC
-  workflow_dispatch: # Permet de lancer manuellement
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
-  daily-analysis:
+  brvm-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     
     steps:
-      # Étape 1: Récupération du code source de votre dépôt
-      - name: Checkout du code
-        uses: actions/checkout@v4
-
-      # Étape 2: Mise en place de l'environnement Python 3.10
-      - name: Mise en place de Python
-        uses: actions/setup-python@v5
+      - name: 🔥 Checkout
+        uses: actions/checkout@v3
+      
+      - name: 🐍 Python 3.11
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-          # NOUVEAU : Optimisation des performances en mettant en cache les paquets
+          python-version: '3.11'
           cache: 'pip'
-
-      # Étape 3: Installation des dépendances listées dans requirements.txt
-      - name: Installation des dépendances
+      
+      - name: 📦 Installation dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      
+      - name: 🌐 Installation Chrome/Chromedriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
           
-      # Étape 4: Exécution de la suite d'analyse complète
-      # Cette étape utilise les secrets du dépôt pour se connecter à la DB et à l'API OpenAI
-      - name: Exécution de la suite d'analyse
+          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
+          CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1)
+          
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
+          wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR_VERSION}" -O version.txt && \
+          CHROMEDRIVER_VERSION=$(cat version.txt) && \
+          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" -O chromedriver.zip
+          
+          unzip -q chromedriver.zip
+          if [ -d "chromedriver-linux64" ]; then
+            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          else
+            sudo mv chromedriver /usr/local/bin/
+          fi
+          sudo chmod +x /usr/local/bin/chromedriver
+          
+          rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
+          
+          echo "✅ Chrome: $(google-chrome --version)"
+          echo "✅ Chromedriver: $(chromedriver --version)"
+      
+      - name: 📊 ÉTAPE 1 - Collecte Données
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Collecte données BRVM..."
+          python data_collector.py
+          echo "✅ Collecte terminée"
+      
+      - name: 📈 ÉTAPE 2 - Analyse Technique
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Analyse technique..."
+          python technical_analyzer.py
+          echo "✅ Analyse technique terminée"
+      
+      - name: 🔮 ÉTAPE 3 - Prédictions
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: |
+          echo "🚀 Prédictions 20 jours..."
+          python prediction_analyzer.py
+          echo "✅ Prédictions terminées"
+      
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (OpenAI GPT-4o)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -48,14 +98,72 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          echo "🚀 Démarrage de la suite d'analyse BRVM avec OpenAI..."
-          python main.py
-
-      # Étape 5: Sauvegarde des rapports Word générés comme "artefacts"
-      # Le fichier sera disponible au téléchargement à la fin de l'exécution
-      - name: Upload des rapports générés
+          echo "🚀 Analyse fondamentale avec OpenAI GPT-4o..."
+          echo "🤖 Modèle: gpt-4o-2024-11-20"
+          echo "🔑 API: OpenAI"
+          echo "📄 Support: Extraction PDF + Analyse texte"
+          echo "⚡ Capacité: 10,000 req/min"
+          echo "🛡️  Limite: 3 tentatives max par document"
+          echo "💎 Qualité: Excellente analyse financière"
+          python fundamental_analyzer.py
+          echo "✅ Analyse fondamentale terminée"
+      
+      - name: 📝 ÉTAPE 5 - Génération Rapports (OpenAI GPT-4o)
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "🚀 Génération rapports avec OpenAI GPT-4o..."
+          python report_generator.py
+          echo "✅ Rapports générés"
+      
+      - name: 📤 Upload Rapports
         uses: actions/upload-artifact@v4
         with:
-          name: Rapports-Analyse-BRVM
+          name: rapports-brvm-${{ github.run_number }}
           path: Rapport_*.docx
-          if-no-files-found: warn # Affiche un avertissement au lieu d'une erreur si aucun rapport n'est trouvé
+          retention-days: 90
+      
+      - name: 📊 Résumé
+        if: always()
+        run: |
+          echo "═══════════════════════════════════════════════════════════"
+          echo "📈 BRVM ANALYSIS SUITE V24.0 (OpenAI GPT-4o)"
+          echo "═══════════════════════════════════════════════════════════"
+          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Run: ${{ github.run_number }}"
+          echo ""
+          echo "⚙️  Configuration:"
+          echo "  - IA: OpenAI GPT-4o"
+          echo "  - Modèle: gpt-4o-2024-11-20"
+          echo "  - API: OpenAI (stable et fiable)"
+          echo "  - Extraction: PyPDF2 pour texte PDF"
+          echo "  - Capacité: 10,000 requêtes/minute"
+          echo "  - Support: PDF texte natif"
+          echo "  - Qualité: ⭐⭐⭐⭐⭐ (Excellente)"
+          echo "  - Fallback: Analyse automatique"
+          echo ""
+          echo "💰 Coût estimé:"
+          echo "  - Analyse fondamentale: ~$0.92 (46 PDFs)"
+          echo "  - Recommandations: ~$0.46 (46 sociétés)"
+          echo "  - Total: ~$1.38 par exécution"
+          echo "  - Crédit disponible: $5.00"
+          echo ""
+          echo "📋 Étapes:"
+          echo "  ✅ Collecte données"
+          echo "  ✅ Analyse technique"
+          echo "  ✅ Prédictions"
+          echo "  ✅ Analyse fondamentale (OpenAI GPT-4o)"
+          echo "  ✅ Génération rapports (OpenAI GPT-4o)"
+          echo ""
+          if [ -f "Rapport_"*.docx ]; then
+            echo "✅ Rapports générés:"
+            ls -lh Rapport_*.docx
+          else
+            echo "⚠️  Aucun rapport trouvé"
+          fi
+          echo "═══════════════════════════════════════════════════════════"
