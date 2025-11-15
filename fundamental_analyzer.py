@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V22.0 - CLAUDE 3.5 SONNET (1 CLÉ)
+# MODULE: FUNDAMENTAL ANALYZER V23.0 - CLAUDE 3 OPUS (1 CLÉ)
 # ==============================================================================
 
 import requests
@@ -31,8 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE API
-CLAUDE_MODEL = "claude-3-5-sonnet-20240620"
+# ✅ CONFIGURATION CLAUDE 3 OPUS (MEILLEURE QUALITÉ)
+CLAUDE_MODEL = "claude-3-opus-20240229"
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 
 
@@ -285,7 +285,7 @@ class BRVMAnalyzer:
             return {}
 
     def _analyze_pdf_with_claude(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Claude 3.5 Sonnet"""
+        """Analyse un PDF avec Claude 3 Opus"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -335,7 +335,7 @@ Si une info manque, mentionne-le clairement."""
             logging.error(f"    ❌ Aucune clé Claude disponible")
             return False
         
-        # ✅ CLAUDE API 3.5 SONNET
+        # ✅ CLAUDE 3 OPUS API
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
@@ -409,7 +409,7 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V22.0 - Claude 3.5 Sonnet)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V23.0 - Claude 3 Opus)")
         logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
         logging.info("="*80)
         
@@ -438,7 +438,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Claude 3.5 Sonnet avec limite 3 tentatives)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Claude 3 Opus avec limite 3 tentatives)...")
             
             total_analyzed = 0
             total_skipped = 0
