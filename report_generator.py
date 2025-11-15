@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V24.1 - OPENAI GPT-4o (CORRECTION PROXY)
+# MODULE: REPORT GENERATOR V24.0 - OPENAI GPT-4o
 # ==============================================================================
 
 import os
@@ -8,10 +8,10 @@ import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
 from docx import Document
-from docx.shared import Inches
+from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import openai
-import httpx # <-- NOUVEL IMPORT
+import requests
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -22,76 +22,112 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-OPENAI_MODEL = "gpt-4o"
+# ✅ CONFIGURATION OPENAI GPT-4o
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+OPENAI_MODEL = "gpt-4o-2024-11-20"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+
 
 class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
+        self.request_count = 0
         
+        # Connexion DB
         try:
             self.db_conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
-                host=DB_HOST, port=DB_PORT, connect_timeout=10
+                host=DB_HOST, port=DB_PORT,
+                connect_timeout=10,
+                options='-c statement_timeout=45000'
             )
             logging.info("✅ Connexion DB établie")
         except Exception as e:
             logging.error(f"❌ Erreur connexion DB: {e}")
             raise
 
-        try:
-            # LIGNE MODIFIÉE : Création d'un client HTTP propre pour éviter le conflit
-            clean_http_client = httpx.Client(proxies={})
-            self.openai_client = openai.OpenAI(
-                api_key=os.environ.get("OPENAI_API_KEY"),
-                http_client=clean_http_client # <-- LIGNE MODIFIÉE
-            )
-            logging.info("✅ Client OpenAI initialisé pour la génération de rapports.")
-        except Exception as e:
-            self.openai_client = None
-            logging.error(f"❌ Erreur initialisation client OpenAI pour rapports: {e}")
-
-    # Le reste du fichier (_get_all_data_from_db, etc.) est identique
-    # ... Collez le reste du code du fichier report_generator.py précédent ici ...
     def _get_all_data_from_db(self):
+        """Récupération optimisée des données"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
+        
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         
         query = f"""
         WITH recent_data AS (
-            SELECT company_id, id as historical_data_id, trade_date, price,
-                   ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY trade_date DESC) as rn
-            FROM historical_data WHERE trade_date >= '{date_limite}'
-        ), latest_per_company AS (SELECT * FROM recent_data WHERE rn = 1)
-        SELECT c.symbol, c.name as company_name, lpc.trade_date, lpc.price,
-               ta.mm_decision, ta.bollinger_decision, ta.macd_decision,
-               ta.rsi_decision, ta.stochastic_decision,
-               (SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC LIMIT 3) 
-                FROM fundamental_analysis fa WHERE fa.company_id = c.id) as fundamental_summaries
+            SELECT 
+                company_id,
+                id as historical_data_id,
+                trade_date,
+                price,
+                ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY trade_date DESC) as rn
+            FROM historical_data
+            WHERE trade_date >= '{date_limite}'
+        ),
+        latest_per_company AS (
+            SELECT * FROM recent_data WHERE rn = 1
+        )
+        SELECT
+            c.symbol, 
+            c.name as company_name,
+            lpc.trade_date, 
+            lpc.price,
+            ta.mm_decision, 
+            ta.bollinger_decision, 
+            ta.macd_decision,
+            ta.rsi_decision, 
+            ta.stochastic_decision,
+            (
+                SELECT STRING_AGG(fa.analysis_summary, E'\\n---\\n' ORDER BY fa.report_date DESC) 
+                FROM fundamental_analysis fa 
+                WHERE fa.company_id = c.id
+                LIMIT 5
+            ) as fundamental_summaries
         FROM companies c
         LEFT JOIN latest_per_company lpc ON c.id = lpc.company_id
         LEFT JOIN technical_analysis ta ON lpc.historical_data_id = ta.historical_data_id
         ORDER BY c.symbol;
         """
+        
         try:
             df = pd.read_sql(query, self.db_conn)
+            
+            if df.empty:
+                logging.warning("⚠️  Aucune donnée récente trouvée")
+                return pd.DataFrame()
+            
             logging.info(f"   ✅ {len(df)} société(s) récupérée(s)")
             return df
+            
+        except psycopg2.errors.QueryCanceled:
+            logging.error("❌ Timeout SQL")
+            return pd.DataFrame()
         except Exception as e:
             logging.error(f"❌ Erreur requête SQL: {e}")
             return pd.DataFrame()
 
     def _get_predictions_from_db(self):
+        """Récupération des prédictions"""
         logging.info("🔮 Récupération des prédictions...")
+        
         query = """
-        SELECT c.symbol, lp.prediction_date, lp.predicted_price
+        WITH latest_predictions AS (
+            SELECT 
+                company_id,
+                prediction_date,
+                predicted_price,
+                ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY prediction_date DESC) as rn
+            FROM predictions
+            WHERE prediction_date >= CURRENT_DATE
+        )
+        SELECT 
+            c.symbol,
+            lp.prediction_date,
+            lp.predicted_price
         FROM companies c
-        LEFT JOIN (
-            SELECT company_id, prediction_date, predicted_price,
-                   ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY prediction_date ASC) as rn
-            FROM predictions WHERE prediction_date >= CURRENT_DATE
-        ) lp ON c.id = lp.company_id AND lp.rn <= 5
+        LEFT JOIN latest_predictions lp ON c.id = lp.company_id AND lp.rn <= 20
         ORDER BY c.symbol, lp.prediction_date;
         """
+        
         try:
             df = pd.read_sql(query, self.db_conn)
             logging.info(f"   ✅ {len(df)} prédiction(s)")
@@ -100,129 +136,238 @@ class BRVMReportGenerator:
             logging.error(f"❌ Erreur prédictions: {e}")
             return pd.DataFrame()
 
-    def _generate_ia_analysis(self, symbol, data_dict):
-        if not self.openai_client:
-            logging.warning(f"    ⚠️  Client OpenAI non disponible pour {symbol}, utilisation du fallback.")
+    def _generate_ia_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
+        """Génération analyse IA avec OpenAI GPT-4o (avec limite de tentatives)"""
+        
+        if attempt > 1:
+            logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
+        
+        if not OPENAI_API_KEY:
+            logging.warning(f"    ⚠️  Aucune clé OpenAI disponible pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
-
-        context_parts = [f"**Société : {symbol} ({data_dict.get('company_name', '')})**"]
-        if data_dict.get('price'): context_parts.append(f"Dernier cours : {data_dict['price']:.0f} FCFA")
-        if data_dict.get('technical_signals'): context_parts.append(f"Signaux Techniques Clés : {data_dict['technical_signals']}")
+        
+        # Construire contexte
+        context_parts = [f"Société: {symbol}"]
+        
+        if data_dict.get('price'):
+            context_parts.append(f"Prix actuel: {data_dict['price']:.0f} FCFA")
+        
+        if data_dict.get('technical_signals'):
+            context_parts.append(f"Signaux techniques: {data_dict['technical_signals']}")
+        
+        if data_dict.get('fundamental_summary'):
+            context_parts.append(f"Analyse fondamentale:\n{data_dict['fundamental_summary'][:500]}")
+        
         if data_dict.get('predictions'):
-            pred_text = ", ".join([f"J+{i+1}: {p['price']:.0f}" for i, p in enumerate(data_dict['predictions'][:3])])
-            context_parts.append(f"Prédictions (3 prochains jours) : {pred_text}")
-        if data_dict.get('fundamental_summary'): context_parts.append(f"**Synthèse Fondamentale Récente :**\n{data_dict['fundamental_summary'][:1000]}")
+            pred_text = ", ".join([f"{p['date']}: {p['price']:.0f}" for p in data_dict['predictions'][:5]])
+            context_parts.append(f"Prédictions: {pred_text}")
         
-        context = "\n".join(context_parts)
+        context = "\n\n".join(context_parts)
         
-        prompt = f"""Tu es un conseiller en investissement pour la bourse BRVM. En te basant sur les données suivantes, fournis une recommandation d'investissement claire et concise.
+        prompt = f"""Analyse cette société BRVM et fournis UNE recommandation claire.
 
 {context}
 
-Ta réponse doit obligatoirement suivre ce format :
-1.  **Recommandation :** Un seul mot (ACHAT, VENTE, ou CONSERVER).
-2.  **Niveau de Confiance :** Un seul mot (Élevé, Moyen, ou Faible).
-3.  **Justification (2-3 phrases) :** Explique ton raisonnement en te basant sur la convergence (ou divergence) des signaux techniques, fondamentaux et des prédictions.
-4.  **Niveau de Risque :** Un seul mot (Faible, Moyen, ou Élevé).
-"""
+Fournis:
+1. **Recommandation**: ACHAT, VENTE ou CONSERVER (1 mot)
+2. **Niveau de confiance**: Élevé, Moyen ou Faible
+3. **Justification**: 2-3 phrases concises
+4. **Niveau de risque**: Faible, Moyen ou Élevé
+
+Sois direct et factuel."""
+        
+        # ✅ OPENAI GPT-4o API
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        request_body = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.3
+        }
+        
         try:
-            response = self.openai_client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "Tu es un conseiller expert en investissement sur la BRVM."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                max_tokens=512
-            )
-            analysis_text = response.choices[0].message.content
-            logging.info(f"    ✅ {symbol}: Analyse de synthèse générée par OpenAI")
-            return analysis_text
-        except openai.APIError as e:
-            logging.error(f"    ❌ Erreur API OpenAI pour {symbol}: {e}")
+            response = requests.post(OPENAI_API_URL, headers=headers, json=request_body, timeout=30)
+            
+            self.request_count += 1
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'choices' in data and len(data['choices']) > 0:
+                    text = data['choices'][0]['message']['content']
+                    logging.info(f"    ✅ {symbol}: Analyse générée")
+                    return text
+                else:
+                    logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
+                    return self._generate_fallback_analysis(symbol, data_dict)
+            
+            elif response.status_code == 429:
+                logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
+                
+                if attempt < max_attempts:
+                    time.sleep(60)  # Attendre 1 minute
+                    return self._generate_ia_analysis(symbol, data_dict, attempt + 1, max_attempts)
+                else:
+                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
+                    return self._generate_fallback_analysis(symbol, data_dict)
+            
+            else:
+                logging.error(f"    ❌ Erreur {response.status_code} pour {symbol}: {response.text[:200]}")
+                return self._generate_fallback_analysis(symbol, data_dict)
+                
+        except requests.exceptions.Timeout:
+            logging.error(f"    ⏱️  Timeout pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         except Exception as e:
             logging.error(f"    ❌ Exception pour {symbol}: {str(e)}")
             return self._generate_fallback_analysis(symbol, data_dict)
 
     def _generate_fallback_analysis(self, symbol, data_dict):
-        buy_count = str(data_dict.get('technical_signals', '')).count('Achat')
-        sell_count = str(data_dict.get('technical_signals', '')).count('Vente')
+        """Analyse de secours si API échoue"""
+        analysis = f"**Analyse de {symbol}**\n\n"
         
-        reco = "CONSERVER"
-        if buy_count > sell_count + 1: reco = "ACHAT"
-        if sell_count > buy_count + 1: reco = "VENTE"
+        if data_dict.get('price'):
+            analysis += f"Prix actuel: {data_dict['price']:.0f} FCFA\n\n"
+        
+        if data_dict.get('technical_signals'):
+            signals = data_dict['technical_signals']
+            buy_count = signals.count('Achat')
+            sell_count = signals.count('Vente')
             
-        return f"""**Recommandation :** {reco}
-**Niveau de Confiance :** Faible
-**Justification (2-3 phrases) :** Analyse IA indisponible. La recommandation est basée sur une simple majorité de signaux techniques. Les aspects fondamentaux et prédictifs ne sont pas pris en compte.
-**Niveau de Risque :** Élevé
-"""
+            if buy_count > sell_count:
+                analysis += "**Recommandation**: ACHAT\n"
+                analysis += "Signaux techniques majoritairement positifs.\n\n"
+            elif sell_count > buy_count:
+                analysis += "**Recommandation**: VENTE\n"
+                analysis += "Signaux techniques majoritairement négatifs.\n\n"
+            else:
+                analysis += "**Recommandation**: CONSERVER\n"
+                analysis += "Signaux techniques mixtes.\n\n"
+        else:
+            analysis += "**Recommandation**: CONSERVER\n"
+            analysis += "Données insuffisantes pour une recommandation.\n\n"
+        
+        analysis += "**Niveau de confiance**: Moyen\n"
+        analysis += "**Niveau de risque**: Moyen\n"
+        
+        return analysis
 
     def _create_word_document(self, all_analyses):
+        """Création du document Word"""
         logging.info("📄 Création du document Word...")
+        
         doc = Document()
-        doc.add_heading('Rapport d\'Analyse Stratégique BRVM', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
-        doc.add_paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", style='Caption').alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # En-tête
+        title = doc.add_heading('Rapport d\'Analyse BRVM', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        subtitle = doc.add_paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
         doc.add_paragraph()
         
-        doc.add_heading('Synthèse des Recommandations', level=1)
+        # Synthèse
+        doc.add_heading('Synthèse Générale', level=1)
+        doc.add_paragraph(f"Nombre de sociétés analysées: {len(all_analyses)}")
+        doc.add_paragraph()
+        
+        # Analyses détaillées
+        doc.add_heading('Analyses Détaillées', level=1)
         
         for symbol, analysis in sorted(all_analyses.items()):
-            doc.add_heading(f"{analysis.get('company_name', symbol)} ({symbol})", level=2)
-            doc.add_paragraph(analysis.get('ia_analysis', 'Analyse non disponible.'))
+            doc.add_heading(f"{symbol}", level=2)
+            doc.add_paragraph(analysis)
             doc.add_paragraph()
         
+        # Sauvegarde
         filename = f"Rapport_Synthese_Investissement_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
+        
         logging.info(f"   ✅ Document créé: {filename}")
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
+        """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V24.1 - OpenAI {OPENAI_MODEL})")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V24.0 - OpenAI GPT-4o)")
+        logging.info(f"🤖 Modèle: {OPENAI_MODEL}")
         logging.info("="*80)
         
-        if not self.openai_client:
-            logging.error("❌ Génération de rapports annulée: client OpenAI non initialisé.")
+        if not OPENAI_API_KEY:
+            logging.error("❌ Clé OpenAI non configurée")
             return
-
+        
+        logging.info("✅ Clé OpenAI chargée")
+        
+        # Récupération données
         df = self._get_all_data_from_db()
+        
         if df.empty:
             logging.error("❌ Aucune donnée disponible - rapport impossible")
             return
         
         predictions_df = self._get_predictions_from_db()
         
-        logging.info(f"🤖 Génération de {len(df)} synthèse(s) IA...")
+        # Génération analyses IA
+        logging.info(f"🤖 Génération de {len(df)} analyse(s) IA avec limite 3 tentatives...")
+        
         all_analyses = {}
+        
         for idx, row in df.iterrows():
             symbol = row['symbol']
-            signals = [row.get(col) for col in ['mm_decision', 'bollinger_decision', 'macd_decision', 'rsi_decision', 'stochastic_decision']]
             
+            # Préparer contexte
             data_dict = {
-                'company_name': row.get('company_name'),
                 'price': row.get('price'),
-                'technical_signals': ", ".join([s for s in signals if s]),
+                'technical_signals': None,
                 'fundamental_summary': row.get('fundamental_summaries'),
-                'predictions': [{'date': r['prediction_date'], 'price': r['predicted_price']} for _, r in predictions_df[predictions_df['symbol'] == symbol].iterrows()]
+                'predictions': []
             }
             
-            all_analyses[symbol] = {
-                'ia_analysis': self._generate_ia_analysis(symbol, data_dict),
-                'company_name': data_dict['company_name']
-            }
+            # Signaux techniques
+            if row.get('mm_decision'):
+                signals = [
+                    row.get('mm_decision'),
+                    row.get('bollinger_decision'),
+                    row.get('macd_decision'),
+                    row.get('rsi_decision'),
+                    row.get('stochastic_decision')
+                ]
+                data_dict['technical_signals'] = ", ".join([s for s in signals if s])
+            
+            # Prédictions
+            symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
+            if not symbol_predictions.empty:
+                data_dict['predictions'] = [
+                    {'date': row['prediction_date'], 'price': row['predicted_price']}
+                    for _, row in symbol_predictions.iterrows()
+                ]
+            
+            # Génération analyse IA
+            analysis = self._generate_ia_analysis(symbol, data_dict)
+            all_analyses[symbol] = analysis
         
-        self._create_word_document(all_analyses)
-        logging.info(f"\n✅ Rapports terminés.")
+        # Création document
+        filename = self._create_word_document(all_analyses)
+        
+        logging.info(f"\n✅ Rapport généré: {filename}")
+        logging.info(f"📊 Requêtes effectuées: {self.request_count}")
 
     def __del__(self):
-        if self.db_conn:
+        """Fermeture connexion DB"""
+        if self.db_conn and not self.db_conn.closed:
             self.db_conn.close()
+
 
 if __name__ == "__main__":
     try:
         report_generator = BRVMReportGenerator()
         report_generator.generate_all_reports([])
     except Exception as e:
-        logging.critical(f"❌ Erreur critique: {e}", exc_info=True)
+        logging.critical(f"❌ Erreur: {e}", exc_info=True)
