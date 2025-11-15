@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V22.0 - Claude 3.5 Sonnet (1 CLÉ)
+name: BRVM Analysis Suite V23.0 - Claude 3 Opus (1 CLÉ)
 
 on:
   schedule:
@@ -89,7 +89,7 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Claude 3.5 Sonnet)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Claude 3 Opus)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -98,16 +98,17 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          echo "🚀 Analyse fondamentale avec Claude 3.5 Sonnet..."
-          echo "🤖 Modèle: claude-3-5-sonnet-20240620"
+          echo "🚀 Analyse fondamentale avec Claude 3 Opus..."
+          echo "🤖 Modèle: claude-3-opus-20240229"
           echo "🔑 API: Anthropic Claude"
           echo "📄 Support: PDF direct + OCR intégré"
           echo "⚡ Capacité: 50 req/min (tier 1)"
           echo "🛡️  Limite: 3 tentatives max par document"
+          echo "💎 Qualité: Meilleure analyse financière"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Claude 3.5 Sonnet)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Claude 3 Opus)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
@@ -116,7 +117,7 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          echo "🚀 Génération rapports avec Claude 3.5 Sonnet..."
+          echo "🚀 Génération rapports avec Claude 3 Opus..."
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -131,27 +132,34 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V22.0 (Claude 3.5 Sonnet)"
+          echo "📈 BRVM ANALYSIS SUITE V23.0 (Claude 3 Opus)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - IA: Anthropic Claude 3.5 Sonnet"
-          echo "  - Modèle: claude-3-5-sonnet-20241022"
+          echo "  - IA: Anthropic Claude 3 Opus"
+          echo "  - Modèle: claude-3-opus-20240229"
           echo "  - API: Anthropic (stable et fiable)"
           echo "  - Clés: 1 clé API"
           echo "  - Limite: 3 tentatives max par société"
           echo "  - Capacité: 50 requêtes/minute"
           echo "  - Support: PDF direct + OCR intégré"
+          echo "  - Qualité: ⭐⭐⭐⭐⭐ (Meilleure)"
           echo "  - Fallback: Analyse automatique"
+          echo ""
+          echo "💰 Coût estimé:"
+          echo "  - Analyse fondamentale: ~$2.76 (46 PDFs)"
+          echo "  - Recommandations: ~$0.92 (46 sociétés)"
+          echo "  - Total: ~$3.68 par exécution"
+          echo "  - Crédit disponible: $5.00"
           echo ""
           echo "📋 Étapes:"
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (Claude 3.5)"
-          echo "  ✅ Génération rapports (Claude 3.5)"
+          echo "  ✅ Analyse fondamentale (Claude 3 Opus)"
+          echo "  ✅ Génération rapports (Claude 3 Opus)"
           echo ""
           if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés:"
