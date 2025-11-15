@@ -11,10 +11,10 @@ jobs:
     
     steps:
       - name: Checkout du code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Mise à jour optionnelle mais recommandée
 
       - name: Mise en place de Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Mise à jour optionnelle mais recommandée
         with:
           python-version: '3.10'
 
@@ -24,21 +24,20 @@ jobs:
           pip install -r requirements.txt
           
       - name: Exécution de la suite d'analyse
-        # AJOUTÉ : Le bloc 'env' rend les secrets disponibles pour les scripts
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # <-- CETTE LIGNE CORRIGE L'ERREUR
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           echo "🚀 Démarrage de la suite d'analyse BRVM avec OpenAI..."
           python main.py
 
       - name: Upload des rapports générés
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # <-- CHANGEMENT PRINCIPAL ICI (v3 -> v4)
         with:
           name: Rapports-Analyse-BRVM
           path: Rapport_*.docx
-          if-no-files-found: warn # Change en 'warn' pour ne pas faire échouer le job si aucun rapport n'est créé
+          if-no-files-found: warn
