@@ -1,3 +1,12 @@
+# ==============================================================================
+# WORKFLOW GITHUB ACTIONS - VERSION FINALE STABLE V3.0
+# ==============================================================================
+# - Utilise les dernières versions des actions pour éviter les erreurs de dépréciation.
+# - Injecte correctement toutes les clés secrètes comme variables d'environnement.
+# - Met en cache les dépendances Python pour accélérer les exécutions futures.
+# - Gère de manière robuste l'upload des rapports générés.
+# ==============================================================================
+
 name: Analyse Quotidienne BRVM
 
 on:
@@ -10,19 +19,26 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # Étape 1: Récupération du code source de votre dépôt
       - name: Checkout du code
-        uses: actions/checkout@v4 # Mise à jour optionnelle mais recommandée
+        uses: actions/checkout@v4
 
+      # Étape 2: Mise en place de l'environnement Python 3.10
       - name: Mise en place de Python
-        uses: actions/setup-python@v5 # Mise à jour optionnelle mais recommandée
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          # NOUVEAU : Optimisation des performances en mettant en cache les paquets
+          cache: 'pip'
 
+      # Étape 3: Installation des dépendances listées dans requirements.txt
       - name: Installation des dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
+      # Étape 4: Exécution de la suite d'analyse complète
+      # Cette étape utilise les secrets du dépôt pour se connecter à la DB et à l'API OpenAI
       - name: Exécution de la suite d'analyse
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
@@ -35,9 +51,11 @@ jobs:
           echo "🚀 Démarrage de la suite d'analyse BRVM avec OpenAI..."
           python main.py
 
+      # Étape 5: Sauvegarde des rapports Word générés comme "artefacts"
+      # Le fichier sera disponible au téléchargement à la fin de l'exécution
       - name: Upload des rapports générés
-        uses: actions/upload-artifact@v4 # <-- CHANGEMENT PRINCIPAL ICI (v3 -> v4)
+        uses: actions/upload-artifact@v4
         with:
           name: Rapports-Analyse-BRVM
           path: Rapport_*.docx
-          if-no-files-found: warn
+          if-no-files-found: warn # Affiche un avertissement au lieu d'une erreur si aucun rapport n'est trouvé
