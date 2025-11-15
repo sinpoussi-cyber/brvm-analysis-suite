@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V23.0 - CLAUDE 3 OPUS (1 CLÉ)
+# MODULE: FUNDAMENTAL ANALYZER V24.0 - OPENAI GPT-4o
 # ==============================================================================
 
 import requests
@@ -11,15 +11,15 @@ from datetime import datetime
 import logging
 import unicodedata
 import urllib3
-import base64
+from io import BytesIO
 from collections import defaultdict
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
-
-from api_key_manager import APIKeyManager
+import pdfplumber
+import openai  # Import de la bibliothèque OpenAI
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -31,10 +31,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION CLAUDE 3 OPUS (MEILLEURE QUALITÉ)
-CLAUDE_MODEL = "claude-3-opus-20240229"
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-
+# ✅ CONFIGURATION OPENAI GPT-4o (NOUVEAU)
+OPENAI_MODEL = "gpt-4o"
 
 class BRVMAnalyzer:
     def __init__(self):
@@ -94,10 +92,15 @@ class BRVMAnalyzer:
         self.company_ids = {}
         self.newly_analyzed_reports = []
         
-        self.api_manager = APIKeyManager('fundamental_analyzer')
+        # Initialisation du client OpenAI
+        try:
+            self.openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            logging.info("✅ Client OpenAI initialisé.")
+        except Exception as e:
+            self.openai_client = None
+            logging.error(f"❌ Erreur initialisation client OpenAI: {e}")
 
     def connect_to_db(self):
-        """Connexion à PostgreSQL (Supabase)"""
         try:
             conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
@@ -109,33 +112,22 @@ class BRVMAnalyzer:
             return None
 
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL"""
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
-        if not conn: 
-            return
-        
+        if not conn: return
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT report_url FROM fundamental_analysis;")
-                urls = cur.fetchall()
-                self.analysis_memory = {row[0] for row in urls}
-            
+                self.analysis_memory = {row[0] for row in cur.fetchall()}
             logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) chargée(s)")
-                    
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire: {e}")
-            self.analysis_memory = set()
         finally:
-            if conn: 
-                conn.close()
+            if conn: conn.close()
 
     def _save_to_db(self, company_id, report, summary):
-        """Sauvegarde dans PostgreSQL"""
         conn = self.connect_to_db()
-        if not conn: 
-            return False
-        
+        if not conn: return False
         try:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -146,89 +138,46 @@ class BRVMAnalyzer:
                         updated_at = CURRENT_TIMESTAMP
                     RETURNING id;
                 """, (company_id, report['url'], report['titre'], report['date'], summary))
-                
                 inserted_id = cur.fetchone()[0]
                 conn.commit()
-            
             self.analysis_memory.add(report['url'])
             logging.info(f"    ✅ Sauvegardé (ID: {inserted_id})")
             return True
-            
         except Exception as e:
             logging.error(f"❌ Erreur sauvegarde: {e}")
             conn.rollback()
             return False
         finally:
-            if conn: 
-                conn.close()
+            if conn: conn.close()
 
     def setup_selenium(self):
-        """Configuration Selenium"""
         try:
             logging.info("🌐 Configuration Selenium...")
-            
             chrome_options = Options()
             chrome_options.add_argument('--headless')
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--disable-gpu')
-            chrome_options.add_argument('--disable-extensions')
-            chrome_options.add_argument('--disable-software-rasterizer')
-            chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
-            
-            seleniumwire_options = {
-                'disable_encoding': True,
-                'suppress_connection_errors': True,
-                'connection_timeout': 30
-            }
-            
-            self.driver = webdriver.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options
-            )
+            self.driver = webdriver.Chrome(options=chrome_options)
             self.driver.set_page_load_timeout(30)
-            self.driver.implicitly_wait(10)
-            
             logging.info("   ✅ Selenium configuré")
             return True
-        
         except Exception as e:
             logging.error(f"❌ Erreur Selenium: {e}")
-            self.driver = None
             return False
-
+            
     def _normalize_text(self, text):
-        """Normalise le texte"""
-        if not text:
-            return ""
-        
-        text = ''.join(c for c in unicodedata.normalize('NFD', text) 
-                       if unicodedata.category(c) != 'Mn')
-        text = ' '.join(text.lower().split())
-        
-        return text
+        if not text: return ""
+        text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+        return ' '.join(text.lower().split())
 
     def _find_all_reports(self):
-        """Trouve tous les rapports financiers"""
         all_reports = defaultdict(list)
-        
         try:
             url = "https://www.brvm.org/fr/capitalisation-marche"
             logging.info(f"   🔍 Accès à {url}")
-            
             self.driver.get(url)
             time.sleep(3)
-            
-            company_links = []
-            elements = self.driver.find_elements(By.TAG_NAME, 'a')
-            for elem in elements:
-                try:
-                    href = elem.get_attribute('href')
-                    if href and '/societe/' in href:
-                        company_links.append(href)
-                except:
-                    continue
-            
+            company_links = [elem.get_attribute('href') for elem in self.driver.find_elements(By.TAG_NAME, 'a') if elem.get_attribute('href') and '/societe/' in elem.get_attribute('href')]
             company_links = list(set(company_links))
             logging.info(f"   📊 {len(company_links)} page(s) trouvée(s)")
             
@@ -237,279 +186,162 @@ class BRVMAnalyzer:
                     logging.info(f"   📄 Page {idx}/{len(company_links)}")
                     self.driver.get(link)
                     time.sleep(2)
-                    
-                    report_elements = self.driver.find_elements(By.TAG_NAME, 'a')
-                    
-                    for elem in report_elements:
-                        try:
-                            href = elem.get_attribute('href')
-                            text = elem.text.strip()
-                            
-                            if not href or not href.endswith('.pdf'):
-                                continue
-                            
-                            if any(kw in text.lower() for kw in ['rapport', 'financier', 'annuel', 'semestriel']):
-                                date_match = re.search(r'(20\d{2})', text)
-                                report_date = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
-                                
-                                for symbol, info in self.societes_mapping.items():
-                                    nom = self._normalize_text(info['nom_rapport'])
-                                    alts = [self._normalize_text(a) for a in info.get('alternatives', [])]
-                                    text_norm = self._normalize_text(text)
-                                    
-                                    if nom in text_norm or any(a in text_norm for a in alts):
-                                        all_reports[symbol].append({
-                                            'url': href,
-                                            'titre': text,
-                                            'date': report_date
-                                        })
-                                        break
-                        except:
+                    for elem in self.driver.find_elements(By.TAG_NAME, 'a'):
+                        href = elem.get_attribute('href')
+                        text = elem.text.strip()
+                        if not href or not href.endswith('.pdf') or not any(kw in text.lower() for kw in ['rapport', 'financier', 'annuel', 'semestriel']):
                             continue
-                            
-                except TimeoutException:
-                    logging.warning(f"   ⏱️  Timeout page {idx}")
-                    continue
-                except WebDriverException as e:
-                    logging.warning(f"   ⚠️  Erreur WebDriver page {idx}: {e}")
-                    continue
-                except Exception as e:
-                    logging.warning(f"   ⚠️  Erreur page {idx}: {e}")
-                    continue
-            
+                        date_match = re.search(r'(20\d{2})', text)
+                        report_date = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
+                        for symbol, info in self.societes_mapping.items():
+                            text_norm = self._normalize_text(text)
+                            if self._normalize_text(info['nom_rapport']) in text_norm or any(self._normalize_text(a) in text_norm for a in info.get('alternatives', [])):
+                                all_reports[symbol].append({'url': href, 'titre': text, 'date': report_date})
+                                break
+                except (TimeoutException, WebDriverException) as e:
+                    logging.warning(f"   ⏱️  Erreur page {idx}: {e}")
             logging.info(f"   ✅ {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
             return all_reports
-        
         except Exception as e:
             logging.error(f"❌ Erreur recherche: {e}")
             return {}
 
-    def _analyze_pdf_with_claude(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Claude 3 Opus"""
+    def _analyze_pdf_with_openai(self, company_id, symbol, report):
         pdf_url = report['url']
-        
         if pdf_url in self.analysis_memory:
             logging.info(f"    ⏭️  Déjà analysé")
             return None
+
+        logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
         
-        conn = self.connect_to_db()
-        if conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM fundamental_analysis WHERE report_url = %s;", (pdf_url,))
-                    if cur.fetchone():
-                        logging.info(f"    ⏭️  Déjà en base")
-                        self.analysis_memory.add(pdf_url)
-                        return None
-            finally:
-                conn.close()
-        
-        if attempt == 1:
-            logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
-        else:
-            logging.info(f"    🔄 Tentative {attempt}/{max_attempts}")
-        
-        # Télécharger le PDF
+        if not self.openai_client:
+            logging.error("    ❌ Client OpenAI non disponible.")
+            return False
+
         try:
+            # Étape 1: Télécharger et extraire le texte du PDF
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
-            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
-        except Exception as e:
-            logging.error(f"    ❌ Erreur téléchargement PDF: {e}")
-            return False
-        
-        prompt = """Tu es un analyste financier expert. Analyse ce rapport financier et fournis une synthèse concise en français.
-
-Concentre-toi sur :
-- **Chiffre d'Affaires** : Variation en % et valeur
-- **Résultat Net** : Évolution et facteurs
-- **Dividendes** : Proposé, payé ou perspectives
-- **Performance Opérationnelle** : Rentabilité
-- **Perspectives** : Points clés
-
-Si une info manque, mentionne-le clairement."""
-        
-        # Obtenir la clé API
-        api_key = self.api_manager.get_api_key()
-        if not api_key:
-            logging.error(f"    ❌ Aucune clé Claude disponible")
-            return False
-        
-        # ✅ CLAUDE 3 OPUS API
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        }
-        
-        request_body = {
-            "model": CLAUDE_MODEL,
-            "max_tokens": 4096,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": pdf_data
-                        }
-                    }
-                ]
-            }]
-        }
-        
-        try:
-            response = requests.post(CLAUDE_API_URL, headers=headers, json=request_body, timeout=120)
             
-            # Enregistrer la requête
-            self.api_manager.record_request()
+            pdf_text = ""
+            with pdfplumber.open(BytesIO(pdf_response.content)) as pdf:
+                # Limiter à 20 pages pour contrôler les coûts et le temps de traitement
+                for page in pdf.pages[:20]:
+                    pdf_text += page.extract_text() or ""
             
-            if response.status_code == 200:
-                response_json = response.json()
-                
-                if 'content' in response_json and len(response_json['content']) > 0:
-                    analysis_text = response_json['content'][0]['text']
-                    
-                    if self._save_to_db(company_id, report, analysis_text):
-                        self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                        logging.info(f"    ✅ {symbol}: Analyse générée")
-                        return True
-                
-                logging.warning(f"    ⚠️  Réponse Claude malformée")
+            if not pdf_text.strip():
+                logging.warning("    ⚠️  Impossible d'extraire le texte du PDF.")
                 return False
+
+            # Tronquer le texte pour ne pas dépasser les limites de tokens
+            pdf_text = pdf_text[:25000]
+
+            # Étape 2: Envoyer le texte à l'API OpenAI
+            prompt = f"""Tu es un analyste financier expert spécialisé sur le marché de la BRVM. Analyse le contenu textuel suivant, extrait d'un rapport financier, et fournis une synthèse concise en français.
+
+Concentre-toi sur les points suivants :
+- **Chiffre d'Affaires** : Quelle est sa valeur et son évolution en pourcentage par rapport à la période précédente ?
+- **Résultat Net** : Quelle est sa valeur, son évolution, et quels sont les facteurs clés (positifs ou négatifs) ?
+- **Politique de Dividendes** : Un dividende est-il proposé ? Si oui, quel est son montant ?
+- **Performance Opérationnelle** : Comment la rentabilité a-t-elle évolué ?
+- **Perspectives** : Quelles sont les perspectives d'avenir mentionnées dans le rapport ?
+
+Si une information est manquante, mentionne-le clairement. Structure ta réponse avec des titres clairs.
+
+Voici le texte du rapport à analyser :
+---
+{pdf_text}
+---
+"""
             
-            elif response.status_code == 429:
-                # Rate limit
-                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol} (tentative {attempt}/{max_attempts})")
-                
-                can_retry = self.api_manager.handle_rate_limit_response()
-                
-                if attempt < max_attempts and can_retry:
-                    return self._analyze_pdf_with_claude(company_id, symbol, report, attempt + 1, max_attempts)
-                else:
-                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
-                    fallback_text = f"Analyse automatique indisponible pour ce rapport. Rapport: {report['titre']}"
-                    self._save_to_db(company_id, report, fallback_text)
-                    return False
+            response = self.openai_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "Tu es un analyste financier expert."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1024
+            )
             
-            else:
-                logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
-                return False
-                
-        except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout API Claude")
+            analysis_text = response.choices[0].message.content
+
+            if self._save_to_db(company_id, report, analysis_text):
+                self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
+                logging.info(f"    ✅ {symbol}: Analyse OpenAI générée")
+                return True
+            return False
+
+        except openai.APIError as e:
+            logging.error(f"    ❌ Erreur API OpenAI pour {symbol}: {e}")
             return False
         except Exception as e:
-            logging.error(f"    ❌ Exception: {e}")
+            logging.error(f"    ❌ Erreur inattendue pour {symbol}: {e}")
             return False
 
     def run_and_get_results(self):
-        """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V23.0 - Claude 3 Opus)")
-        logging.info(f"🤖 Modèle: {CLAUDE_MODEL}")
+        logging.info(f"📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V24.0 - OpenAI {OPENAI_MODEL})")
         logging.info("="*80)
         
-        conn = None
-        try:
-            stats = self.api_manager.get_statistics()
-            logging.info(f"📊 Clé Claude: {stats['available']}/{stats['total']} disponible")
-            
-            self._load_analysis_memory_from_db()
-            
-            if not self.setup_selenium():
-                logging.error("❌ Impossible d'initialiser Selenium")
-                return {}, []
-            
-            conn = self.connect_to_db()
-            if not conn: 
-                return {}, []
-            
-            with conn.cursor() as cur:
-                cur.execute("SELECT symbol, id, name FROM companies")
-                companies_from_db = cur.fetchall()
-            conn.close()
-            
-            self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
-            
-            logging.info(f"\n🔍 Phase 1: Collecte rapports...")
-            all_reports = self._find_all_reports()
-            
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Claude 3 Opus avec limite 3 tentatives)...")
-            
-            total_analyzed = 0
-            total_skipped = 0
-            
-            for symbol, (company_id, company_name) in self.company_ids.items():
-                logging.info(f"\n📊 {symbol} - {company_name}")
-                company_reports = all_reports.get(symbol, [])
-                
-                if not company_reports:
-                    logging.info(f"   ⏭️  Aucun rapport")
-                    continue
-                
-                date_2024 = datetime(2024, 1, 1).date()
-                recent = [r for r in company_reports if r['date'] >= date_2024]
-                recent.sort(key=lambda x: x['date'], reverse=True)
-                
-                logging.info(f"   📂 {len(recent)} rapport(s) récent(s)")
-                
-                already = [r for r in recent if r['url'] in self.analysis_memory]
-                new = [r for r in recent if r['url'] not in self.analysis_memory]
-                
-                logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
-                
-                for report in new:
-                    result = self._analyze_pdf_with_claude(company_id, symbol, report)
-                    if result is True:
-                        total_analyzed += 1
-                    elif result is None:
-                        total_skipped += 1
-                
-                total_skipped += len(already)
-            
-            final_stats = self.api_manager.get_statistics()
-            
-            logging.info("\n✅ Traitement terminé")
-            logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
-            logging.info(f"📊 Rapports ignorés: {total_skipped}")
-            logging.info(f"📊 Requêtes effectuées: {final_stats['used_by_module']}")
-            
-            conn = self.connect_to_db()
-            if not conn: 
-                return {}, []
-            
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT c.symbol, fa.analysis_summary, c.name 
-                    FROM fundamental_analysis fa 
-                    JOIN companies c ON fa.company_id = c.id
-                """)
-                final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
-                
-                for symbol, summary, name in cur.fetchall():
-                    final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
-                    final_results[symbol]['nom'] = name
-            
-            logging.info(f"📊 Résultats: {len(final_results)} société(s)")
-            return (dict(final_results), self.newly_analyzed_reports)
-        
-        except Exception as e:
-            logging.critical(f"❌ Erreur: {e}", exc_info=True)
+        if not self.openai_client:
+            logging.error("❌ Analyse fondamentale annulée: clé API OpenAI non configurée.")
             return {}, []
         
-        finally:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except:
-                    pass
-            if conn and not conn.closed: 
-                conn.close()
-
+        self._load_analysis_memory_from_db()
+        if not self.setup_selenium(): return {}, []
+        
+        conn = self.connect_to_db()
+        if not conn: return {}, []
+        
+        with conn.cursor() as cur:
+            cur.execute("SELECT symbol, id, name FROM companies")
+            self.company_ids = {symbol: (id, name) for symbol, id, name in cur.fetchall()}
+        conn.close()
+        
+        logging.info(f"\n🔍 Phase 1: Collecte rapports...")
+        all_reports = self._find_all_reports()
+        
+        logging.info(f"\n🤖 Phase 2: Analyse IA ({OPENAI_MODEL})...")
+        total_analyzed, total_skipped = 0, 0
+        
+        for symbol, (company_id, company_name) in self.company_ids.items():
+            logging.info(f"\n📊 {symbol} - {company_name}")
+            company_reports = all_reports.get(symbol, [])
+            if not company_reports:
+                logging.info(f"   ⏭️  Aucun rapport")
+                continue
+            
+            recent = sorted([r for r in company_reports if r['date'].year >= 2023], key=lambda x: x['date'], reverse=True)
+            new = [r for r in recent if r['url'] not in self.analysis_memory]
+            logging.info(f"   📂 {len(recent)} rapport(s) récent(s), dont {len(new)} nouveau(x)")
+            
+            for report in new[:2]: # Analyser les 2 plus récents
+                result = self._analyze_pdf_with_openai(company_id, symbol, report)
+                if result is True: total_analyzed += 1
+                elif result is None: total_skipped += 1
+        
+        logging.info(f"\n✅ Traitement terminé. Nouvelles analyses: {total_analyzed}")
+        
+        conn = self.connect_to_db()
+        if not conn: return {}, []
+        
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT c.symbol, fa.analysis_summary, c.name 
+                FROM fundamental_analysis fa JOIN companies c ON fa.company_id = c.id
+            """)
+            final_results = defaultdict(lambda: {'rapports_analyses': [], 'nom': ''})
+            for symbol, summary, name in cur.fetchall():
+                final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
+                final_results[symbol]['nom'] = name
+        
+        logging.info(f"📊 Résultats: {len(final_results)} société(s)")
+        return (dict(final_results), self.newly_analyzed_reports)
+    
+    def __del__(self):
+        if self.driver:
+            self.driver.quit()
 
 if __name__ == "__main__":
     analyzer = BRVMAnalyzer()
