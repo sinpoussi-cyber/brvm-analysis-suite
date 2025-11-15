@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V24.0 - OPENAI GPT-4o
+# MODULE: REPORT GENERATOR V24.1 - OPENAI GPT-4o (CORRECTION PROXY)
 # ==============================================================================
 
 import os
@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import openai  # Import de la bibliothèque OpenAI
+import openai
+import httpx # <-- NOUVEL IMPORT
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -21,7 +22,6 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION OPENAI GPT-4o (NOUVEAU)
 OPENAI_MODEL = "gpt-4o"
 
 class BRVMReportGenerator:
@@ -38,14 +38,20 @@ class BRVMReportGenerator:
             logging.error(f"❌ Erreur connexion DB: {e}")
             raise
 
-        # Initialisation du client OpenAI
         try:
-            self.openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            # LIGNE MODIFIÉE : Création d'un client HTTP propre pour éviter le conflit
+            clean_http_client = httpx.Client(proxies={})
+            self.openai_client = openai.OpenAI(
+                api_key=os.environ.get("OPENAI_API_KEY"),
+                http_client=clean_http_client # <-- LIGNE MODIFIÉE
+            )
             logging.info("✅ Client OpenAI initialisé pour la génération de rapports.")
         except Exception as e:
             self.openai_client = None
             logging.error(f"❌ Erreur initialisation client OpenAI pour rapports: {e}")
 
+    # Le reste du fichier (_get_all_data_from_db, etc.) est identique
+    # ... Collez le reste du code du fichier report_generator.py précédent ici ...
     def _get_all_data_from_db(self):
         logging.info("📂 Récupération des données (30 derniers jours)...")
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -174,11 +180,11 @@ Ta réponse doit obligatoirement suivre ce format :
 
     def generate_all_reports(self, new_fundamental_analyses):
         logging.info("="*80)
-        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V24.0 - OpenAI {OPENAI_MODEL})")
+        logging.info(f"📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V24.1 - OpenAI {OPENAI_MODEL})")
         logging.info("="*80)
         
         if not self.openai_client:
-            logging.error("❌ Génération de rapports annulée: clé API OpenAI non configurée.")
+            logging.error("❌ Génération de rapports annulée: client OpenAI non initialisé.")
             return
 
         df = self._get_all_data_from_db()
