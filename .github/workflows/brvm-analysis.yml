@@ -1,4 +1,4 @@
-name: BRVM Analysis Suite V24.0 - OpenAI GPT-4o
+name: BRVM Analysis Suite V25.0 - Mistral AI
 
 on:
   schedule:
@@ -89,35 +89,36 @@ jobs:
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
       
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (OpenAI GPT-4o)
+      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Mistral AI)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
-          echo "🚀 Analyse fondamentale avec OpenAI GPT-4o..."
-          echo "🤖 Modèle: gpt-4o-2024-11-20"
-          echo "🔑 API: OpenAI"
-          echo "📄 Support: Extraction PDF + Analyse texte"
-          echo "⚡ Capacité: 10,000 req/min"
+          echo "🚀 Analyse fondamentale avec Mistral AI..."
+          echo "🤖 Modèle: mistral-large-latest"
+          echo "🔑 API: Mistral AI"
+          echo "📄 Support: PDF natif avec OCR"
+          echo "⚡ Capacité: Pas de rate limit strict"
           echo "🛡️  Limite: 3 tentatives max par document"
           echo "💎 Qualité: Excellente analyse financière"
+          echo "🇫🇷 Origine: IA française"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
       
-      - name: 📝 ÉTAPE 5 - Génération Rapports (OpenAI GPT-4o)
+      - name: 📝 ÉTAPE 5 - Génération Rapports (Mistral AI)
         env:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: ${{ secrets.DB_PORT }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
-          echo "🚀 Génération rapports avec OpenAI GPT-4o..."
+          echo "🚀 Génération rapports avec Mistral AI..."
           python report_generator.py
           echo "✅ Rapports générés"
       
@@ -132,33 +133,32 @@ jobs:
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V24.0 (OpenAI GPT-4o)"
+          echo "📈 BRVM ANALYSIS SUITE V25.0 (Mistral AI)"
           echo "═══════════════════════════════════════════════════════════"
           echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Run: ${{ github.run_number }}"
           echo ""
           echo "⚙️  Configuration:"
-          echo "  - IA: OpenAI GPT-4o"
-          echo "  - Modèle: gpt-4o-2024-11-20"
-          echo "  - API: OpenAI (stable et fiable)"
-          echo "  - Extraction: PyPDF2 pour texte PDF"
-          echo "  - Capacité: 10,000 requêtes/minute"
-          echo "  - Support: PDF texte natif"
+          echo "  - IA: Mistral AI (🇫🇷 France)"
+          echo "  - Modèle: mistral-large-latest"
+          echo "  - API: Mistral AI (stable)"
+          echo "  - Support: PDF natif avec OCR intégré"
+          echo "  - Rate limit: Flexible"
           echo "  - Qualité: ⭐⭐⭐⭐⭐ (Excellente)"
           echo "  - Fallback: Analyse automatique"
           echo ""
           echo "💰 Coût estimé:"
           echo "  - Analyse fondamentale: ~$0.92 (46 PDFs)"
           echo "  - Recommandations: ~$0.46 (46 sociétés)"
-          echo "  - Total: ~$1.38 par exécution"
-          echo "  - Crédit disponible: $5.00"
+          echo "  - Total: ~$1.00 par exécution"
+          echo "  - Crédit disponible: 5€ gratuit"
           echo ""
           echo "📋 Étapes:"
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (OpenAI GPT-4o)"
-          echo "  ✅ Génération rapports (OpenAI GPT-4o)"
+          echo "  ✅ Analyse fondamentale (Mistral AI)"
+          echo "  ✅ Génération rapports (Mistral AI)"
           echo ""
           if [ -f "Rapport_"*.docx ]; then
             echo "✅ Rapports générés:"
