@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V24.0 - OPENAI GPT-4o
+# MODULE: FUNDAMENTAL ANALYZER V25.0 - MISTRAL AI
 # ==============================================================================
 
 import requests
@@ -18,8 +18,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
-import PyPDF2
-import io
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -31,10 +29,10 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION OPENAI GPT-4o
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-OPENAI_MODEL = "gpt-4o-2024-11-20"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+# ✅ CONFIGURATION MISTRAL AI
+MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
+MISTRAL_MODEL = "mistral-large-latest"
+MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
 
 class BRVMAnalyzer:
@@ -284,27 +282,8 @@ class BRVMAnalyzer:
             logging.error(f"❌ Erreur recherche: {e}")
             return {}
 
-    def _extract_text_from_pdf(self, pdf_content):
-        """Extrait le texte d'un PDF"""
-        try:
-            pdf_file = io.BytesIO(pdf_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            
-            # Limiter à 15000 caractères pour ne pas dépasser les tokens
-            if len(text) > 15000:
-                text = text[:15000] + "\n[...texte tronqué...]"
-            
-            return text
-        except Exception as e:
-            logging.error(f"    ❌ Erreur extraction PDF: {e}")
-            return None
-
-    def _analyze_pdf_with_openai(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec OpenAI GPT-4o"""
+    def _analyze_pdf_with_mistral(self, company_id, symbol, report, attempt=1, max_attempts=3):
+        """Analyse un PDF avec Mistral AI"""
         pdf_url = report['url']
         
         if pdf_url in self.analysis_memory:
@@ -332,20 +311,12 @@ class BRVMAnalyzer:
         try:
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
-            pdf_text = self._extract_text_from_pdf(pdf_response.content)
-            
-            if not pdf_text:
-                logging.error(f"    ❌ Impossible d'extraire le texte du PDF")
-                return False
-                
+            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
         except Exception as e:
             logging.error(f"    ❌ Erreur téléchargement PDF: {e}")
             return False
         
-        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier et fournis une synthèse concise en français.
-
-TEXTE DU RAPPORT:
-{pdf_text}
+        prompt = """Tu es un analyste financier expert. Analyse ce rapport financier et fournis une synthèse concise en français.
 
 Concentre-toi sur :
 - **Chiffre d'Affaires** : Variation en % et valeur
@@ -356,27 +327,36 @@ Concentre-toi sur :
 
 Si une info manque, mentionne-le clairement."""
         
-        if not OPENAI_API_KEY:
-            logging.error(f"    ❌ Aucune clé OpenAI disponible")
+        if not MISTRAL_API_KEY:
+            logging.error(f"    ❌ Aucune clé Mistral disponible")
             return False
         
-        # ✅ OPENAI GPT-4o API
+        # ✅ MISTRAL AI API (avec support PDF)
         headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
         }
         
         request_body = {
-            "model": OPENAI_MODEL,
+            "model": MISTRAL_MODEL,
             "messages": [
-                {"role": "user", "content": prompt}
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:application/pdf;base64,{pdf_data}"
+                        }
+                    ]
+                }
             ],
             "max_tokens": 2000,
             "temperature": 0.3
         }
         
         try:
-            response = requests.post(OPENAI_API_URL, headers=headers, json=request_body, timeout=120)
+            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=120)
             
             self.request_count += 1
             
@@ -391,15 +371,15 @@ Si une info manque, mentionne-le clairement."""
                         logging.info(f"    ✅ {symbol}: Analyse générée")
                         return True
                 
-                logging.warning(f"    ⚠️  Réponse OpenAI malformée")
+                logging.warning(f"    ⚠️  Réponse Mistral malformée")
                 return False
             
             elif response.status_code == 429:
                 logging.warning(f"    ⚠️  Rate limit détecté pour {symbol} (tentative {attempt}/{max_attempts})")
                 
                 if attempt < max_attempts:
-                    time.sleep(60)  # Attendre 1 minute
-                    return self._analyze_pdf_with_openai(company_id, symbol, report, attempt + 1, max_attempts)
+                    time.sleep(10)  # Attendre 10 secondes
+                    return self._analyze_pdf_with_mistral(company_id, symbol, report, attempt + 1, max_attempts)
                 else:
                     logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
                     fallback_text = f"Analyse automatique indisponible pour ce rapport. Rapport: {report['titre']}"
@@ -411,7 +391,7 @@ Si une info manque, mentionne-le clairement."""
                 return False
                 
         except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout API OpenAI")
+            logging.error(f"    ⏱️  Timeout API Mistral")
             return False
         except Exception as e:
             logging.error(f"    ❌ Exception: {e}")
@@ -420,17 +400,17 @@ Si une info manque, mentionne-le clairement."""
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V24.0 - OpenAI GPT-4o)")
-        logging.info(f"🤖 Modèle: {OPENAI_MODEL}")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V25.0 - Mistral AI)")
+        logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
         conn = None
         try:
-            if not OPENAI_API_KEY:
-                logging.error("❌ Clé OpenAI non configurée")
+            if not MISTRAL_API_KEY:
+                logging.error("❌ Clé Mistral non configurée")
                 return {}, []
             
-            logging.info("✅ Clé OpenAI chargée")
+            logging.info("✅ Clé Mistral chargée")
             
             self._load_analysis_memory_from_db()
             
@@ -452,7 +432,7 @@ Si une info manque, mentionne-le clairement."""
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (OpenAI GPT-4o avec limite 3 tentatives)...")
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Mistral AI avec limite 3 tentatives)...")
             
             total_analyzed = 0
             total_skipped = 0
@@ -477,7 +457,7 @@ Si une info manque, mentionne-le clairement."""
                 logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
                 
                 for report in new:
-                    result = self._analyze_pdf_with_openai(company_id, symbol, report)
+                    result = self._analyze_pdf_with_mistral(company_id, symbol, report)
                     if result is True:
                         total_analyzed += 1
                     elif result is None:
