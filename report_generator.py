@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V24.0 - OPENAI GPT-4o
+# MODULE: REPORT GENERATOR V25.0 - MISTRAL AI
 # ==============================================================================
 
 import os
@@ -22,10 +22,10 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION OPENAI GPT-4o
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-OPENAI_MODEL = "gpt-4o-2024-11-20"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+# ✅ CONFIGURATION MISTRAL AI
+MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
+MISTRAL_MODEL = "mistral-large-latest"
+MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
 
 class BRVMReportGenerator:
@@ -137,13 +137,13 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _generate_ia_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse IA avec OpenAI GPT-4o (avec limite de tentatives)"""
+        """Génération analyse IA avec Mistral AI (avec limite de tentatives)"""
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
-        if not OPENAI_API_KEY:
-            logging.warning(f"    ⚠️  Aucune clé OpenAI disponible pour {symbol}")
+        if not MISTRAL_API_KEY:
+            logging.warning(f"    ⚠️  Aucune clé Mistral disponible pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         
         # Construire contexte
@@ -176,14 +176,14 @@ Fournis:
 
 Sois direct et factuel."""
         
-        # ✅ OPENAI GPT-4o API
+        # ✅ MISTRAL AI API
         headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
         }
         
         request_body = {
-            "model": OPENAI_MODEL,
+            "model": MISTRAL_MODEL,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -192,7 +192,7 @@ Sois direct et factuel."""
         }
         
         try:
-            response = requests.post(OPENAI_API_URL, headers=headers, json=request_body, timeout=30)
+            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=30)
             
             self.request_count += 1
             
@@ -210,7 +210,7 @@ Sois direct et factuel."""
                 logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
                 
                 if attempt < max_attempts:
-                    time.sleep(60)  # Attendre 1 minute
+                    time.sleep(10)  # Attendre 10 secondes
                     return self._generate_ia_analysis(symbol, data_dict, attempt + 1, max_attempts)
                 else:
                     logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
@@ -295,15 +295,15 @@ Sois direct et factuel."""
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V24.0 - OpenAI GPT-4o)")
-        logging.info(f"🤖 Modèle: {OPENAI_MODEL}")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V25.0 - Mistral AI)")
+        logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
-        if not OPENAI_API_KEY:
-            logging.error("❌ Clé OpenAI non configurée")
+        if not MISTRAL_API_KEY:
+            logging.error("❌ Clé Mistral non configurée")
             return
         
-        logging.info("✅ Clé OpenAI chargée")
+        logging.info("✅ Clé Mistral chargée")
         
         # Récupération données
         df = self._get_all_data_from_db()
