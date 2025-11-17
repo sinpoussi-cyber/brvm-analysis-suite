@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V26.0 - RAPPORT PROFESSIONNEL DÉTAILLÉ
+# MODULE: REPORT GENERATOR V26.1 - RAPPORT PROFESSIONNEL DÉTAILLÉ (CORRIGÉ)
 # ==============================================================================
 
 import os
@@ -10,8 +10,6 @@ from datetime import datetime, timedelta
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 import requests
 import time
 
@@ -95,16 +93,16 @@ class BRVMReportGenerator:
             lpc.trade_date, 
             lpc.price,
             lpc.volume,
-            ta.mm_20,
-            ta.mm_50,
+            ta.mm20,
+            ta.mm50,
             ta.mm_decision,
-            ta.bollinger_upper,
-            ta.bollinger_lower,
+            ta.bollinger_superior,
+            ta.bollinger_inferior,
             ta.bollinger_decision,
-            ta.macd_value,
-            ta.macd_signal,
+            ta.macd_line,
+            ta.signal_line,
             ta.macd_decision,
-            ta.rsi_value,
+            ta.rsi,
             ta.rsi_decision,
             ta.stochastic_k,
             ta.stochastic_d,
@@ -502,7 +500,7 @@ IMPORTANT:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet professionnel"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS PROFESSIONNELS (V26.0 - Mistral AI)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS PROFESSIONNELS (V26.1 - Mistral AI)")
         logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
@@ -563,21 +561,21 @@ IMPORTANT:
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
             
-            # Préparer contexte complet
+            # Préparer contexte complet avec noms de colonnes CORRIGÉS
             data_dict = {
                 'price': row.get('price'),
                 'volume': row.get('volume'),
                 'historical_summary': historical_summary,
-                'mm_20': row.get('mm_20'),
-                'mm_50': row.get('mm_50'),
+                'mm_20': row.get('mm20'),  # ✅ CORRIGÉ
+                'mm_50': row.get('mm50'),  # ✅ CORRIGÉ
                 'mm_decision': row.get('mm_decision'),
-                'bollinger_upper': row.get('bollinger_upper'),
-                'bollinger_lower': row.get('bollinger_lower'),
+                'bollinger_upper': row.get('bollinger_superior'),  # ✅ CORRIGÉ
+                'bollinger_lower': row.get('bollinger_inferior'),  # ✅ CORRIGÉ
                 'bollinger_decision': row.get('bollinger_decision'),
-                'macd_value': row.get('macd_value'),
-                'macd_signal': row.get('macd_signal'),
+                'macd_value': row.get('macd_line'),  # ✅ CORRIGÉ
+                'macd_signal': row.get('signal_line'),  # ✅ CORRIGÉ
                 'macd_decision': row.get('macd_decision'),
-                'rsi_value': row.get('rsi_value'),
+                'rsi_value': row.get('rsi'),  # ✅ CORRIGÉ
                 'rsi_decision': row.get('rsi_decision'),
                 'stochastic_k': row.get('stochastic_k'),
                 'stochastic_d': row.get('stochastic_d'),
