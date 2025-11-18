@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V26.1 - RAPPORT PROFESSIONNEL DÉTAILLÉ (CORRIGÉ)
+# MODULE: REPORT GENERATOR V27.0 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB
 # ==============================================================================
 
 import os
@@ -12,8 +12,11 @@ from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import requests
 import time
+import json
+from collections import defaultdict
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+logging
+.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Configuration & Secrets ---
 DB_NAME = os.environ.get('DB_NAME')
@@ -32,6 +35,7 @@ class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
         self.request_count = 0
+        self.all_recommendations = {}  # Pour stocker toutes les recommandations
         
         # Connexion DB
         try:
@@ -45,6 +49,59 @@ class BRVMReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur connexion DB: {e}")
             raise
+
+    def _get_market_events(self):
+        """Récupère les événements récents du marché"""
+        logging.info("📰 Récupération des événements marquants...")
+        
+        query = """
+        SELECT event_date, event_summary
+        FROM new_market_events
+        ORDER BY event_date DESC
+        LIMIT 5;
+        """
+        
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            if not df.empty:
+                events = []
+                for _, row in df.iterrows():
+                    events.append(f"• {row['event_date'].strftime('%d/%m/%Y')}: {row['event_summary']}")
+                return "\n".join(events)
+            return "Aucun événement récent enregistré."
+        except Exception as e:
+            logging.error(f"❌ Erreur récupération événements: {e}")
+            return "Données indisponibles."
+
+    def _get_market_indicators(self):
+        """Récupère les derniers indicateurs du marché"""
+        query = """
+        SELECT 
+            brvm_composite, 
+            brvm_30, 
+            brvm_prestige, 
+            capitalisation_globale,
+            variation_journaliere_brvm_composite,
+            variation_ytd_brvm_composite
+        FROM new_market_indicators
+        ORDER BY extraction_date DESC
+        LIMIT 1;
+        """
+        
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            if not df.empty:
+                row = df.iloc[0]
+                return {
+                    'composite': row.get('brvm_composite'),
+                    'composite_var_day': row.get('variation_journaliere_brvm_composite'),
+                    'composite_var_ytd': row.get('variation_ytd_brvm_composite'),
+                    'capitalisation': row.get('capitalisation_globale')
+                }
+            return None
+        except Exception as e:
+            logging.error(f"❌ Erreur récupération indicateurs: {e}")
+            return None
 
     def _get_historical_data_100days(self, company_id):
         """Récupère les 100 derniers jours de données historiques"""
@@ -90,6 +147,7 @@ class BRVMReportGenerator:
             c.id as company_id,
             c.symbol, 
             c.name as company_name,
+            c.sector,
             lpc.trade_date, 
             lpc.price,
             lpc.volume,
@@ -172,6 +230,23 @@ class BRVMReportGenerator:
         except Exception as e:
             logging.error(f"❌ Erreur prédictions: {e}")
             return pd.DataFrame()
+
+    def _extract_recommendation_from_analysis(self, analysis_text):
+        """Extrait la recommandation du texte d'analyse"""
+        analysis_lower = analysis_text.lower()
+        
+        if 'achat fort' in analysis_lower:
+            return 'ACHAT FORT', 5
+        elif 'achat' in analysis_lower:
+            return 'ACHAT', 4
+        elif 'conserver' in analysis_lower:
+            return 'CONSERVER', 3
+        elif 'vente forte' in analysis_lower:
+            return 'VENTE FORTE', 1
+        elif 'vente' in analysis_lower:
+            return 'VENTE', 2
+        else:
+            return 'CONSERVER', 3
 
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
         """Génération analyse professionnelle détaillée avec Mistral AI"""
@@ -326,23 +401,23 @@ IMPORTANT:
         signals = []
         if data_dict.get('mm_decision'):
             signals.append(data_dict['mm_decision'])
-            analysis += f"Les moyennes mobiles (MM20: {data_dict.get('mm_20', 'N/A')}, MM50: {data_dict.get('mm_50', 'N/A')}) suggèrent une tendance {data_dict['mm_decision'].lower()}. "
+            analysis += f"**Moyennes Mobiles**: Les moyennes mobiles (MM20: {data_dict.get('mm_20', 'N/A')}, MM50: {data_dict.get('mm_50', 'N/A')}) suggèrent une tendance {data_dict['mm_decision'].lower()}.\n\n"
         
         if data_dict.get('bollinger_decision'):
             signals.append(data_dict['bollinger_decision'])
-            analysis += f"Les bandes de Bollinger indiquent un signal {data_dict['bollinger_decision'].lower()}. "
+            analysis += f"**Bandes de Bollinger**: Les bandes de Bollinger indiquent un signal {data_dict['bollinger_decision'].lower()}.\n\n"
         
         if data_dict.get('macd_decision'):
             signals.append(data_dict['macd_decision'])
-            analysis += f"Le MACD confirme une position {data_dict['macd_decision'].lower()}. "
+            analysis += f"**MACD**: Le MACD confirme une position {data_dict['macd_decision'].lower()}.\n\n"
         
         if data_dict.get('rsi_decision'):
             signals.append(data_dict['rsi_decision'])
-            analysis += f"Le RSI ({data_dict.get('rsi_value', 'N/A')}) signale {data_dict['rsi_decision'].lower()}. "
+            analysis += f"**RSI**: Le RSI ({data_dict.get('rsi_value', 'N/A')}) signale {data_dict['rsi_decision'].lower()}.\n\n"
         
         if data_dict.get('stochastic_decision'):
             signals.append(data_dict['stochastic_decision'])
-            analysis += f"Le stochastique recommande {data_dict['stochastic_decision'].lower()}.\n\n"
+            analysis += f"**Stochastique**: Le stochastique recommande {data_dict['stochastic_decision'].lower()}.\n\n"
         
         # Conclusion technique
         buy_count = signals.count('Achat')
@@ -380,8 +455,108 @@ IMPORTANT:
         
         return analysis
 
-    def _create_word_document(self, all_analyses):
-        """Création du document Word professionnel"""
+    def _save_to_database(self, report_date, synthesis_text, top_10, flop_10, market_events, all_company_data, filename):
+        """Sauvegarde structurée dans la base de données"""
+        logging.info("💾 Sauvegarde dans la base de données...")
+        
+        try:
+            with self.db_conn.cursor() as cur:
+                # 1. Insérer le résumé global
+                cur.execute("""
+                    INSERT INTO report_summary (
+                        report_date, synthesis_text, top_10_buy, flop_10_sell, 
+                        market_events, total_companies_analyzed, report_file_name
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (report_date) DO UPDATE SET
+                        synthesis_text = EXCLUDED.synthesis_text,
+                        top_10_buy = EXCLUDED.top_10_buy,
+                        flop_10_sell = EXCLUDED.flop_10_sell,
+                        market_events = EXCLUDED.market_events,
+                        total_companies_analyzed = EXCLUDED.total_companies_analyzed,
+                        report_file_name = EXCLUDED.report_file_name
+                    RETURNING id;
+                """, (
+                    report_date,
+                    synthesis_text,
+                    json.dumps(top_10, ensure_ascii=False),
+                    json.dumps(flop_10, ensure_ascii=False),
+                    market_events,
+                    len(all_company_data),
+                    filename
+                ))
+                
+                report_summary_id = cur.fetchone()[0]
+                
+                # 2. Insérer les analyses détaillées par société
+                for symbol, company_data in all_company_data.items():
+                    cur.execute("""
+                        INSERT INTO report_company_analysis (
+                            report_summary_id, company_id, symbol, company_name,
+                            current_price, price_evolution_100d, highest_price_100d, lowest_price_100d,
+                            mm20, mm50, mm_decision,
+                            bollinger_upper, bollinger_lower, bollinger_decision,
+                            macd_value, macd_signal, macd_decision,
+                            rsi_value, rsi_decision,
+                            stochastic_k, stochastic_d, stochastic_decision,
+                            price_evolution_text, technical_conclusion, fundamental_analysis, investment_conclusion,
+                            recommendation, confidence_level, risk_level, investment_horizon
+                        ) VALUES (
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s
+                        )
+                        ON CONFLICT (report_summary_id, symbol) DO UPDATE SET
+                            current_price = EXCLUDED.current_price,
+                            recommendation = EXCLUDED.recommendation,
+                            investment_conclusion = EXCLUDED.investment_conclusion;
+                    """, (
+                        report_summary_id,
+                        company_data.get('company_id'),
+                        symbol,
+                        company_data.get('company_name'),
+                        company_data.get('current_price'),
+                        company_data.get('price_evolution_100d'),
+                        company_data.get('highest_price_100d'),
+                        company_data.get('lowest_price_100d'),
+                        company_data.get('mm20'),
+                        company_data.get('mm50'),
+                        company_data.get('mm_decision'),
+                        company_data.get('bollinger_upper'),
+                        company_data.get('bollinger_lower'),
+                        company_data.get('bollinger_decision'),
+                        company_data.get('macd_value'),
+                        company_data.get('macd_signal'),
+                        company_data.get('macd_decision'),
+                        company_data.get('rsi_value'),
+                        company_data.get('rsi_decision'),
+                        company_data.get('stochastic_k'),
+                        company_data.get('stochastic_d'),
+                        company_data.get('stochastic_decision'),
+                        company_data.get('full_analysis', ''),  # Texte complet
+                        company_data.get('technical_conclusion', ''),
+                        company_data.get('fundamental_analysis', ''),
+                        company_data.get('investment_conclusion', ''),
+                        company_data.get('recommendation'),
+                        company_data.get('confidence_level'),
+                        company_data.get('risk_level'),
+                        company_data.get('investment_horizon')
+                    ))
+                
+                self.db_conn.commit()
+                logging.info(f"   ✅ Rapport sauvegardé (ID: {report_summary_id})")
+                
+        except Exception as e:
+            logging.error(f"❌ Erreur sauvegarde DB: {e}")
+            self.db_conn.rollback()
+
+    def _create_word_document(self, all_analyses, all_company_data):
+        """Création du document Word professionnel avec synthèse enrichie"""
         logging.info("📄 Création du document Word professionnel...")
         
         doc = Document()
@@ -410,25 +585,115 @@ IMPORTANT:
         date_run.font.italic = True
         
         doc.add_paragraph()
-        
-        # Avertissement
-        warning = doc.add_paragraph()
-        warning_run = warning.add_run("AVERTISSEMENT: ")
-        warning_run.bold = True
-        warning_run.font.color.rgb = RGBColor(192, 0, 0)
-        warning.add_run("Ce rapport est généré automatiquement à partir d'analyses techniques et fondamentales. "
-                       "Il ne constitue pas un conseil en investissement. Consultez un professionnel avant toute décision.")
-        warning.paragraph_format.space_after = Pt(12)
-        
         doc.add_page_break()
         
-        # Synthèse
+        # ═══════════════════════════════════════════════════════════
+        # SYNTHÈSE GÉNÉRALE ENRICHIE
+        # ═══════════════════════════════════════════════════════════
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
-        synth_p = doc.add_paragraph(f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
-                                    f"à la Bourse Régionale des Valeurs Mobilières (BRVM). Chaque analyse comprend "
-                                    f"4 parties: évolution du cours, analyse technique, analyse fondamentale, et "
-                                    f"conclusion d'investissement.")
-        synth_p.paragraph_format.space_after = Pt(12)
+        
+        # Contexte marché
+        market_indicators = self._get_market_indicators()
+        if market_indicators:
+            intro = doc.add_paragraph(
+                f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
+                f"à la Bourse Régionale des Valeurs Mobilières (BRVM). "
+            )
+            
+            intro.add_run(f"L'indice BRVM Composite s'établit à {market_indicators['composite']:.2f} points ")
+            
+            if market_indicators.get('composite_var_day'):
+                var_day = market_indicators['composite_var_day']
+                if var_day > 0:
+                    run = intro.add_run(f"(+{var_day:.2f}%)")
+                    run.font.color.rgb = RGBColor(0, 128, 0)
+                else:
+                    run = intro.add_run(f"({var_day:.2f}%)")
+                    run.font.color.rgb = RGBColor(192, 0, 0)
+            
+            intro.add_run(f" sur la séance. ")
+            
+            if market_indicators.get('capitalisation'):
+                intro.add_run(f"La capitalisation globale du marché atteint {market_indicators['capitalisation']/1e9:.2f} milliards FCFA.")
+        else:
+            intro = doc.add_paragraph(
+                f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
+                f"à la Bourse Régionale des Valeurs Mobilières (BRVM)."
+            )
+        
+        intro.paragraph_format.space_after = Pt(12)
+        
+        doc.add_paragraph()
+        
+        # TOP 10 ACHATS
+        doc.add_heading('📈 TOP 10 DES OPPORTUNITÉS D\'ACHAT', level=2)
+        
+        # Trier par score de recommandation
+        sorted_buy = sorted(
+            [(symbol, data) for symbol, data in all_company_data.items()],
+            key=lambda x: x[1].get('recommendation_score', 0),
+            reverse=True
+        )[:10]
+        
+        top_10_list = []
+        for idx, (symbol, data) in enumerate(sorted_buy, 1):
+            p = doc.add_paragraph(style='List Number')
+            p.add_run(f"{symbol} - {data.get('company_name', 'N/A')}").bold = True
+            p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
+            
+            rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
+            rec_run.font.color.rgb = RGBColor(0, 128, 0)
+            rec_run.bold = True
+            
+            p.add_run(f" | Confiance: {data.get('confidence_level', 'N/A')} | Risque: {data.get('risk_level', 'N/A')}")
+            
+            top_10_list.append({
+                'symbol': symbol,
+                'name': data.get('company_name'),
+                'price': float(data.get('current_price', 0)),
+                'recommendation': data.get('recommendation'),
+                'confidence': data.get('confidence_level'),
+                'risk': data.get('risk_level')
+            })
+        
+        doc.add_paragraph()
+        
+        # FLOP 10 VENTES
+        doc.add_heading('📉 TOP 10 DES ACTIONS À ÉVITER', level=2)
+        
+        sorted_sell = sorted(
+            [(symbol, data) for symbol, data in all_company_data.items()],
+            key=lambda x: x[1].get('recommendation_score', 0)
+        )[:10]
+        
+        flop_10_list = []
+        for idx, (symbol, data) in enumerate(sorted_sell, 1):
+            p = doc.add_paragraph(style='List Number')
+            p.add_run(f"{symbol} - {data.get('company_name', 'N/A')}").bold = True
+            p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
+            
+            rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
+            rec_run.font.color.rgb = RGBColor(192, 0, 0)
+            rec_run.bold = True
+            
+            p.add_run(f" | Confiance: {data.get('confidence_level', 'N/A')} | Risque: {data.get('risk_level', 'N/A')}")
+            
+            flop_10_list.append({
+                'symbol': symbol,
+                'name': data.get('company_name'),
+                'price': float(data.get('current_price', 0)),
+                'recommendation': data.get('recommendation'),
+                'confidence': data.get('confidence_level'),
+                'risk': data.get('risk_level')
+            })
+        
+        doc.add_paragraph()
+        
+        # ÉVÉNEMENTS MARQUANTS
+        doc.add_heading('📰 FAITS MARQUANTS RÉCENTS', level=2)
+        market_events = self._get_market_events()
+        events_p = doc.add_paragraph(market_events)
+        events_p.paragraph_format.space_after = Pt(12)
         
         doc.add_page_break()
         
@@ -454,7 +719,6 @@ IMPORTANT:
             doc.add_paragraph("─" * 80)
             
             # Contenu de l'analyse
-            # Diviser en paragraphes pour meilleure lisibilité
             paragraphs = analysis.split('\n\n')
             for para_text in paragraphs:
                 if para_text.strip():
@@ -473,7 +737,7 @@ IMPORTANT:
             doc.add_paragraph()
             doc.add_paragraph("═" * 80)
             
-            # Page break tous les 2 sociétés pour meilleure lecture
+            # Page break tous les 2 sociétés
             if idx % 2 == 0 and idx < len(all_analyses):
                 doc.add_page_break()
         
@@ -485,8 +749,8 @@ IMPORTANT:
             "2. Les analyses fondamentales proviennent des rapports financiers officiels publiés par les sociétés.\n"
             "3. Les recommandations sont générées par intelligence artificielle (Mistral AI).\n"
             "4. Tous les cours sont en FCFA (Francs CFA).\n"
-            "5. Les prédictions sont des estimations basées sur des modèles statistiques et ne garantissent pas les performances futures.\n"
-            "6. Ce document est confidentiel et destiné uniquement à l'usage du destinataire."
+            "5. Les prédictions sont des estimations basées sur des modèles statistiques.\n"
+            "6. Ce document est confidentiel et destiné uniquement à l'usage professionnel."
         )
         footer_text.paragraph_format.space_after = Pt(6)
         
@@ -495,12 +759,30 @@ IMPORTANT:
         doc.save(filename)
         
         logging.info(f"   ✅ Document créé: {filename}")
+        
+        # Sauvegarder dans la DB
+        synthesis_text = (
+            f"Analyse de {len(all_analyses)} sociétés. "
+            f"Indices: BRVM Composite {market_indicators.get('composite', 0):.2f} pts. "
+            f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA."
+        )
+        
+        self._save_to_database(
+            datetime.now().date(),
+            synthesis_text,
+            top_10_list,
+            flop_10_list,
+            market_events,
+            all_company_data,
+            filename
+        )
+        
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet professionnel"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS PROFESSIONNELS (V26.1 - Mistral AI)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS PROFESSIONNELS (V27.0 - Mistral AI)")
         logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
@@ -523,6 +805,7 @@ IMPORTANT:
         logging.info(f"🤖 Génération de {len(df)} analyse(s) professionnelle(s) détaillée(s)...")
         
         all_analyses = {}
+        all_company_data = {}
         
         for idx, row in df.iterrows():
             symbol = row['symbol']
@@ -532,12 +815,20 @@ IMPORTANT:
             hist_df = self._get_historical_data_100days(company_id)
             
             historical_summary = "Données historiques non disponibles."
+            price_evolution_100d = None
+            highest_price = None
+            lowest_price = None
+            
             if not hist_df.empty and len(hist_df) > 1:
                 prix_debut = hist_df.iloc[0]['price']
                 prix_fin = hist_df.iloc[-1]['price']
                 prix_max = hist_df['price'].max()
                 prix_min = hist_df['price'].min()
                 evolution_pct = ((prix_fin - prix_debut) / prix_debut * 100) if prix_debut > 0 else 0
+                
+                price_evolution_100d = evolution_pct
+                highest_price = prix_max
+                lowest_price = prix_min
                 
                 historical_summary = (
                     f"Sur les 100 derniers jours, le cours a évolué de {evolution_pct:.2f}%, "
@@ -551,7 +842,7 @@ IMPORTANT:
             if row.get('fundamental_summaries') and pd.notna(row['fundamental_summaries']):
                 reports = row['fundamental_summaries'].split('###REPORT###')
                 fundamental_parts = []
-                for report in reports[:3]:  # Top 3 rapports les plus récents
+                for report in reports[:3]:
                     if report.strip():
                         parts = report.split('|||')
                         if len(parts) == 3:
@@ -561,21 +852,21 @@ IMPORTANT:
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
             
-            # Préparer contexte complet avec noms de colonnes CORRIGÉS
+            # Préparer contexte complet
             data_dict = {
                 'price': row.get('price'),
                 'volume': row.get('volume'),
                 'historical_summary': historical_summary,
-                'mm_20': row.get('mm20'),  # ✅ CORRIGÉ
-                'mm_50': row.get('mm50'),  # ✅ CORRIGÉ
+                'mm_20': row.get('mm20'),
+                'mm_50': row.get('mm50'),
                 'mm_decision': row.get('mm_decision'),
-                'bollinger_upper': row.get('bollinger_superior'),  # ✅ CORRIGÉ
-                'bollinger_lower': row.get('bollinger_inferior'),  # ✅ CORRIGÉ
+                'bollinger_upper': row.get('bollinger_superior'),
+                'bollinger_lower': row.get('bollinger_inferior'),
                 'bollinger_decision': row.get('bollinger_decision'),
-                'macd_value': row.get('macd_line'),  # ✅ CORRIGÉ
-                'macd_signal': row.get('signal_line'),  # ✅ CORRIGÉ
+                'macd_value': row.get('macd_line'),
+                'macd_signal': row.get('signal_line'),
                 'macd_decision': row.get('macd_decision'),
-                'rsi_value': row.get('rsi'),  # ✅ CORRIGÉ
+                'rsi_value': row.get('rsi'),
                 'rsi_decision': row.get('rsi_decision'),
                 'stochastic_k': row.get('stochastic_k'),
                 'stochastic_d': row.get('stochastic_d'),
@@ -599,9 +890,46 @@ IMPORTANT:
             # Génération analyse professionnelle
             analysis = self._generate_professional_analysis(symbol, data_dict)
             all_analyses[symbol] = analysis
+            
+            # Extraire recommandation
+            recommendation, rec_score = self._extract_recommendation_from_analysis(analysis)
+            
+            # Stocker toutes les données structurées
+            all_company_data[symbol] = {
+                'company_id': company_id,
+                'company_name': row.get('company_name'),
+                'sector': row.get('sector'),
+                'current_price': float(row.get('price', 0)) if pd.notna(row.get('price')) else None,
+                'price_evolution_100d': price_evolution_100d,
+                'highest_price_100d': highest_price,
+                'lowest_price_100d': lowest_price,
+                'mm20': float(row.get('mm20', 0)) if pd.notna(row.get('mm20')) else None,
+                'mm50': float(row.get('mm50', 0)) if pd.notna(row.get('mm50')) else None,
+                'mm_decision': row.get('mm_decision'),
+                'bollinger_upper': float(row.get('bollinger_superior', 0)) if pd.notna(row.get('bollinger_superior')) else None,
+                'bollinger_lower': float(row.get('bollinger_inferior', 0)) if pd.notna(row.get('bollinger_inferior')) else None,
+                'bollinger_decision': row.get('bollinger_decision'),
+                'macd_value': float(row.get('macd_line', 0)) if pd.notna(row.get('macd_line')) else None,
+                'macd_signal': float(row.get('signal_line', 0)) if pd.notna(row.get('signal_line')) else None,
+                'macd_decision': row.get('macd_decision'),
+                'rsi_value': float(row.get('rsi', 0)) if pd.notna(row.get('rsi')) else None,
+                'rsi_decision': row.get('rsi_decision'),
+                'stochastic_k': float(row.get('stochastic_k', 0)) if pd.notna(row.get('stochastic_k')) else None,
+                'stochastic_d': float(row.get('stochastic_d', 0)) if pd.notna(row.get('stochastic_d')) else None,
+                'stochastic_decision': row.get('stochastic_decision'),
+                'full_analysis': analysis,
+                'technical_conclusion': '',  # Peut être extrait du texte si nécessaire
+                'fundamental_analysis': fundamental_text,
+                'investment_conclusion': '',  # Peut être extrait du texte si nécessaire
+                'recommendation': recommendation,
+                'recommendation_score': rec_score,
+                'confidence_level': 'Moyen',  # Par défaut
+                'risk_level': 'Moyen',  # Par défaut
+                'investment_horizon': 'Moyen terme'  # Par défaut
+            }
         
-        # Création document
-        filename = self._create_word_document(all_analyses)
+        # Création document avec synthèse enrichie
+        filename = self._create_word_document(all_analyses, all_company_data)
         
         logging.info(f"\n✅ Rapport professionnel généré: {filename}")
         logging.info(f"📊 Requêtes Mistral effectuées: {self.request_count}")
