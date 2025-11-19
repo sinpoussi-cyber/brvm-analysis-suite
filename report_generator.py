@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V27.0 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB
+# MODULE: REPORT GENERATOR V27.1 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB
 # ==============================================================================
 
 import os
@@ -15,8 +15,7 @@ import time
 import json
 from collections import defaultdict
 
-logging
-.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 # --- Configuration & Secrets ---
 DB_NAME = os.environ.get('DB_NAME')
@@ -35,9 +34,8 @@ class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
         self.request_count = 0
-        self.all_recommendations = {}  # Pour stocker toutes les recommandations
+        self.all_recommendations = {}
         
-        # Connexion DB
         try:
             self.db_conn = psycopg2.connect(
                 dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
@@ -123,7 +121,7 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _get_all_data_from_db(self):
-        """Récupération optimisée des données avec company_id"""
+        """Récupération optimisée des données"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
         
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -193,9 +191,6 @@ class BRVMReportGenerator:
             logging.info(f"   ✅ {len(df)} société(s) récupérée(s)")
             return df
             
-        except psycopg2.errors.QueryCanceled:
-            logging.error("❌ Timeout SQL")
-            return pd.DataFrame()
         except Exception as e:
             logging.error(f"❌ Erreur requête SQL: {e}")
             return pd.DataFrame()
@@ -249,16 +244,15 @@ class BRVMReportGenerator:
             return 'CONSERVER', 3
 
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse professionnelle détaillée avec Mistral AI"""
+        """Génération analyse professionnelle détaillée"""
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
         if not MISTRAL_API_KEY:
-            logging.warning(f"    ⚠️  Aucune clé Mistral disponible pour {symbol}")
+            logging.warning(f"    ⚠️  Aucune clé Mistral pour {symbol}")
             return self._generate_fallback_analysis(symbol, data_dict)
         
-        # Construire le contexte détaillé
         prompt = f"""Tu es un analyste financier professionnel. Analyse l'action {symbol} et génère un rapport structuré en 4 parties.
 
 📊 DONNÉES DISPONIBLES:
@@ -333,7 +327,6 @@ IMPORTANT:
 - Si une donnée manque, mentionne-le clairement
 - Commence chaque partie par son titre en gras"""
 
-        # ✅ MISTRAL AI API
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
@@ -341,9 +334,7 @@ IMPORTANT:
         
         request_body = {
             "model": MISTRAL_MODEL,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 3000,
             "temperature": 0.4
         }
@@ -357,29 +348,21 @@ IMPORTANT:
                 data = response.json()
                 if 'choices' in data and len(data['choices']) > 0:
                     text = data['choices'][0]['message']['content']
-                    logging.info(f"    ✅ {symbol}: Analyse professionnelle générée")
+                    logging.info(f"    ✅ {symbol}: Analyse générée")
                     return text
                 else:
-                    logging.warning(f"    ⚠️  Réponse vide pour {symbol}")
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
-                
                 if attempt < max_attempts:
                     time.sleep(10)
                     return self._generate_professional_analysis(symbol, data_dict, attempt + 1, max_attempts)
                 else:
-                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
                     return self._generate_fallback_analysis(symbol, data_dict)
             
             else:
-                logging.error(f"    ❌ Erreur {response.status_code} pour {symbol}: {response.text[:200]}")
                 return self._generate_fallback_analysis(symbol, data_dict)
                 
-        except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout pour {symbol}")
-            return self._generate_fallback_analysis(symbol, data_dict)
         except Exception as e:
             logging.error(f"    ❌ Exception pour {symbol}: {str(e)}")
             return self._generate_fallback_analysis(symbol, data_dict)
@@ -388,14 +371,12 @@ IMPORTANT:
         """Analyse de secours structurée"""
         analysis = f"**ANALYSE DE {symbol}**\n\n"
         
-        # Partie 1: Évolution du cours
         analysis += "**PARTIE 1 : ANALYSE DE L'ÉVOLUTION DU COURS (100 derniers jours)**\n\n"
         if data_dict.get('historical_summary'):
             analysis += f"{data_dict['historical_summary']}\n\n"
         else:
             analysis += "Les données historiques sur 100 jours ne sont pas disponibles pour cette action.\n\n"
         
-        # Partie 2: Analyse technique
         analysis += "**PARTIE 2 : ANALYSE TECHNIQUE DÉTAILLÉE**\n\n"
         
         signals = []
@@ -419,7 +400,6 @@ IMPORTANT:
             signals.append(data_dict['stochastic_decision'])
             analysis += f"**Stochastique**: Le stochastique recommande {data_dict['stochastic_decision'].lower()}.\n\n"
         
-        # Conclusion technique
         buy_count = signals.count('Achat')
         sell_count = signals.count('Vente')
         
@@ -430,28 +410,20 @@ IMPORTANT:
         else:
             analysis += "**Conclusion technique**: Les indicateurs sont mixtes, suggérant une position de conservation.\n\n"
         
-        # Partie 3: Analyse fondamentale
         analysis += "**PARTIE 3 : ANALYSE FONDAMENTALE**\n\n"
         if data_dict.get('fundamental_analyses'):
             analysis += f"{data_dict['fundamental_analyses'][:500]}...\n\n"
         else:
             analysis += "Aucune analyse fondamentale récente n'est disponible pour cette société.\n\n"
         
-        # Partie 4: Conclusion
         analysis += "**PARTIE 4 : CONCLUSION D'INVESTISSEMENT**\n\n"
         
         if buy_count > sell_count:
-            analysis += f"**Recommandation: ACHAT**\n\nEn combinant l'analyse technique ({buy_count} signaux d'achat sur {len(signals)}) "
-            analysis += "et les éléments fondamentaux disponibles, cette action présente des perspectives favorables. "
-            analysis += "Niveau de confiance: Moyen. Niveau de risque: Moyen. Horizon: Moyen terme.\n"
+            analysis += f"**Recommandation: ACHAT**\n\nEn combinant l'analyse technique ({buy_count} signaux d'achat sur {len(signals)}) et les éléments fondamentaux disponibles, cette action présente des perspectives favorables. Niveau de confiance: Moyen. Niveau de risque: Moyen. Horizon: Moyen terme.\n"
         elif sell_count > buy_count:
-            analysis += f"**Recommandation: VENTE**\n\nL'analyse technique ({sell_count} signaux de vente sur {len(signals)}) "
-            analysis += "suggère une prudence. Il est recommandé d'envisager une sortie de position. "
-            analysis += "Niveau de confiance: Moyen. Niveau de risque: Élevé. Horizon: Court terme.\n"
+            analysis += f"**Recommandation: VENTE**\n\nL'analyse technique ({sell_count} signaux de vente sur {len(signals)}) suggère une prudence. Il est recommandé d'envisager une sortie de position. Niveau de confiance: Moyen. Niveau de risque: Élevé. Horizon: Court terme.\n"
         else:
-            analysis += "**Recommandation: CONSERVER**\n\nLes signaux techniques mixtes et l'absence d'éléments fondamentaux "
-            analysis += "déterminants suggèrent de maintenir la position actuelle. "
-            analysis += "Niveau de confiance: Faible. Niveau de risque: Moyen. Horizon: Moyen terme.\n"
+            analysis += "**Recommandation: CONSERVER**\n\nLes signaux techniques mixtes et l'absence d'éléments fondamentaux déterminants suggèrent de maintenir la position actuelle. Niveau de confiance: Faible. Niveau de risque: Moyen. Horizon: Moyen terme.\n"
         
         return analysis
 
@@ -461,7 +433,6 @@ IMPORTANT:
         
         try:
             with self.db_conn.cursor() as cur:
-                # 1. Insérer le résumé global
                 cur.execute("""
                     INSERT INTO report_summary (
                         report_date, synthesis_text, top_10_buy, flop_10_sell, 
@@ -487,7 +458,6 @@ IMPORTANT:
                 
                 report_summary_id = cur.fetchone()[0]
                 
-                # 2. Insérer les analyses détaillées par société
                 for symbol, company_data in all_company_data.items():
                     cur.execute("""
                         INSERT INTO report_company_analysis (
@@ -538,7 +508,7 @@ IMPORTANT:
                         company_data.get('stochastic_k'),
                         company_data.get('stochastic_d'),
                         company_data.get('stochastic_decision'),
-                        company_data.get('full_analysis', ''),  # Texte complet
+                        company_data.get('full_analysis', ''),
                         company_data.get('technical_conclusion', ''),
                         company_data.get('fundamental_analysis', ''),
                         company_data.get('investment_conclusion', ''),
@@ -556,17 +526,15 @@ IMPORTANT:
             self.db_conn.rollback()
 
     def _create_word_document(self, all_analyses, all_company_data):
-        """Création du document Word professionnel avec synthèse enrichie"""
-        logging.info("📄 Création du document Word professionnel...")
+        """Création du document Word professionnel"""
+        logging.info("📄 Création du document Word...")
         
         doc = Document()
         
-        # Style du document
         style = doc.styles['Normal']
         style.font.name = 'Calibri'
         style.font.size = Pt(11)
         
-        # En-tête
         title = doc.add_heading('RAPPORT D\'ANALYSE BRVM', 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title_run = title.runs[0]
@@ -587,12 +555,9 @@ IMPORTANT:
         doc.add_paragraph()
         doc.add_page_break()
         
-        # ═══════════════════════════════════════════════════════════
-        # SYNTHÈSE GÉNÉRALE ENRICHIE
-        # ═══════════════════════════════════════════════════════════
+        # SYNTHÈSE ENRICHIE
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
         
-        # Contexte marché
         market_indicators = self._get_market_indicators()
         if market_indicators:
             intro = doc.add_paragraph(
@@ -622,13 +587,11 @@ IMPORTANT:
             )
         
         intro.paragraph_format.space_after = Pt(12)
-        
         doc.add_paragraph()
         
         # TOP 10 ACHATS
         doc.add_heading('📈 TOP 10 DES OPPORTUNITÉS D\'ACHAT', level=2)
         
-        # Trier par score de recommandation
         sorted_buy = sorted(
             [(symbol, data) for symbol, data in all_company_data.items()],
             key=lambda x: x[1].get('recommendation_score', 0),
@@ -709,16 +672,13 @@ IMPORTANT:
         doc.add_heading('ANALYSES DÉTAILLÉES', level=1)
         
         for idx, (symbol, analysis) in enumerate(sorted(all_analyses.items()), 1):
-            # Titre de la société
             company_heading = doc.add_heading(f"{idx}. {symbol}", level=2)
             company_heading.paragraph_format.space_before = Pt(18)
             company_heading_run = company_heading.runs[0]
             company_heading_run.font.color.rgb = RGBColor(0, 102, 204)
             
-            # Ligne de séparation
             doc.add_paragraph("─" * 80)
             
-            # Contenu de l'analyse
             paragraphs = analysis.split('\n\n')
             for para_text in paragraphs:
                 if para_text.strip():
@@ -726,18 +686,15 @@ IMPORTANT:
                     p.paragraph_format.space_after = Pt(6)
                     p.paragraph_format.line_spacing = 1.15
                     
-                    # Mise en gras des titres de parties
                     if para_text.startswith('**PARTIE') or para_text.startswith('**CONCLUSION'):
                         p.runs[0].bold = True
                         p.runs[0].font.size = Pt(12)
                         p.runs[0].font.color.rgb = RGBColor(0, 51, 102)
                         p.paragraph_format.space_before = Pt(12)
             
-            # Espacement entre sociétés
             doc.add_paragraph()
             doc.add_paragraph("═" * 80)
             
-            # Page break tous les 2 sociétés
             if idx % 2 == 0 and idx < len(all_analyses):
                 doc.add_page_break()
         
@@ -745,22 +702,19 @@ IMPORTANT:
         doc.add_page_break()
         footer = doc.add_heading('NOTES IMPORTANTES', level=1)
         footer_text = doc.add_paragraph(
-            "1. Les analyses techniques sont basées sur les 5 indicateurs classiques (MM, Bollinger, MACD, RSI, Stochastique).\n"
-            "2. Les analyses fondamentales proviennent des rapports financiers officiels publiés par les sociétés.\n"
+            "1. Les analyses techniques sont basées sur les 5 indicateurs classiques.\n"
+            "2. Les analyses fondamentales proviennent des rapports financiers officiels.\n"
             "3. Les recommandations sont générées par intelligence artificielle (Mistral AI).\n"
             "4. Tous les cours sont en FCFA (Francs CFA).\n"
             "5. Les prédictions sont des estimations basées sur des modèles statistiques.\n"
-            "6. Ce document est confidentiel et destiné uniquement à l'usage professionnel."
+            "6. Ce document est confidentiel et destiné à l'usage professionnel."
         )
-        footer_text.paragraph_format.space_after = Pt(6)
         
-        # Sauvegarde
         filename = f"Rapport_Professionnel_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
         
         logging.info(f"   ✅ Document créé: {filename}")
         
-        # Sauvegarder dans la DB
         synthesis_text = (
             f"Analyse de {len(all_analyses)} sociétés. "
             f"Indices: BRVM Composite {market_indicators.get('composite', 0):.2f} pts. "
@@ -780,9 +734,9 @@ IMPORTANT:
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
-        """Génération du rapport complet professionnel"""
+        """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS PROFESSIONNELS (V27.0 - Mistral AI)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V27.1 - Mistral AI)")
         logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
@@ -792,17 +746,15 @@ IMPORTANT:
         
         logging.info("✅ Clé Mistral chargée")
         
-        # Récupération données
         df = self._get_all_data_from_db()
         
         if df.empty:
-            logging.error("❌ Aucune donnée disponible - rapport impossible")
+            logging.error("❌ Aucune donnée disponible")
             return
         
         predictions_df = self._get_predictions_from_db()
         
-        # Génération analyses professionnelles
-        logging.info(f"🤖 Génération de {len(df)} analyse(s) professionnelle(s) détaillée(s)...")
+        logging.info(f"🤖 Génération de {len(df)} analyse(s)...")
         
         all_analyses = {}
         all_company_data = {}
@@ -811,7 +763,6 @@ IMPORTANT:
             symbol = row['symbol']
             company_id = row['company_id']
             
-            # Récupérer l'historique 100 jours
             hist_df = self._get_historical_data_100days(company_id)
             
             historical_summary = "Données historiques non disponibles."
@@ -837,7 +788,6 @@ IMPORTANT:
                     f"Volume moyen échangé: {hist_df['volume'].mean():.0f} titres."
                 )
             
-            # Préparer les analyses fondamentales
             fundamental_text = ""
             if row.get('fundamental_summaries') and pd.notna(row['fundamental_summaries']):
                 reports = row['fundamental_summaries'].split('###REPORT###')
@@ -852,7 +802,6 @@ IMPORTANT:
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
             
-            # Préparer contexte complet
             data_dict = {
                 'price': row.get('price'),
                 'volume': row.get('volume'),
@@ -875,7 +824,6 @@ IMPORTANT:
                 'predictions': []
             }
             
-            # Prédictions
             symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
             if not symbol_predictions.empty:
                 data_dict['predictions'] = [
@@ -887,14 +835,11 @@ IMPORTANT:
             else:
                 data_dict['predictions_text'] = "Aucune prédiction disponible"
             
-            # Génération analyse professionnelle
             analysis = self._generate_professional_analysis(symbol, data_dict)
             all_analyses[symbol] = analysis
             
-            # Extraire recommandation
             recommendation, rec_score = self._extract_recommendation_from_analysis(analysis)
             
-            # Stocker toutes les données structurées
             all_company_data[symbol] = {
                 'company_id': company_id,
                 'company_name': row.get('company_name'),
@@ -918,24 +863,22 @@ IMPORTANT:
                 'stochastic_d': float(row.get('stochastic_d', 0)) if pd.notna(row.get('stochastic_d')) else None,
                 'stochastic_decision': row.get('stochastic_decision'),
                 'full_analysis': analysis,
-                'technical_conclusion': '',  # Peut être extrait du texte si nécessaire
+                'technical_conclusion': '',
                 'fundamental_analysis': fundamental_text,
-                'investment_conclusion': '',  # Peut être extrait du texte si nécessaire
+                'investment_conclusion': '',
                 'recommendation': recommendation,
                 'recommendation_score': rec_score,
-                'confidence_level': 'Moyen',  # Par défaut
-                'risk_level': 'Moyen',  # Par défaut
-                'investment_horizon': 'Moyen terme'  # Par défaut
+                'confidence_level': 'Moyen',
+                'risk_level': 'Moyen',
+                'investment_horizon': 'Moyen terme'
             }
         
-        # Création document avec synthèse enrichie
         filename = self._create_word_document(all_analyses, all_company_data)
         
-        logging.info(f"\n✅ Rapport professionnel généré: {filename}")
-        logging.info(f"📊 Requêtes Mistral effectuées: {self.request_count}")
+        logging.info(f"\n✅ Rapport généré: {filename}")
+        logging.info(f"📊 Requêtes Mistral: {self.request_count}")
 
     def __del__(self):
-        """Fermeture connexion DB"""
         if self.db_conn and not self.db_conn.closed:
             self.db_conn.close()
 
