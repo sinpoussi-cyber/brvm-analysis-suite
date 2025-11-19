@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V27.1 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB
+# MODULE: REPORT GENERATOR V27.2 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB (CORRIGÉ)
 # ==============================================================================
 
 import os
@@ -90,12 +90,15 @@ class BRVMReportGenerator:
             df = pd.read_sql(query, self.db_conn)
             if not df.empty:
                 row = df.iloc[0]
-                return {
-                    'composite': row.get('brvm_composite'),
-                    'composite_var_day': row.get('variation_journaliere_brvm_composite'),
-                    'composite_var_ytd': row.get('variation_ytd_brvm_composite'),
-                    'capitalisation': row.get('capitalisation_globale')
-                }
+                # Vérifier que les valeurs ne sont pas None
+                composite = row.get('brvm_composite')
+                if pd.notna(composite):
+                    return {
+                        'composite': float(composite),
+                        'composite_var_day': float(row.get('variation_journaliere_brvm_composite')) if pd.notna(row.get('variation_journaliere_brvm_composite')) else None,
+                        'composite_var_ytd': float(row.get('variation_ytd_brvm_composite')) if pd.notna(row.get('variation_ytd_brvm_composite')) else None,
+                        'capitalisation': float(row.get('capitalisation_globale')) if pd.notna(row.get('capitalisation_globale')) else None
+                    }
             return None
         except Exception as e:
             logging.error(f"❌ Erreur récupération indicateurs: {e}")
@@ -555,19 +558,19 @@ IMPORTANT:
         doc.add_paragraph()
         doc.add_page_break()
         
-        # SYNTHÈSE ENRICHIE
+        # SYNTHÈSE ENRICHIE (CORRIGÉE)
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
         
         market_indicators = self._get_market_indicators()
-        if market_indicators:
-            intro = doc.add_paragraph(
-                f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
-                f"à la Bourse Régionale des Valeurs Mobilières (BRVM). "
-            )
-            
+        intro = doc.add_paragraph(
+            f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
+            f"à la Bourse Régionale des Valeurs Mobilières (BRVM). "
+        )
+        
+        if market_indicators and market_indicators.get('composite'):
             intro.add_run(f"L'indice BRVM Composite s'établit à {market_indicators['composite']:.2f} points ")
             
-            if market_indicators.get('composite_var_day'):
+            if market_indicators.get('composite_var_day') is not None:
                 var_day = market_indicators['composite_var_day']
                 if var_day > 0:
                     run = intro.add_run(f"(+{var_day:.2f}%)")
@@ -575,16 +578,12 @@ IMPORTANT:
                 else:
                     run = intro.add_run(f"({var_day:.2f}%)")
                     run.font.color.rgb = RGBColor(192, 0, 0)
-            
-            intro.add_run(f" sur la séance. ")
+                intro.add_run(f" sur la séance. ")
             
             if market_indicators.get('capitalisation'):
                 intro.add_run(f"La capitalisation globale du marché atteint {market_indicators['capitalisation']/1e9:.2f} milliards FCFA.")
         else:
-            intro = doc.add_paragraph(
-                f"Ce rapport présente une analyse détaillée de {len(all_analyses)} sociétés cotées "
-                f"à la Bourse Régionale des Valeurs Mobilières (BRVM)."
-            )
+            intro.add_run("Les indicateurs de marché seront mis à jour prochainement.")
         
         intro.paragraph_format.space_after = Pt(12)
         doc.add_paragraph()
@@ -715,11 +714,15 @@ IMPORTANT:
         
         logging.info(f"   ✅ Document créé: {filename}")
         
-        synthesis_text = (
-            f"Analyse de {len(all_analyses)} sociétés. "
-            f"Indices: BRVM Composite {market_indicators.get('composite', 0):.2f} pts. "
-            f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA."
-        )
+        # Préparer la synthèse pour la DB (CORRIGÉE)
+        if market_indicators and market_indicators.get('composite'):
+            synthesis_text = (
+                f"Analyse de {len(all_analyses)} sociétés. "
+                f"Indices: BRVM Composite {market_indicators['composite']:.2f} pts. "
+                f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA."
+            )
+        else:
+            synthesis_text = f"Analyse de {len(all_analyses)} sociétés de la BRVM."
         
         self._save_to_database(
             datetime.now().date(),
@@ -736,7 +739,7 @@ IMPORTANT:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport complet"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V27.1 - Mistral AI)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V27.2 - Mistral AI)")
         logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
         logging.info("="*80)
         
