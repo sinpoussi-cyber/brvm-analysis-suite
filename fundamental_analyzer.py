@@ -1,12 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V27.0 - LIENS DIRECTS (MISTRAL AI)
-# ==============================================================================
-# Améliorations V27.0:
-# - Utilisation des liens directs pour chaque société (plus de scraping générique)
-# - Extraction optimisée des rapports financiers
-# - Analyse uniquement des nouveaux rapports (non présents en base)
-# - Logs détaillés par société
-# - Meilleure gestion des erreurs
+# MODULE: FUNDAMENTAL ANALYZER V27.2 - MISTRAL AI AVEC EXTRACTION TEXTE PDF
 # ==============================================================================
 
 import requests
@@ -18,13 +11,14 @@ from datetime import datetime
 import logging
 import unicodedata
 import urllib3
-import base64
 from collections import defaultdict
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import psycopg2
+import PyPDF2
+import io
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -41,63 +35,58 @@ MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
 MISTRAL_MODEL = "mistral-large-latest"
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
-# ✅ OPTIONS
-MIN_YEAR = int(os.environ.get('MIN_YEAR', '2015'))  # Année minimale pour filtrer
-
 
 class BRVMAnalyzer:
     def __init__(self):
-        # ✅ LIENS DIRECTS DES SOCIÉTÉS COTÉES (depuis le document Word)
-        self.societes_links = {
-            'ABJC': {'name': 'SERVAIR ABIDJAN CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/servair-abidjan-ci'},
-            'BICB': {'name': 'BIIC BN', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/biic'},
-            'BICC': {'name': 'BICI CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bici-ci'},
-            'BNBC': {'name': 'BERNABE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bernabe-ci'},
-            'BOAB': {'name': 'BANK OF AFRICA BN', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-bn'},
-            'BOABF': {'name': 'BANK OF AFRICA BF', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-bf'},
-            'BOAC': {'name': 'BANK OF AFRICA CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-ci'},
-            'BOAM': {'name': 'BANK OF AFRICA ML', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-ml'},
-            'BOAN': {'name': 'BANK OF AFRICA NG', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-ng'},
-            'BOAS': {'name': 'BANK OF AFRICA SENEGAL', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bank-africa-sn'},
-            'CABC': {'name': 'SICABLE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sicable'},
-            'CBIBF': {'name': 'CORIS BANK INTERNATIONAL', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/coris-bank-international'},
-            'CFAC': {'name': 'CFAO MOTORS CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/cfao-motors-ci'},
-            'CIEC': {'name': 'CIE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/cie-ci'},
-            'ECOC': {'name': "ECOBANK COTE D'IVOIRE", 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/ecobank-ci'},
-            'ETIT': {'name': 'ECOBANK TRANS. INCORP. TG', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/ecobank-tg'},
-            'FTSC': {'name': 'FILTISAC CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/filtisac-ci'},
-            'LNBB': {'name': 'LOTERIE NATIONALE DU BENIN', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/lnb'},
-            'NEIC': {'name': 'NEI-CEDA CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/nei-ceda-ci'},
-            'NSBC': {'name': "NSIA BANQUE COTE D'IVOIRE", 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/nsbc'},
-            'NTLC': {'name': 'NESTLE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/nestle-ci'},
-            'ONTBF': {'name': 'ONATEL BF', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/onatel-bf'},
-            'ORAC': {'name': "ORANGE COTE D'IVOIRE", 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/orange-ci'},
-            'ORGT': {'name': 'ORAGROUP TOGO', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/oragroup'},
-            'PALC': {'name': 'PALM CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/palm-ci'},
-            'PRSC': {'name': 'TRACTAFRIC MOTORS CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/tractafric-ci'},
-            'SAFC': {'name': 'SAFCA CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/safca-ci'},
-            'SCRC': {'name': 'SUCRIVOIRE', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sucrivoire'},
-            'SDCC': {'name': 'SODE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sodeci'},
-            'SDSC': {'name': 'AFRICA GLOBAL LOGISTICS CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/bollore-transport-logistics'},
-            'SEMC': {'name': 'CROWN SIEM CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/crown-siem-ci'},  # Manquant dans le doc, ajouté
-            'SGBC': {'name': "SOCIETE GENERALE COTE D'IVOIRE", 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sgb-ci'},
-            'SHEC': {'name': 'VIVO ENERGY CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/vivo-energy-ci'},
-            'SIBC': {'name': 'SOCIETE IVOIRIENNE DE BANQUE', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sib'},
-            'SICC': {'name': 'SICOR CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sicor'},
-            'SIVC': {'name': 'AIR LIQUIDE CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/air-liquide-ci'},
-            'SLBC': {'name': 'SOLIBRA CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/solibra'},
-            'SMBC': {'name': 'SMB CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/smb'},
-            'SNTS': {'name': 'SONATEL SN', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sonatel'},
-            'SOGC': {'name': 'SOGB CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sgb-ci'},
-            'SPHC': {'name': 'SAPH CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/saph-ci'},
-            'STAC': {'name': 'SETAO CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/setao-ci'},
-            'STBC': {'name': 'SITAB CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/sitab'},
-            'TTLC': {'name': 'TOTALENERGIES MARKETING CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/total'},
-            'TTLS': {'name': 'TOTALENERGIES MARKETING SN', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/ttls'},
-            'UNLC': {'name': 'UNILEVER CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/unilever-ci'},
-            'UNXC': {'name': 'UNIWAX CI', 'url': 'https://www.brvm.org/fr/rapports-societe-cotes/uniwax-ci'}
+        self.societes_mapping = {
+            'NTLC': {'nom_rapport': 'NESTLE CI', 'alternatives': ['nestle ci', 'nestle']},
+            'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci', 'palmci']},
+            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci', 'unilever']},
+            'SLBC': {'nom_rapport': 'SOLIBRA', 'alternatives': ['solibra ci', 'solibra']},
+            'SICC': {'nom_rapport': 'SICOR', 'alternatives': ['sicor ci', 'sicor']},
+            'SPHC': {'nom_rapport': 'SAPH', 'alternatives': ['saph ci', 'saph']},
+            'SCRC': {'nom_rapport': 'SUCRIVOIRE', 'alternatives': ['sucrivoire', 'sucre']},
+            'STBC': {'nom_rapport': 'SITAB', 'alternatives': ['sitab ci', 'sitab']},
+            'SGBC': {'nom_rapport': 'SOCIETE GENERALE', 'alternatives': ['sgci', 'societe generale ci']},
+            'BICC': {'nom_rapport': 'BICI', 'alternatives': ['bici ci', 'bici cote']},
+            'NSBC': {'nom_rapport': 'NSIA BANQUE', 'alternatives': ['nsia ci', 'nsia banque ci']},
+            'ECOC': {'nom_rapport': 'ECOBANK CI', 'alternatives': ['ecobank cote', 'eco ci']},
+            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['boa ci', 'boa cote']},
+            'SIBC': {'nom_rapport': 'SIB', 'alternatives': ['sib ci', 'societe ivoirienne']},
+            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['boa bf', 'boa burkina']},
+            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['boa sn', 'boa senegal']},
+            'BOAM': {'nom_rapport': 'BANK OF AFRICA MALI', 'alternatives': ['boa ml', 'boa mali']},
+            'BOAN': {'nom_rapport': 'BANK OF AFRICA NIGER', 'alternatives': ['boa ng', 'boa niger']},
+            'BOAB': {'nom_rapport': 'BANK OF AFRICA BENIN', 'alternatives': ['boa bn', 'boa benin']},
+            'BICB': {'nom_rapport': 'BICI BENIN', 'alternatives': ['bici bn', 'bici benin']},
+            'CBIBF': {'nom_rapport': 'CORIS BANK', 'alternatives': ['coris banking', 'coris bf']},
+            'ETIT': {'nom_rapport': 'ECOBANK ETI', 'alternatives': ['eti', 'ecobank transnational']},
+            'ORGT': {'nom_rapport': 'ORAGROUP', 'alternatives': ['oragroup togo', 'ora tg']},
+            'SAFC': {'nom_rapport': 'SAFCA', 'alternatives': ['safca ci', 'saf ci']},
+            'SOGC': {'nom_rapport': 'SOGB', 'alternatives': ['sogb ci', 'societe generale burkina']},
+            'SNTS': {'nom_rapport': 'SONATEL', 'alternatives': ['sonatel sn', 'orange senegal']},
+            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange cote', 'oci']},
+            'ONTBF': {'nom_rapport': 'ONATEL', 'alternatives': ['onatel bf', 'onatel burkina']},
+            'TTLC': {'nom_rapport': 'TOTAL CI', 'alternatives': ['totalenergies ci', 'total cote']},
+            'TTLS': {'nom_rapport': 'TOTAL SN', 'alternatives': ['totalenergies sn', 'total senegal']},
+            'SHEC': {'nom_rapport': 'VIVO ENERGY', 'alternatives': ['shell ci', 'vivo ci']},
+            'CIEC': {'nom_rapport': 'CIE', 'alternatives': ['cie ci', 'compagnie ivoirienne']},
+            'CFAC': {'nom_rapport': 'CFAO MOTORS', 'alternatives': ['cfao ci', 'cfao']},
+            'PRSC': {'nom_rapport': 'TRACTAFRIC', 'alternatives': ['tractafric motors', 'tractafric ci']},
+            'SDSC': {'nom_rapport': 'BOLLORE', 'alternatives': ['africa global logistics', 'sdv ci']},
+            'ABJC': {'nom_rapport': 'SERVAIR', 'alternatives': ['servair abidjan', 'servair ci']},
+            'BNBC': {'nom_rapport': 'BERNABE', 'alternatives': ['bernabe ci']},
+            'NEIC': {'nom_rapport': 'NEI-CEDA', 'alternatives': ['nei ceda', 'neiceda']},
+            'UNXC': {'nom_rapport': 'UNIWAX', 'alternatives': ['uniwax ci']},
+            'LNBB': {'nom_rapport': 'LOTERIE BENIN', 'alternatives': ['loterie nationale benin']},
+            'CABC': {'nom_rapport': 'SICABLE', 'alternatives': ['sicable ci']},
+            'FTSC': {'nom_rapport': 'FILTISAC', 'alternatives': ['filtisac ci']},
+            'SDCC': {'nom_rapport': 'SODE', 'alternatives': ['sode ci']},
+            'SEMC': {'nom_rapport': 'EVIOSYS', 'alternatives': ['crown siem', 'eviosys packaging']},
+            'SIVC': {'nom_rapport': 'AIR LIQUIDE', 'alternatives': ['air liquide ci']},
+            'STAC': {'nom_rapport': 'SETAO', 'alternatives': ['setao ci']},
+            'SMBC': {'nom_rapport': 'SMB', 'alternatives': ['smb ci', 'societe miniere']}
         }
-        
         self.driver = None
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
@@ -105,19 +94,6 @@ class BRVMAnalyzer:
         self.company_ids = {}
         self.newly_analyzed_reports = []
         self.request_count = 0
-        
-        # ✅ COMPTEURS DÉTAILLÉS
-        self.stats = {
-            'reports_found': 0,
-            'reports_already_analyzed': 0,
-            'reports_to_analyze': 0,
-            'reports_analyzed_success': 0,
-            'reports_analyzed_failure': 0,
-            'api_calls': 0,
-            'api_errors': 0,
-            'companies_with_reports': 0,
-            'companies_without_reports': 0
-        }
 
     def connect_to_db(self):
         """Connexion à PostgreSQL (Supabase)"""
@@ -144,7 +120,7 @@ class BRVMAnalyzer:
                 urls = cur.fetchall()
                 self.analysis_memory = {row[0] for row in urls}
             
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) en mémoire")
+            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) chargée(s)")
                     
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire: {e}")
@@ -220,77 +196,131 @@ class BRVMAnalyzer:
             self.driver = None
             return False
 
-    def _extract_reports_from_page(self, symbol, url):
-        """Extrait tous les rapports financiers d'une page société"""
-        reports = []
+    def _normalize_text(self, text):
+        """Normalise le texte"""
+        if not text:
+            return ""
+        
+        text = ''.join(c for c in unicodedata.normalize('NFD', text) 
+                       if unicodedata.category(c) != 'Mn')
+        text = ' '.join(text.lower().split())
+        
+        return text
+
+    def _extract_text_from_pdf(self, pdf_content):
+        """Extrait le texte d'un PDF avec PyPDF2"""
+        try:
+            pdf_file = io.BytesIO(pdf_content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            text_parts = []
+            num_pages = len(pdf_reader.pages)
+            
+            # Limiter à 10 premières pages pour éviter de dépasser les limites
+            max_pages = min(num_pages, 10)
+            
+            for page_num in range(max_pages):
+                page = pdf_reader.pages[page_num]
+                text = page.extract_text()
+                if text:
+                    text_parts.append(text)
+            
+            full_text = "\n\n".join(text_parts)
+            
+            # Limiter la taille du texte à ~20000 caractères
+            if len(full_text) > 20000:
+                full_text = full_text[:20000] + "\n\n[... Texte tronqué pour respecter les limites ...]"
+            
+            return full_text
+        
+        except Exception as e:
+            logging.error(f"❌ Erreur extraction PDF: {e}")
+            return None
+
+    def _find_all_reports(self):
+        """Trouve tous les rapports financiers"""
+        all_reports = defaultdict(list)
         
         try:
+            url = "https://www.brvm.org/fr/capitalisation-marche"
             logging.info(f"   🔍 Accès à {url}")
+            
             self.driver.get(url)
             time.sleep(3)
             
-            # Trouver tous les liens PDF
-            pdf_links = self.driver.find_elements(By.TAG_NAME, 'a')
-            
-            for elem in pdf_links:
+            company_links = []
+            elements = self.driver.find_elements(By.TAG_NAME, 'a')
+            for elem in elements:
                 try:
                     href = elem.get_attribute('href')
-                    text = elem.text.strip()
-                    
-                    if not href or not href.endswith('.pdf'):
-                        continue
-                    
-                    # Filtrer uniquement les rapports financiers
-                    keywords = ['rapport', 'financier', 'annuel', 'semestriel', 'trimestriel', 
-                                'etats financiers', 'comptes', 'exercice', 'resultats']
-                    
-                    if any(kw in text.lower() for kw in keywords):
-                        # Extraire l'année
-                        date_match = re.search(r'(20\d{2})', text)
-                        if date_match:
-                            year = int(date_match.group(1))
-                            report_date = datetime(year, 12, 31).date()
-                        else:
-                            report_date = datetime.now().date()
-                        
-                        # Filtrer par année minimale
-                        if report_date.year >= MIN_YEAR:
-                            reports.append({
-                                'url': href,
-                                'titre': text,
-                                'date': report_date
-                            })
-                            self.stats['reports_found'] += 1
-                
-                except Exception as e:
+                    if href and '/societe/' in href:
+                        company_links.append(href)
+                except:
                     continue
             
-            # Trier par date décroissante
-            reports.sort(key=lambda x: x['date'], reverse=True)
+            company_links = list(set(company_links))
+            logging.info(f"   📊 {len(company_links)} page(s) trouvée(s)")
             
-            return reports
+            for idx, link in enumerate(company_links, 1):
+                try:
+                    logging.info(f"   📄 Page {idx}/{len(company_links)}")
+                    self.driver.get(link)
+                    time.sleep(2)
+                    
+                    report_elements = self.driver.find_elements(By.TAG_NAME, 'a')
+                    
+                    for elem in report_elements:
+                        try:
+                            href = elem.get_attribute('href')
+                            text = elem.text.strip()
+                            
+                            if not href or not href.endswith('.pdf'):
+                                continue
+                            
+                            if any(kw in text.lower() for kw in ['rapport', 'financier', 'annuel', 'semestriel']):
+                                date_match = re.search(r'(20\d{2})', text)
+                                report_date = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
+                                
+                                for symbol, info in self.societes_mapping.items():
+                                    nom = self._normalize_text(info['nom_rapport'])
+                                    alts = [self._normalize_text(a) for a in info.get('alternatives', [])]
+                                    text_norm = self._normalize_text(text)
+                                    
+                                    if nom in text_norm or any(a in text_norm for a in alts):
+                                        all_reports[symbol].append({
+                                            'url': href,
+                                            'titre': text,
+                                            'date': report_date
+                                        })
+                                        break
+                        except:
+                            continue
+                            
+                except TimeoutException:
+                    logging.warning(f"   ⏱️  Timeout page {idx}")
+                    continue
+                except WebDriverException as e:
+                    logging.warning(f"   ⚠️  Erreur WebDriver page {idx}: {e}")
+                    continue
+                except Exception as e:
+                    logging.warning(f"   ⚠️  Erreur page {idx}: {e}")
+                    continue
             
-        except TimeoutException:
-            logging.warning(f"   ⏱️  Timeout pour {symbol}")
-            return []
-        except WebDriverException as e:
-            logging.warning(f"   ⚠️  Erreur WebDriver pour {symbol}: {e}")
-            return []
+            logging.info(f"   ✅ {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
+            return all_reports
+        
         except Exception as e:
-            logging.error(f"   ❌ Erreur pour {symbol}: {e}")
-            return []
+            logging.error(f"❌ Erreur recherche: {e}")
+            return {}
 
     def _analyze_pdf_with_mistral(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Mistral AI"""
+        """Analyse un PDF avec Mistral AI (EXTRACTION TEXTE + ANALYSE)"""
         pdf_url = report['url']
         
-        # Vérifier si déjà analysé
         if pdf_url in self.analysis_memory:
             logging.info(f"    ⏭️  Déjà analysé")
-            self.stats['reports_already_analyzed'] += 1
             return None
         
-        # Vérifier en base
         conn = self.connect_to_db()
         if conn:
             try:
@@ -299,44 +329,73 @@ class BRVMAnalyzer:
                     if cur.fetchone():
                         logging.info(f"    ⏭️  Déjà en base")
                         self.analysis_memory.add(pdf_url)
-                        self.stats['reports_already_analyzed'] += 1
                         return None
             finally:
                 conn.close()
         
         if attempt == 1:
-            logging.info(f"    🆕 NOUVEAU: {report['titre'][:60]}...")
-            self.stats['reports_to_analyze'] += 1
+            logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
         else:
             logging.info(f"    🔄 Tentative {attempt}/{max_attempts}")
         
-        # Télécharger le PDF
+        # ✅ ÉTAPE 1 : Télécharger et extraire le texte du PDF
         try:
+            logging.info(f"    📥 Téléchargement PDF...")
             pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
             pdf_response.raise_for_status()
-            pdf_data = base64.b64encode(pdf_response.content).decode('utf-8')
+            
+            logging.info(f"    📝 Extraction texte PDF...")
+            pdf_text = self._extract_text_from_pdf(pdf_response.content)
+            
+            if not pdf_text or len(pdf_text) < 100:
+                logging.warning(f"    ⚠️  PDF vide ou texte insuffisant pour {symbol}")
+                fallback_text = f"Le rapport PDF n'a pas pu être analysé (texte insuffisant). Titre: {report['titre']}"
+                self._save_to_db(company_id, report, fallback_text)
+                return False
+            
+            logging.info(f"    ✅ Texte extrait: {len(pdf_text)} caractères")
+                
         except Exception as e:
-            logging.error(f"    ❌ Erreur téléchargement PDF: {e}")
-            self.stats['reports_analyzed_failure'] += 1
+            logging.error(f"    ❌ Erreur téléchargement/extraction PDF: {e}")
             return False
         
-        prompt = """Tu es un analyste financier expert. Analyse ce rapport financier et fournis une synthèse concise en français.
+        # ✅ ÉTAPE 2 : Envoyer le TEXTE à Mistral AI pour analyse
+        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier de {symbol} (BRVM) et fournis une synthèse structurée en français.
 
-Concentre-toi sur :
-- **Chiffre d'Affaires** : Variation en % et valeur
-- **Résultat Net** : Évolution et facteurs
-- **Dividendes** : Proposé, payé ou perspectives
-- **Performance Opérationnelle** : Rentabilité
-- **Perspectives** : Points clés
+TEXTE DU RAPPORT FINANCIER:
+{pdf_text}
 
-Si une info manque, mentionne-le clairement."""
+Analyse et fournis:
+
+**CHIFFRE D'AFFAIRES:**
+- Montant et évolution (en % et valeur absolue)
+- Comparaison avec période précédente
+
+**RÉSULTAT NET:**
+- Montant et évolution
+- Facteurs explicatifs (charges, produits exceptionnels, etc.)
+
+**DIVIDENDES:**
+- Montant proposé ou versé par action
+- Rendement et politique de distribution
+
+**RENTABILITÉ:**
+- ROE, ROA si disponibles
+- Marges (brute, opérationnelle, nette)
+- Commentaires sur la performance
+
+**PERSPECTIVES:**
+- Projets en cours ou annoncés
+- Orientations stratégiques
+- Risques identifiés
+
+Sois factuel, précis avec les chiffres, et concis (5-8 paragraphes maximum). Si une information manque, indique-le clairement."""
         
         if not MISTRAL_API_KEY:
             logging.error(f"    ❌ Aucune clé Mistral disponible")
-            self.stats['reports_analyzed_failure'] += 1
             return False
         
-        # ✅ MISTRAL AI API
+        # ✅ MISTRAL AI API (TEXTE UNIQUEMENT)
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
@@ -347,23 +406,18 @@ Si une info manque, mentionne-le clairement."""
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:application/pdf;base64,{pdf_data}"
-                        }
-                    ]
+                    "content": prompt
                 }
             ],
-            "max_tokens": 2000,
+            "max_tokens": 2500,
             "temperature": 0.3
         }
         
         try:
+            logging.info(f"    🤖 Envoi à Mistral AI pour analyse...")
             response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=120)
             
-            self.stats['api_calls'] += 1
+            self.request_count += 1
             
             if response.status_code == 200:
                 response_json = response.json()
@@ -373,52 +427,40 @@ Si une info manque, mentionne-le clairement."""
                     
                     if self._save_to_db(company_id, report, analysis_text):
                         self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                        logging.info(f"    ✅ {symbol}: Analyse générée")
-                        self.stats['reports_analyzed_success'] += 1
+                        logging.info(f"    ✅ {symbol}: Analyse générée et sauvegardée")
                         return True
                 
                 logging.warning(f"    ⚠️  Réponse Mistral malformée")
-                self.stats['api_errors'] += 1
                 return False
             
             elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit pour {symbol} (tentative {attempt}/{max_attempts})")
+                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol} (tentative {attempt}/{max_attempts})")
                 
                 if attempt < max_attempts:
                     time.sleep(10)
                     return self._analyze_pdf_with_mistral(company_id, symbol, report, attempt + 1, max_attempts)
                 else:
                     logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
-                    fallback_text = f"Analyse automatique indisponible. Rapport: {report['titre']}"
+                    fallback_text = f"Analyse automatique indisponible (rate limit). Rapport: {report['titre']}"
                     self._save_to_db(company_id, report, fallback_text)
-                    self.stats['reports_analyzed_failure'] += 1
-                    self.stats['api_errors'] += 1
                     return False
             
             else:
                 logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
-                self.stats['api_errors'] += 1
-                self.stats['reports_analyzed_failure'] += 1
                 return False
                 
         except requests.exceptions.Timeout:
             logging.error(f"    ⏱️  Timeout API Mistral")
-            self.stats['api_errors'] += 1
-            self.stats['reports_analyzed_failure'] += 1
             return False
         except Exception as e:
             logging.error(f"    ❌ Exception: {e}")
-            self.stats['api_errors'] += 1
-            self.stats['reports_analyzed_failure'] += 1
             return False
 
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V27.0 - LIENS DIRECTS)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V27.2 - Mistral AI + Extraction PDF)")
         logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
-        logging.info(f"📅 Année minimale: {MIN_YEAR}")
-        logging.info(f"📊 Sociétés configurées: {len(self.societes_links)}")
         logging.info("="*80)
         
         conn = None
@@ -428,15 +470,14 @@ Si une info manque, mentionne-le clairement."""
                 return {}, []
             
             logging.info("✅ Clé Mistral chargée")
+            logging.info("📝 Méthode: Extraction texte PDF → Analyse Mistral AI")
             
-            # Charger mémoire
             self._load_analysis_memory_from_db()
             
             if not self.setup_selenium():
                 logging.error("❌ Impossible d'initialiser Selenium")
                 return {}, []
             
-            # Récupérer les IDs des sociétés
             conn = self.connect_to_db()
             if not conn: 
                 return {}, []
@@ -448,70 +489,47 @@ Si une info manque, mentionne-le clairement."""
             
             self.company_ids = {symbol: (id, name) for symbol, id, name in companies_from_db}
             
-            logging.info(f"\n🔍 Phase 1: Extraction des rapports (liens directs)...")
+            logging.info(f"\n🔍 Phase 1: Collecte rapports...")
+            all_reports = self._find_all_reports()
             
-            # Pour chaque société dans les liens
-            for symbol, link_data in sorted(self.societes_links.items()):
-                if symbol not in self.company_ids:
-                    logging.warning(f"⚠️  {symbol} non trouvé en base")
-                    continue
-                
-                company_id, company_name = self.company_ids[symbol]
-                company_url = link_data['url']
-                
+            logging.info(f"\n🤖 Phase 2: Analyse IA (Extraction PDF → Texte → Mistral)...")
+            
+            total_analyzed = 0
+            total_skipped = 0
+            
+            for symbol, (company_id, company_name) in self.company_ids.items():
                 logging.info(f"\n📊 {symbol} - {company_name}")
+                company_reports = all_reports.get(symbol, [])
                 
-                # Extraire les rapports de la page
-                reports = self._extract_reports_from_page(symbol, company_url)
-                
-                if not reports:
-                    logging.info(f"   ⏭️  Aucun rapport trouvé (ou tous < {MIN_YEAR})")
-                    self.stats['companies_without_reports'] += 1
+                if not company_reports:
+                    logging.info(f"   ⏭️  Aucun rapport")
                     continue
                 
-                self.stats['companies_with_reports'] += 1
+                date_2024 = datetime(2024, 1, 1).date()
+                recent = [r for r in company_reports if r['date'] >= date_2024]
+                recent.sort(key=lambda x: x['date'], reverse=True)
                 
-                # Afficher les rapports trouvés
-                logging.info(f"   📂 {len(reports)} rapport(s) depuis {MIN_YEAR}")
-                for report in reports:
-                    year = report['date'].year
-                    title = report['titre'][:50]
-                    if report['url'] in self.analysis_memory:
-                        logging.info(f"      ✓ {year} - {title}... (déjà analysé)")
-                    else:
-                        logging.info(f"      ○ {year} - {title}... (à analyser)")
+                logging.info(f"   📂 {len(recent)} rapport(s) récent(s)")
                 
-                # Analyser les nouveaux rapports
-                new_reports = [r for r in reports if r['url'] not in self.analysis_memory]
+                already = [r for r in recent if r['url'] in self.analysis_memory]
+                new = [r for r in recent if r['url'] not in self.analysis_memory]
                 
-                for report in new_reports:
+                logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
+                
+                for report in new:
                     result = self._analyze_pdf_with_mistral(company_id, symbol, report)
-                    if result is False:
-                        pass  # Continuer avec les autres
+                    if result is True:
+                        total_analyzed += 1
+                    elif result is None:
+                        total_skipped += 1
                 
-                time.sleep(1)  # Pause entre sociétés
+                total_skipped += len(already)
             
-            # ✅ STATISTIQUES FINALES
-            logging.info("\n" + "="*80)
-            logging.info("📊 STATISTIQUES DÉTAILLÉES")
-            logging.info("="*80)
-            logging.info(f"📊 Sociétés avec rapports: {self.stats['companies_with_reports']}")
-            logging.info(f"⚠️  Sociétés sans rapports: {self.stats['companies_without_reports']}")
-            logging.info(f"📂 Rapports trouvés: {self.stats['reports_found']}")
-            logging.info(f"✅ Rapports déjà analysés: {self.stats['reports_already_analyzed']}")
-            logging.info(f"🆕 Rapports à analyser: {self.stats['reports_to_analyze']}")
-            logging.info(f"✅ Analyses réussies: {self.stats['reports_analyzed_success']}")
-            logging.info(f"❌ Analyses échouées: {self.stats['reports_analyzed_failure']}")
-            logging.info(f"🔄 Appels API: {self.stats['api_calls']}")
-            logging.info(f"⚠️  Erreurs API: {self.stats['api_errors']}")
+            logging.info("\n✅ Traitement terminé")
+            logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
+            logging.info(f"📊 Rapports ignorés: {total_skipped}")
+            logging.info(f"📊 Requêtes Mistral effectuées: {self.request_count}")
             
-            if self.stats['reports_to_analyze'] > 0:
-                success_rate = (self.stats['reports_analyzed_success'] / self.stats['reports_to_analyze'] * 100)
-                logging.info(f"📈 Taux de succès: {success_rate:.1f}%")
-            
-            logging.info("="*80)
-            
-            # Récupérer résultats finaux
             conn = self.connect_to_db()
             if not conn: 
                 return {}, []
@@ -528,7 +546,7 @@ Si une info manque, mentionne-le clairement."""
                     final_results[symbol]['rapports_analyses'].append({'analyse_ia': summary})
                     final_results[symbol]['nom'] = name
             
-            logging.info(f"📊 Résultats finaux: {len(final_results)} société(s)")
+            logging.info(f"📊 Résultats finaux: {len(final_results)} société(s) avec analyses")
             return (dict(final_results), self.newly_analyzed_reports)
         
         except Exception as e:
