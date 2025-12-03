@@ -1,5 +1,5 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V27.2 - BRVM ANALYSIS SUITE
+# REQUIREMENTS.TXT V27.2 - BRVM ANALYSIS SUITE (COMPLET)
 # ==============================================================================
 
 # --- Core Dependencies ---
@@ -18,8 +18,12 @@ selenium==4.18.1
 selenium-wire==5.1.0
 webdriver-manager==4.0.1
 
-# --- PDF Processing ---
+# --- PDF Processing (TOUS LES MODULES) ---
 PyPDF2==3.0.1
+pdfplumber==0.10.4
+tabula-py==2.9.3
+camelot-py[cv]==0.11.0
+pillow==10.2.0
 
 # --- Document Generation ---
 python-docx==1.1.0
@@ -38,7 +42,5 @@ certifi==2024.2.2
 charset-normalizer==3.3.2
 idna==3.6
 
-# --- Optional (pour futures améliorations) ---
-# pillow==10.2.0  # Pour traitement d'images
-# pdfplumber==0.10.3  # Alternative à PyPDF2
-# tabula-py==2.9.0  # Extraction tableaux PDF
+# --- Machine Learning (si nécessaire) ---
+scikit-learn==1.4.0
