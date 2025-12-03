@@ -1,12 +1,44 @@
+# ==============================================================================
+# REQUIREMENTS.TXT V27.2 - BRVM ANALYSIS SUITE
+# ==============================================================================
+
+# --- Core Dependencies ---
 requests==2.31.0
-beautifulsoup4==4.12.2
-selenium==4.15.2
-selenium-wire==5.1.0
+beautifulsoup4==4.12.3
+lxml==5.1.0
+pandas==2.2.0
+numpy==1.26.4
+
+# --- Database ---
 psycopg2-binary==2.9.9
-pandas==2.1.3
-numpy==1.26.2
-scikit-learn==1.3.2
+supabase==2.3.4
+
+# --- Selenium & Web Scraping ---
+selenium==4.18.1
+selenium-wire==5.1.0
+webdriver-manager==4.0.1
+
+# --- PDF Processing ---
+PyPDF2==3.0.1
+
+# --- Document Generation ---
 python-docx==1.1.0
-lxml==4.9.3
-pdfplumber==0.10.3
-blinker==1.7.0
+openpyxl==3.1.2
+
+# --- AI APIs ---
+mistralai==0.1.8
+anthropic==0.18.1
+openai==1.12.0
+
+# --- Utilities ---
+python-dateutil==2.8.2
+pytz==2024.1
+urllib3==2.2.0
+certifi==2024.2.2
+charset-normalizer==3.3.2
+idna==3.6
+
+# --- Optional (pour futures améliorations) ---
+# pillow==10.2.0  # Pour traitement d'images
+# pdfplumber==0.10.3  # Alternative à PyPDF2
+# tabula-py==2.9.0  # Extraction tableaux PDF
