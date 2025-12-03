@@ -1,5 +1,5 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V27.2 - BRVM ANALYSIS SUITE (COMPLET)
+# REQUIREMENTS.TXT V27.3 - BRVM ANALYSIS SUITE (VERSIONS COMPATIBLES)
 # ==============================================================================
 
 # --- Core Dependencies ---
@@ -13,16 +13,16 @@ numpy==1.26.4
 psycopg2-binary==2.9.9
 supabase==2.3.4
 
-# --- Selenium & Web Scraping ---
+# --- Selenium & Web Scraping (VERSIONS FIXES) ---
 selenium==4.18.1
 selenium-wire==5.1.0
+blinker==1.6.3
 webdriver-manager==4.0.1
 
-# --- PDF Processing (TOUS LES MODULES) ---
+# --- PDF Processing ---
 PyPDF2==3.0.1
 pdfplumber==0.10.4
 tabula-py==2.9.3
-camelot-py[cv]==0.11.0
 pillow==10.2.0
 
 # --- Document Generation ---
@@ -42,5 +42,13 @@ certifi==2024.2.2
 charset-normalizer==3.3.2
 idna==3.6
 
-# --- Machine Learning (si nécessaire) ---
+# --- Machine Learning ---
 scikit-learn==1.4.0
+
+# --- Dependencies pour selenium-wire ---
+h11==0.14.0
+wsproto==1.2.0
+hyperframe==6.0.1
+hpack==4.0.0
+kaitaistruct==0.10
+pyOpenSSL==24.0.0
