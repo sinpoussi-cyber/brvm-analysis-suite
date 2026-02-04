@@ -153,7 +153,7 @@ jobs:
           echo "  - Total: ~$1.00 par exécution"
           echo "  - Crédit disponible: 5€ gratuit"
           echo ""
-          echo "📋 Étapes:"
+          echo "📋 Étapes:" 
           echo "  ✅ Collecte données"
           echo "  ✅ Analyse technique"
           echo "  ✅ Prédictions"
