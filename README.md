@@ -312,3 +312,5 @@ Pour toute question ou suggestion, n'hésitez pas à ouvrir une issue sur GitHub
 ---
 
 **Fait avec ❤️ pour démocratiser l'accès à l'analyse financière en Afrique de l'Ouest**
+
+Update
