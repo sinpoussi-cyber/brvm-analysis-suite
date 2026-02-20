@@ -1,5 +1,6 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V27.2 - SYNTHÈSE ENRICHIE + SAUVEGARDE DB (CORRIGÉ)
+# MODULE: REPORT GENERATOR V28.0 COMPLET - MULTI-AI (DeepSeek + Gemini + Mistral)
+# Toutes les fonctionnalités de V27.2 conservées + Multi-AI ajouté
 # ==============================================================================
 
 import os
@@ -24,7 +25,15 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION MISTRAL AI
+# ✅ CONFIGURATION MULTI-AI (Rotation: DeepSeek → Gemini → Mistral)
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
 MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
 MISTRAL_MODEL = "mistral-large-latest"
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
@@ -33,7 +42,7 @@ MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
-        self.request_count = 0
+        self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0, 'total': 0}
         self.all_recommendations = {}
         
         try:
@@ -90,7 +99,6 @@ class BRVMReportGenerator:
             df = pd.read_sql(query, self.db_conn)
             if not df.empty:
                 row = df.iloc[0]
-                # Vérifier que les valeurs ne sont pas None
                 composite = row.get('brvm_composite')
                 if pd.notna(composite):
                     return {
@@ -246,15 +254,117 @@ class BRVMReportGenerator:
         else:
             return 'CONSERVER', 3
 
+    # ============================================================================
+    # NOUVELLES FONCTIONS MULTI-AI (DeepSeek → Gemini → Mistral)
+    # ============================================================================
+    
+    def _generate_analysis_with_deepseek(self, symbol, data_dict, prompt):
+        """Génération d'analyse avec DeepSeek"""
+        if not DEEPSEEK_API_KEY:
+            return None, None
+        
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 3000,
+            "temperature": 0.4
+        }
+        
+        try:
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=60)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    text = result['choices'][0]['message']['content']
+                    self.request_count['deepseek'] += 1
+                    self.request_count['total'] += 1
+                    return text, "deepseek"
+            
+            return None, None
+            
+        except Exception as e:
+            logging.error(f"❌ DeepSeek exception: {e}")
+            return None, None
+
+    def _generate_analysis_with_gemini(self, symbol, data_dict, prompt):
+        """Génération d'analyse avec Gemini"""
+        if not GEMINI_API_KEY:
+            return None, None
+        
+        url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+        
+        data = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.4,
+                "maxOutputTokens": 3000
+            }
+        }
+        
+        try:
+            response = requests.post(url, json=data, timeout=60)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    self.request_count['gemini'] += 1
+                    self.request_count['total'] += 1
+                    return text, "gemini"
+            
+            return None, None
+            
+        except Exception as e:
+            logging.error(f"❌ Gemini exception: {e}")
+            return None, None
+
+    def _generate_analysis_with_mistral(self, symbol, data_dict, prompt):
+        """Génération d'analyse avec Mistral"""
+        if not MISTRAL_API_KEY:
+            return None, None
+        
+        headers = {
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        request_body = {
+            "model": MISTRAL_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 3000,
+            "temperature": 0.4
+        }
+        
+        try:
+            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=60)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'choices' in data and len(data['choices']) > 0:
+                    text = data['choices'][0]['message']['content']
+                    self.request_count['mistral'] += 1
+                    self.request_count['total'] += 1
+                    return text, "mistral"
+            
+            return None, None
+                
+        except Exception as e:
+            logging.error(f"❌ Mistral exception: {e}")
+            return None, None
+
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse professionnelle détaillée"""
+        """Génération analyse professionnelle avec rotation Multi-AI"""
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
-        
-        if not MISTRAL_API_KEY:
-            logging.warning(f"    ⚠️  Aucune clé Mistral pour {symbol}")
-            return self._generate_fallback_analysis(symbol, data_dict)
         
         prompt = f"""Tu es un analyste financier professionnel. Analyse l'action {symbol} et génère un rapport structuré en 4 parties.
 
@@ -329,46 +439,37 @@ IMPORTANT:
 - Reste factuel et objectif
 - Si une donnée manque, mentionne-le clairement
 - Commence chaque partie par son titre en gras"""
-
-        headers = {
-            "Authorization": f"Bearer {MISTRAL_API_KEY}",
-            "Content-Type": "application/json"
-        }
         
-        request_body = {
-            "model": MISTRAL_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 3000,
-            "temperature": 0.4
-        }
+        # ROTATION MULTI-AI: DeepSeek → Gemini → Mistral
+        analysis = None
+        provider = None
         
-        try:
-            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=60)
-            
-            self.request_count += 1
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'choices' in data and len(data['choices']) > 0:
-                    text = data['choices'][0]['message']['content']
-                    logging.info(f"    ✅ {symbol}: Analyse générée")
-                    return text
-                else:
-                    return self._generate_fallback_analysis(symbol, data_dict)
-            
-            elif response.status_code == 429:
-                if attempt < max_attempts:
-                    time.sleep(10)
-                    return self._generate_professional_analysis(symbol, data_dict, attempt + 1, max_attempts)
-                else:
-                    return self._generate_fallback_analysis(symbol, data_dict)
-            
+        # Tentative 1: DeepSeek
+        logging.info(f"    🤖 {symbol}: Tentative DeepSeek...")
+        analysis, provider = self._generate_analysis_with_deepseek(symbol, data_dict, prompt)
+        
+        if not analysis:
+            # Tentative 2: Gemini
+            logging.info(f"    🤖 {symbol}: Tentative Gemini...")
+            analysis, provider = self._generate_analysis_with_gemini(symbol, data_dict, prompt)
+        
+        if not analysis:
+            # Tentative 3: Mistral
+            logging.info(f"    🤖 {symbol}: Tentative Mistral...")
+            analysis, provider = self._generate_analysis_with_mistral(symbol, data_dict, prompt)
+        
+        # Si toutes les API ont échoué
+        if not analysis:
+            if attempt < max_attempts:
+                logging.warning(f"    ⚠️  {symbol}: Toutes API échouées, retry {attempt+1}/{max_attempts}")
+                time.sleep(10)
+                return self._generate_professional_analysis(symbol, data_dict, attempt + 1, max_attempts)
             else:
+                logging.error(f"    ❌ {symbol}: Échec définitif après {max_attempts} tentatives")
                 return self._generate_fallback_analysis(symbol, data_dict)
-                
-        except Exception as e:
-            logging.error(f"    ❌ Exception pour {symbol}: {str(e)}")
-            return self._generate_fallback_analysis(symbol, data_dict)
+        
+        logging.info(f"    ✅ {symbol}: Analyse générée via {provider.upper()}")
+        return analysis
 
     def _generate_fallback_analysis(self, symbol, data_dict):
         """Analyse de secours structurée"""
@@ -558,7 +659,7 @@ IMPORTANT:
         doc.add_paragraph()
         doc.add_page_break()
         
-        # SYNTHÈSE ENRICHIE (CORRIGÉE)
+        # SYNTHÈSE ENRICHIE
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
         
         market_indicators = self._get_market_indicators()
@@ -703,7 +804,7 @@ IMPORTANT:
         footer_text = doc.add_paragraph(
             "1. Les analyses techniques sont basées sur les 5 indicateurs classiques.\n"
             "2. Les analyses fondamentales proviennent des rapports financiers officiels.\n"
-            "3. Les recommandations sont générées par intelligence artificielle (Mistral AI).\n"
+            "3. Les recommandations sont générées par intelligence artificielle Multi-AI (DeepSeek, Gemini, Mistral).\n"
             "4. Tous les cours sont en FCFA (Francs CFA).\n"
             "5. Les prédictions sont des estimations basées sur des modèles statistiques.\n"
             "6. Ce document est confidentiel et destiné à l'usage professionnel."
@@ -714,7 +815,7 @@ IMPORTANT:
         
         logging.info(f"   ✅ Document créé: {filename}")
         
-        # Préparer la synthèse pour la DB (CORRIGÉE)
+        # Préparer la synthèse pour la DB
         if market_indicators and market_indicators.get('composite'):
             synthesis_text = (
                 f"Analyse de {len(all_analyses)} sociétés. "
@@ -737,17 +838,26 @@ IMPORTANT:
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
-        """Génération du rapport complet"""
+        """Génération du rapport complet avec Multi-AI"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V27.2 - Mistral AI)")
-        logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V28.0 - Multi-AI)")
+        logging.info("🤖 Providers: DeepSeek → Gemini → Mistral")
         logging.info("="*80)
         
-        if not MISTRAL_API_KEY:
-            logging.error("❌ Clé Mistral non configurée")
+        # Vérifier qu'au moins une clé API est disponible
+        if not any([DEEPSEEK_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY]):
+            logging.error("❌ Aucune clé API configurée!")
             return
         
-        logging.info("✅ Clé Mistral chargée")
+        available_apis = []
+        if DEEPSEEK_API_KEY:
+            available_apis.append("DeepSeek")
+        if GEMINI_API_KEY:
+            available_apis.append("Gemini")
+        if MISTRAL_API_KEY:
+            available_apis.append("Mistral")
+        
+        logging.info(f"✅ API disponibles: {', '.join(available_apis)}")
         
         df = self._get_all_data_from_db()
         
@@ -757,7 +867,7 @@ IMPORTANT:
         
         predictions_df = self._get_predictions_from_db()
         
-        logging.info(f"🤖 Génération de {len(df)} analyse(s)...")
+        logging.info(f"🤖 Génération de {len(df)} analyse(s) avec rotation Multi-AI...")
         
         all_analyses = {}
         all_company_data = {}
@@ -879,7 +989,11 @@ IMPORTANT:
         filename = self._create_word_document(all_analyses, all_company_data)
         
         logging.info(f"\n✅ Rapport généré: {filename}")
-        logging.info(f"📊 Requêtes Mistral: {self.request_count}")
+        logging.info(f"📊 Statistiques requêtes Multi-AI:")
+        logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
+        logging.info(f"   - Gemini: {self.request_count['gemini']}")
+        logging.info(f"   - Mistral: {self.request_count['mistral']}")
+        logging.info(f"   - TOTAL: {self.request_count['total']}")
 
     def __del__(self):
         if self.db_conn and not self.db_conn.closed:
