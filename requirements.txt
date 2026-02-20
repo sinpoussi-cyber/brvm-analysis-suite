@@ -1,5 +1,5 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V27.3 - BRVM ANALYSIS SUITE (VERSIONS COMPATIBLES)
+# REQUIREMENTS.TXT V28.0 - BRVM ANALYSIS SUITE (MULTI-AI)
 # ==============================================================================
 
 # --- Core Dependencies ---
@@ -13,7 +13,7 @@ numpy==1.26.4
 psycopg2-binary==2.9.9
 supabase==2.3.4
 
-# --- Selenium & Web Scraping (VERSIONS FIXES) ---
+# --- Selenium & Web Scraping ---
 selenium==4.18.1
 selenium-wire==5.1.0
 blinker==1.6.3
@@ -29,8 +29,11 @@ pillow==10.2.0
 python-docx==1.1.0
 openpyxl==3.1.2
 
-# --- AI APIs ---
-mistralai==0.1.8
+# --- AI APIs (Multi-provider support) ---
+# Note: Les API sont appelées via requests, pas besoin de SDK spécifiques
+# Pour DeepSeek: Utilisation directe de l'API REST
+# Pour Gemini: Utilisation directe de l'API REST  
+# Pour Mistral: Utilisation directe de l'API REST
 anthropic==0.18.1
 openai==1.12.0
 
@@ -52,3 +55,11 @@ hyperframe==6.0.1
 hpack==4.0.0
 kaitaistruct==0.10
 pyOpenSSL==24.0.0
+
+# ==============================================================================
+# NOTES:
+# - DeepSeek: API REST uniquement, pas de SDK Python officiel requis
+# - Gemini: API REST via generativelanguage.googleapis.com
+# - Mistral: API REST compatible OpenAI
+# - Toutes les API sont appelées via requests pour plus de flexibilité
+# ==============================================================================
