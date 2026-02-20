@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FUNDAMENTAL ANALYZER V27.2 - MISTRAL AI AVEC EXTRACTION TEXTE PDF
+# MODULE: FUNDAMENTAL ANALYZER V28.0 - MULTI-AI (DeepSeek + Gemini + Mistral)
 # ==============================================================================
 
 import requests
@@ -30,7 +30,15 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION MISTRAL AI
+# ✅ CONFIGURATION MULTI-AI (Rotation: DeepSeek → Gemini → Mistral)
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
 MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
 MISTRAL_MODEL = "mistral-large-latest"
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
@@ -93,7 +101,7 @@ class BRVMAnalyzer:
         self.analysis_memory = set()
         self.company_ids = {}
         self.newly_analyzed_reports = []
-        self.request_count = 0
+        self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0}
 
     def connect_to_db(self):
         """Connexion à PostgreSQL (Supabase)"""
@@ -129,14 +137,17 @@ class BRVMAnalyzer:
             if conn: 
                 conn.close()
 
-    def _save_to_db(self, company_id, report, summary):
-        """Sauvegarde dans PostgreSQL"""
+    def _save_to_db(self, company_id, report, summary, ai_provider="unknown"):
+        """Sauvegarde dans PostgreSQL avec indication du provider IA"""
         conn = self.connect_to_db()
         if not conn: 
             return False
         
         try:
             with conn.cursor() as cur:
+                # Ajouter l'info du provider dans le summary
+                enhanced_summary = f"[Analysé par {ai_provider.upper()}]\n\n{summary}"
+                
                 cur.execute("""
                     INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
                     VALUES (%s, %s, %s, %s, %s) 
@@ -144,13 +155,13 @@ class BRVMAnalyzer:
                         analysis_summary = EXCLUDED.analysis_summary,
                         updated_at = CURRENT_TIMESTAMP
                     RETURNING id;
-                """, (company_id, report['url'], report['titre'], report['date'], summary))
+                """, (company_id, report['url'], report['titre'], report['date'], enhanced_summary))
                 
                 inserted_id = cur.fetchone()[0]
                 conn.commit()
             
             self.analysis_memory.add(report['url'])
-            logging.info(f"    ✅ Sauvegardé (ID: {inserted_id})")
+            logging.info(f"    ✅ Sauvegardé (ID: {inserted_id}, Provider: {ai_provider})")
             return True
             
         except Exception as e:
@@ -172,305 +183,309 @@ class BRVMAnalyzer:
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-gpu')
             chrome_options.add_argument('--disable-extensions')
-            chrome_options.add_argument('--disable-software-rasterizer')
-            chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
+            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            seleniumwire_options = {
-                'disable_encoding': True,
-                'suppress_connection_errors': True,
-                'connection_timeout': 30
-            }
+            self.driver = webdriver.Chrome(options=chrome_options)
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
             
-            self.driver = webdriver.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options
-            )
-            self.driver.set_page_load_timeout(30)
-            self.driver.implicitly_wait(10)
-            
-            logging.info("   ✅ Selenium configuré")
+            logging.info("✅ Selenium prêt")
             return True
-        
+            
         except Exception as e:
             logging.error(f"❌ Erreur Selenium: {e}")
-            self.driver = None
             return False
 
-    def _normalize_text(self, text):
-        """Normalise le texte"""
-        if not text:
-            return ""
+    def _find_all_reports(self):
+        """Collecte tous les rapports disponibles sur le site BRVM"""
+        all_reports = defaultdict(list)
         
-        text = ''.join(c for c in unicodedata.normalize('NFD', text) 
-                       if unicodedata.category(c) != 'Mn')
-        text = ' '.join(text.lower().split())
-        
-        return text
-
-    def _extract_text_from_pdf(self, pdf_content):
-        """Extrait le texte d'un PDF avec PyPDF2"""
         try:
-            pdf_file = io.BytesIO(pdf_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            base_url = "https://www.brvm.org/fr/publications"
+            self.driver.get(base_url)
+            time.sleep(3)
             
-            text_parts = []
-            num_pages = len(pdf_reader.pages)
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             
-            # Limiter à 10 premières pages pour éviter de dépasser les limites
-            max_pages = min(num_pages, 10)
+            for symbol, info in self.societes_mapping.items():
+                nom_rapport = info['nom_rapport']
+                alternatives = info['alternatives']
+                
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    text = link.get_text(strip=True).lower()
+                    
+                    if any(alt.lower() in text for alt in [nom_rapport.lower()] + alternatives):
+                        if '.pdf' in href.lower():
+                            full_url = href if href.startswith('http') else 'https://www.brvm.org' + href
+                            
+                            titre = link.get_text(strip=True)
+                            date_match = re.search(r'(\d{4})', titre)
+                            date_obj = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
+                            
+                            all_reports[symbol].append({
+                                'url': full_url,
+                                'titre': titre,
+                                'date': date_obj
+                            })
             
-            for page_num in range(max_pages):
-                page = pdf_reader.pages[page_num]
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
+            logging.info(f"✅ {sum(len(v) for v in all_reports.values())} rapport(s) collecté(s)")
+            return all_reports
             
-            full_text = "\n\n".join(text_parts)
+        except Exception as e:
+            logging.error(f"❌ Erreur collecte rapports: {e}")
+            return defaultdict(list)
+
+    def _extract_text_from_pdf(self, pdf_url):
+        """Extrait le texte d'un PDF"""
+        try:
+            response = requests.get(pdf_url, timeout=30, verify=False)
+            pdf_file = io.BytesIO(response.content)
             
-            # Limiter la taille du texte à ~20000 caractères
-            if len(full_text) > 20000:
-                full_text = full_text[:20000] + "\n\n[... Texte tronqué pour respecter les limites ...]"
+            text = ""
+            with PyPDF2.PdfReader(pdf_file) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text() or ""
+                    text += page_text + "\n"
             
-            return full_text
-        
+            # Nettoyage
+            text = re.sub(r'\s+', ' ', text).strip()
+            text = unicodedata.normalize('NFKD', text)
+            
+            return text[:50000]  # Limiter à 50k caractères
+            
         except Exception as e:
             logging.error(f"❌ Erreur extraction PDF: {e}")
             return None
 
-    def _find_all_reports(self):
-        """Trouve tous les rapports financiers"""
-        all_reports = defaultdict(list)
-        
-        try:
-            url = "https://www.brvm.org/fr/capitalisation-marche"
-            logging.info(f"   🔍 Accès à {url}")
-            
-            self.driver.get(url)
-            time.sleep(3)
-            
-            company_links = []
-            elements = self.driver.find_elements(By.TAG_NAME, 'a')
-            for elem in elements:
-                try:
-                    href = elem.get_attribute('href')
-                    if href and '/societe/' in href:
-                        company_links.append(href)
-                except:
-                    continue
-            
-            company_links = list(set(company_links))
-            logging.info(f"   📊 {len(company_links)} page(s) trouvée(s)")
-            
-            for idx, link in enumerate(company_links, 1):
-                try:
-                    logging.info(f"   📄 Page {idx}/{len(company_links)}")
-                    self.driver.get(link)
-                    time.sleep(2)
-                    
-                    report_elements = self.driver.find_elements(By.TAG_NAME, 'a')
-                    
-                    for elem in report_elements:
-                        try:
-                            href = elem.get_attribute('href')
-                            text = elem.text.strip()
-                            
-                            if not href or not href.endswith('.pdf'):
-                                continue
-                            
-                            if any(kw in text.lower() for kw in ['rapport', 'financier', 'annuel', 'semestriel']):
-                                date_match = re.search(r'(20\d{2})', text)
-                                report_date = datetime(int(date_match.group(1)), 12, 31).date() if date_match else datetime.now().date()
-                                
-                                for symbol, info in self.societes_mapping.items():
-                                    nom = self._normalize_text(info['nom_rapport'])
-                                    alts = [self._normalize_text(a) for a in info.get('alternatives', [])]
-                                    text_norm = self._normalize_text(text)
-                                    
-                                    if nom in text_norm or any(a in text_norm for a in alts):
-                                        all_reports[symbol].append({
-                                            'url': href,
-                                            'titre': text,
-                                            'date': report_date
-                                        })
-                                        break
-                        except:
-                            continue
-                            
-                except TimeoutException:
-                    logging.warning(f"   ⏱️  Timeout page {idx}")
-                    continue
-                except WebDriverException as e:
-                    logging.warning(f"   ⚠️  Erreur WebDriver page {idx}: {e}")
-                    continue
-                except Exception as e:
-                    logging.warning(f"   ⚠️  Erreur page {idx}: {e}")
-                    continue
-            
-            logging.info(f"   ✅ {sum(len(r) for r in all_reports.values())} rapport(s) trouvé(s)")
-            return all_reports
-        
-        except Exception as e:
-            logging.error(f"❌ Erreur recherche: {e}")
-            return {}
-
-    def _analyze_pdf_with_mistral(self, company_id, symbol, report, attempt=1, max_attempts=3):
-        """Analyse un PDF avec Mistral AI (EXTRACTION TEXTE + ANALYSE)"""
-        pdf_url = report['url']
-        
-        if pdf_url in self.analysis_memory:
-            logging.info(f"    ⏭️  Déjà analysé")
+    def _analyze_with_deepseek(self, text_content, symbol, report_title):
+        """Analyse avec DeepSeek API"""
+        if not DEEPSEEK_API_KEY:
             return None
         
-        conn = self.connect_to_db()
-        if conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM fundamental_analysis WHERE report_url = %s;", (pdf_url,))
-                    if cur.fetchone():
-                        logging.info(f"    ⏭️  Déjà en base")
-                        self.analysis_memory.add(pdf_url)
-                        return None
-            finally:
-                conn.close()
+        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier de la société {symbol} ({report_title}).
+
+RAPPORT:
+{text_content}
+
+CONSIGNES:
+Fournis une analyse structurée en français couvrant:
+1. Chiffre d'affaires et évolution
+2. Résultat net et rentabilité
+3. Politique de dividende
+4. Perspectives et recommandations
+
+Sois précis, factuel et concis (max 800 mots)."""
+
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
         
-        if attempt == 1:
-            logging.info(f"    🆕 NOUVEAU: {os.path.basename(pdf_url)}")
-        else:
-            logging.info(f"    🔄 Tentative {attempt}/{max_attempts}")
+        data = {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2000,
+            "temperature": 0.3
+        }
         
-        # ✅ ÉTAPE 1 : Télécharger et extraire le texte du PDF
         try:
-            logging.info(f"    📥 Téléchargement PDF...")
-            pdf_response = self.session.get(pdf_url, timeout=45, verify=False)
-            pdf_response.raise_for_status()
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=120)
             
-            logging.info(f"    📝 Extraction texte PDF...")
-            pdf_text = self._extract_text_from_pdf(pdf_response.content)
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    analysis = result['choices'][0]['message']['content']
+                    self.request_count['deepseek'] += 1
+                    return analysis
             
-            if not pdf_text or len(pdf_text) < 100:
-                logging.warning(f"    ⚠️  PDF vide ou texte insuffisant pour {symbol}")
-                fallback_text = f"Le rapport PDF n'a pas pu être analysé (texte insuffisant). Titre: {report['titre']}"
-                self._save_to_db(company_id, report, fallback_text)
-                return False
+            logging.warning(f"⚠️ DeepSeek erreur {response.status_code}")
+            return None
             
-            logging.info(f"    ✅ Texte extrait: {len(pdf_text)} caractères")
-                
         except Exception as e:
-            logging.error(f"    ❌ Erreur téléchargement/extraction PDF: {e}")
-            return False
+            logging.error(f"❌ DeepSeek exception: {e}")
+            return None
+
+    def _analyze_with_gemini(self, text_content, symbol, report_title):
+        """Analyse avec Gemini API"""
+        if not GEMINI_API_KEY:
+            return None
         
-        # ✅ ÉTAPE 2 : Envoyer le TEXTE à Mistral AI pour analyse
-        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier de {symbol} (BRVM) et fournis une synthèse structurée en français.
+        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier de la société {symbol} ({report_title}).
 
-TEXTE DU RAPPORT FINANCIER:
-{pdf_text}
+RAPPORT:
+{text_content}
 
-Analyse et fournis:
+CONSIGNES:
+Fournis une analyse structurée en français couvrant:
+1. Chiffre d'affaires et évolution
+2. Résultat net et rentabilité
+3. Politique de dividende
+4. Perspectives et recommandations
 
-**CHIFFRE D'AFFAIRES:**
-- Montant et évolution (en % et valeur absolue)
-- Comparaison avec période précédente
+Sois précis, factuel et concis (max 800 mots)."""
 
-**RÉSULTAT NET:**
-- Montant et évolution
-- Facteurs explicatifs (charges, produits exceptionnels, etc.)
-
-**DIVIDENDES:**
-- Montant proposé ou versé par action
-- Rendement et politique de distribution
-
-**RENTABILITÉ:**
-- ROE, ROA si disponibles
-- Marges (brute, opérationnelle, nette)
-- Commentaires sur la performance
-
-**PERSPECTIVES:**
-- Projets en cours ou annoncés
-- Orientations stratégiques
-- Risques identifiés
-
-Sois factuel, précis avec les chiffres, et concis (5-8 paragraphes maximum). Si une information manque, indique-le clairement."""
+        url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
         
+        data = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 2000
+            }
+        }
+        
+        try:
+            response = requests.post(url, json=data, timeout=120)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    analysis = result['candidates'][0]['content']['parts'][0]['text']
+                    self.request_count['gemini'] += 1
+                    return analysis
+            
+            logging.warning(f"⚠️ Gemini erreur {response.status_code}")
+            return None
+            
+        except Exception as e:
+            logging.error(f"❌ Gemini exception: {e}")
+            return None
+
+    def _analyze_with_mistral(self, text_content, symbol, report_title):
+        """Analyse avec Mistral API"""
         if not MISTRAL_API_KEY:
-            logging.error(f"    ❌ Aucune clé Mistral disponible")
-            return False
+            return None
         
-        # ✅ MISTRAL AI API (TEXTE UNIQUEMENT)
+        prompt = f"""Tu es un analyste financier expert. Analyse ce rapport financier de la société {symbol} ({report_title}).
+
+RAPPORT:
+{text_content}
+
+CONSIGNES:
+Fournis une analyse structurée en français couvrant:
+1. Chiffre d'affaires et évolution
+2. Résultat net et rentabilité
+3. Politique de dividende
+4. Perspectives et recommandations
+
+Sois précis, factuel et concis (max 800 mots)."""
+
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
         }
         
-        request_body = {
+        data = {
             "model": MISTRAL_MODEL,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 2500,
             "temperature": 0.3
         }
         
         try:
-            logging.info(f"    🤖 Envoi à Mistral AI pour analyse...")
-            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=120)
-            
-            self.request_count += 1
+            response = requests.post(MISTRAL_API_URL, headers=headers, json=data, timeout=120)
             
             if response.status_code == 200:
-                response_json = response.json()
-                
-                if 'choices' in response_json and len(response_json['choices']) > 0:
-                    analysis_text = response_json['choices'][0]['message']['content']
-                    
-                    if self._save_to_db(company_id, report, analysis_text):
-                        self.newly_analyzed_reports.append(f"Rapport {symbol}:\n{analysis_text}\n")
-                        logging.info(f"    ✅ {symbol}: Analyse générée et sauvegardée")
-                        return True
-                
-                logging.warning(f"    ⚠️  Réponse Mistral malformée")
-                return False
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    analysis = result['choices'][0]['message']['content']
+                    self.request_count['mistral'] += 1
+                    return analysis
             
-            elif response.status_code == 429:
-                logging.warning(f"    ⚠️  Rate limit détecté pour {symbol} (tentative {attempt}/{max_attempts})")
-                
-                if attempt < max_attempts:
-                    time.sleep(10)
-                    return self._analyze_pdf_with_mistral(company_id, symbol, report, attempt + 1, max_attempts)
-                else:
-                    logging.error(f"    ❌ {symbol}: Échec après {attempt} tentatives - FALLBACK")
-                    fallback_text = f"Analyse automatique indisponible (rate limit). Rapport: {report['titre']}"
-                    self._save_to_db(company_id, report, fallback_text)
-                    return False
+            logging.warning(f"⚠️ Mistral erreur {response.status_code}")
+            return None
             
-            else:
-                logging.error(f"    ❌ Erreur {response.status_code}: {response.text[:200]}")
-                return False
-                
-        except requests.exceptions.Timeout:
-            logging.error(f"    ⏱️  Timeout API Mistral")
-            return False
         except Exception as e:
-            logging.error(f"    ❌ Exception: {e}")
+            logging.error(f"❌ Mistral exception: {e}")
+            return None
+
+    def _analyze_pdf_with_multi_ai(self, company_id, symbol, report):
+        """Analyse un rapport avec rotation automatique des API (DeepSeek → Gemini → Mistral)"""
+        
+        # Vérifier si déjà analysé
+        if report['url'] in self.analysis_memory:
+            logging.info(f"    ⏭️  Déjà analysé: {report['titre']}")
+            return None
+        
+        logging.info(f"    📄 {report['titre'][:80]}...")
+        
+        # Extraire le texte du PDF
+        text_content = self._extract_text_from_pdf(report['url'])
+        
+        if not text_content or len(text_content) < 100:
+            logging.warning(f"    ⚠️  PDF vide ou illisible")
             return False
+        
+        logging.info(f"    ✓ Texte extrait: {len(text_content)} caractères")
+        
+        # ROTATION DES API: DeepSeek → Gemini → Mistral
+        analysis = None
+        provider_used = None
+        
+        # Tentative 1: DeepSeek (priorité 1)
+        logging.info("    🤖 Tentative DeepSeek...")
+        analysis = self._analyze_with_deepseek(text_content, symbol, report['titre'])
+        if analysis:
+            provider_used = "deepseek"
+            logging.info("    ✅ DeepSeek: Succès!")
+        else:
+            # Tentative 2: Gemini (priorité 2)
+            logging.info("    🤖 Tentative Gemini...")
+            analysis = self._analyze_with_gemini(text_content, symbol, report['titre'])
+            if analysis:
+                provider_used = "gemini"
+                logging.info("    ✅ Gemini: Succès!")
+            else:
+                # Tentative 3: Mistral (priorité 3)
+                logging.info("    🤖 Tentative Mistral...")
+                analysis = self._analyze_with_mistral(text_content, symbol, report['titre'])
+                if analysis:
+                    provider_used = "mistral"
+                    logging.info("    ✅ Mistral: Succès!")
+        
+        # Si aucune API n'a fonctionné
+        if not analysis:
+            logging.error(f"    ❌ Échec des 3 API pour {symbol}")
+            fallback_text = f"Analyse automatique indisponible. Rapport: {report['titre']}"
+            self._save_to_db(company_id, report, fallback_text, "fallback")
+            return False
+        
+        # Sauvegarde
+        if self._save_to_db(company_id, report, analysis, provider_used):
+            self.newly_analyzed_reports.append(f"Rapport {symbol} (via {provider_used}):\n{analysis}\n")
+            return True
+        
+        return False
 
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V27.2 - Mistral AI + Extraction PDF)")
-        logging.info(f"🤖 Modèle: {MISTRAL_MODEL}")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V28.0 - Multi-AI)")
+        logging.info("🤖 Providers: DeepSeek → Gemini → Mistral (rotation automatique)")
         logging.info("="*80)
         
         conn = None
         try:
-            if not MISTRAL_API_KEY:
-                logging.error("❌ Clé Mistral non configurée")
+            # Vérifier qu'au moins une clé API est disponible
+            if not any([DEEPSEEK_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY]):
+                logging.error("❌ Aucune clé API configurée!")
                 return {}, []
             
-            logging.info("✅ Clé Mistral chargée")
-            logging.info("📝 Méthode: Extraction texte PDF → Analyse Mistral AI")
+            available_apis = []
+            if DEEPSEEK_API_KEY:
+                available_apis.append("DeepSeek")
+            if GEMINI_API_KEY:
+                available_apis.append("Gemini")
+            if MISTRAL_API_KEY:
+                available_apis.append("Mistral")
+            
+            logging.info(f"✅ API disponibles: {', '.join(available_apis)}")
             
             self._load_analysis_memory_from_db()
             
@@ -492,7 +507,7 @@ Sois factuel, précis avec les chiffres, et concis (5-8 paragraphes maximum). Si
             logging.info(f"\n🔍 Phase 1: Collecte rapports...")
             all_reports = self._find_all_reports()
             
-            logging.info(f"\n🤖 Phase 2: Analyse IA (Extraction PDF → Texte → Mistral)...")
+            logging.info(f"\n🤖 Phase 2: Analyse Multi-AI (DeepSeek → Gemini → Mistral)...")
             
             total_analyzed = 0
             total_skipped = 0
@@ -517,7 +532,7 @@ Sois factuel, précis avec les chiffres, et concis (5-8 paragraphes maximum). Si
                 logging.info(f"   ✅ Déjà: {len(already)} | 🆕 Nouveaux: {len(new)}")
                 
                 for report in new:
-                    result = self._analyze_pdf_with_mistral(company_id, symbol, report)
+                    result = self._analyze_pdf_with_multi_ai(company_id, symbol, report)
                     if result is True:
                         total_analyzed += 1
                     elif result is None:
@@ -528,7 +543,10 @@ Sois factuel, précis avec les chiffres, et concis (5-8 paragraphes maximum). Si
             logging.info("\n✅ Traitement terminé")
             logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
             logging.info(f"📊 Rapports ignorés: {total_skipped}")
-            logging.info(f"📊 Requêtes Mistral effectuées: {self.request_count}")
+            logging.info(f"📊 Statistiques requêtes:")
+            logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
+            logging.info(f"   - Gemini: {self.request_count['gemini']}")
+            logging.info(f"   - Mistral: {self.request_count['mistral']}")
             
             conn = self.connect_to_db()
             if not conn: 
