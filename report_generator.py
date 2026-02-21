@@ -1,6 +1,6 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V28.0 COMPLET - MULTI-AI (DeepSeek + Gemini + Mistral)
-# Toutes les fonctionnalités de V27.2 conservées + Multi-AI ajouté
+# MODULE: REPORT GENERATOR V29.0 ULTIMATE - ANALYSES AVANCÉES + MULTI-AI
+# Toutes fonctionnalités V28 + Analyses sectorielles + Matrices + Liquidité
 # ==============================================================================
 
 import os
@@ -11,10 +11,12 @@ from datetime import datetime, timedelta
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 import requests
 import time
 import json
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -132,7 +134,7 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _get_all_data_from_db(self):
-        """Récupération optimisée des données"""
+        """Récupération optimisée des données avec NOMS des sociétés"""
         logging.info("📂 Récupération des données (30 derniers jours)...")
         
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -531,6 +533,305 @@ IMPORTANT:
         
         return analysis
 
+    # ============================================================================
+    # NOUVELLES ANALYSES AVANCÉES (V29.0)
+    # ============================================================================
+    
+    def _calculate_sector_analysis(self, all_company_data):
+        """1. ANALYSE PAR SECTEUR: Performance moyenne, sentiment, risque"""
+        logging.info("📊 Calcul de l'analyse sectorielle...")
+        
+        sector_stats = defaultdict(lambda: {
+            'companies': [],
+            'prices': [],
+            'performances': [],
+            'recommendations': [],
+            'risk_levels': [],
+            'volumes': []
+        })
+        
+        for symbol, data in all_company_data.items():
+            sector = data.get('sector', 'Non classifié')
+            if not sector:
+                sector = 'Non classifié'
+            
+            sector_stats[sector]['companies'].append(f"{symbol} ({data.get('company_name', 'N/A')})")
+            
+            if data.get('price_evolution_100d'):
+                sector_stats[sector]['performances'].append(data['price_evolution_100d'])
+            
+            if data.get('recommendation'):
+                sector_stats[sector]['recommendations'].append(data['recommendation'])
+            
+            if data.get('risk_level'):
+                sector_stats[sector]['risk_levels'].append(data['risk_level'])
+            
+            if data.get('current_price'):
+                sector_stats[sector]['prices'].append(data['current_price'])
+            
+            # Volume moyen (à calculer depuis historical_data si disponible)
+            if data.get('volume_moyen'):
+                sector_stats[sector]['volumes'].append(data['volume_moyen'])
+        
+        # Calculer les statistiques par secteur
+        sector_analysis = {}
+        for sector, stats in sector_stats.items():
+            # Performance moyenne
+            avg_perf = sum(stats['performances']) / len(stats['performances']) if stats['performances'] else 0
+            
+            # Sentiment général (recommandation la plus fréquente)
+            rec_counter = Counter(stats['recommendations'])
+            sentiment = rec_counter.most_common(1)[0][0] if rec_counter else 'NEUTRE'
+            
+            # Niveau de risque moyen
+            risk_mapping = {'Faible': 1, 'Moyen': 2, 'Élevé': 3}
+            risk_scores = [risk_mapping.get(r, 2) for r in stats['risk_levels']]
+            avg_risk_score = sum(risk_scores) / len(risk_scores) if risk_scores else 2
+            avg_risk = 'Faible' if avg_risk_score < 1.5 else 'Moyen' if avg_risk_score < 2.5 else 'Élevé'
+            
+            sector_analysis[sector] = {
+                'nb_societes': len(stats['companies']),
+                'societes': stats['companies'],
+                'performance_moyenne': avg_perf,
+                'sentiment_general': sentiment,
+                'risque_moyen': avg_risk,
+                'prix_moyen': sum(stats['prices']) / len(stats['prices']) if stats['prices'] else 0,
+                'distribution_recommandations': dict(rec_counter)
+            }
+        
+        return sector_analysis
+
+    def _calculate_signal_convergence_matrix(self, all_company_data):
+        """2. MATRICE DE CONVERGENCE: Signaux techniques vs fondamentaux"""
+        logging.info("🔄 Calcul de la matrice de convergence...")
+        
+        matrix = {
+            'convergence_forte': [],  # Tech=Achat Fort + Fond=Achat Fort
+            'convergence_achat': [],  # Tech=Achat + Fond=Achat
+            'convergence_vente': [],  # Tech=Vente + Fond=Vente
+            'divergence_forte': [],   # Tech=Achat mais Fond=Vente ou inverse
+            'divergence_moderee': [], # Tech=Achat mais Fond=Neutre
+            'neutre': []              # Signaux mixtes
+        }
+        
+        for symbol, data in all_company_data.items():
+            company_name = data.get('company_name', 'N/A')
+            full_name = f"{symbol} ({company_name})"
+            
+            # Signal technique (basé sur la moyenne des indicateurs)
+            tech_signals = []
+            if data.get('mm_decision'): tech_signals.append(data['mm_decision'])
+            if data.get('bollinger_decision'): tech_signals.append(data['bollinger_decision'])
+            if data.get('macd_decision'): tech_signals.append(data['macd_decision'])
+            if data.get('rsi_decision'): tech_signals.append(data['rsi_decision'])
+            if data.get('stochastic_decision'): tech_signals.append(data['stochastic_decision'])
+            
+            buy_tech = sum(1 for s in tech_signals if 'Achat' in str(s))
+            sell_tech = sum(1 for s in tech_signals if 'Vente' in str(s))
+            
+            if buy_tech > sell_tech:
+                tech_signal = 'ACHAT'
+            elif sell_tech > buy_tech:
+                tech_signal = 'VENTE'
+            else:
+                tech_signal = 'NEUTRE'
+            
+            # Signal fondamental (extrait de la recommandation finale)
+            final_rec = data.get('recommendation', 'CONSERVER')
+            if 'ACHAT' in final_rec:
+                fund_signal = 'ACHAT'
+            elif 'VENTE' in final_rec:
+                fund_signal = 'VENTE'
+            else:
+                fund_signal = 'NEUTRE'
+            
+            # Classement dans la matrice
+            if tech_signal == 'ACHAT' and fund_signal == 'ACHAT':
+                if 'FORT' in final_rec:
+                    matrix['convergence_forte'].append(full_name)
+                else:
+                    matrix['convergence_achat'].append(full_name)
+            elif tech_signal == 'VENTE' and fund_signal == 'VENTE':
+                matrix['convergence_vente'].append(full_name)
+            elif (tech_signal == 'ACHAT' and fund_signal == 'VENTE') or (tech_signal == 'VENTE' and fund_signal == 'ACHAT'):
+                matrix['divergence_forte'].append(full_name)
+            elif tech_signal != fund_signal and (tech_signal == 'NEUTRE' or fund_signal == 'NEUTRE'):
+                matrix['divergence_moderee'].append(full_name)
+            else:
+                matrix['neutre'].append(full_name)
+        
+        return matrix
+
+    def _calculate_liquidity_analysis(self, all_company_data):
+        """3. ANALYSE DE LIQUIDITÉ: Volumes moyens et relation avec performance"""
+        logging.info("💧 Calcul de l'analyse de liquidité...")
+        
+        # Récupérer les volumes moyens sur 30 jours pour chaque société
+        liquidity_data = []
+        
+        for symbol, data in all_company_data.items():
+            company_id = data.get('company_id')
+            company_name = data.get('company_name', 'N/A')
+            
+            if not company_id:
+                continue
+            
+            # Calculer le volume moyen sur 30 jours
+            query = f"""
+            SELECT AVG(volume) as avg_volume, AVG(value) as avg_value
+            FROM historical_data
+            WHERE company_id = {company_id}
+              AND trade_date >= CURRENT_DATE - INTERVAL '30 days'
+            """
+            
+            try:
+                df = pd.read_sql(query, self.db_conn)
+                if not df.empty:
+                    avg_volume = df.iloc[0]['avg_volume'] if pd.notna(df.iloc[0]['avg_volume']) else 0
+                    avg_value = df.iloc[0]['avg_value'] if pd.notna(df.iloc[0]['avg_value']) else 0
+                    
+                    liquidity_data.append({
+                        'symbol': symbol,
+                        'company_name': company_name,
+                        'avg_volume': avg_volume,
+                        'avg_value': avg_value,
+                        'performance': data.get('price_evolution_100d', 0),
+                        'recommendation': data.get('recommendation', 'N/A'),
+                        'risk_level': data.get('risk_level', 'N/A')
+                    })
+            except Exception as e:
+                logging.error(f"❌ Erreur volume pour {symbol}: {e}")
+        
+        # Trier par volume décroissant
+        liquidity_data.sort(key=lambda x: x['avg_volume'], reverse=True)
+        
+        # Classifier en catégories
+        total = len(liquidity_data)
+        high_liquidity = liquidity_data[:int(total*0.2)]  # Top 20%
+        medium_liquidity = liquidity_data[int(total*0.2):int(total*0.6)]  # Middle 40%
+        low_liquidity = liquidity_data[int(total*0.6):]  # Bottom 40%
+        
+        return {
+            'high_liquidity': high_liquidity,
+            'medium_liquidity': medium_liquidity,
+            'low_liquidity': low_liquidity,
+            'all_data': liquidity_data
+        }
+
+    def _calculate_top_divergences(self, all_company_data):
+        """4. TOP 10 DES DIVERGENCES: Sociétés avec signaux contradictoires"""
+        logging.info("⚠️  Calcul des divergences majeures...")
+        
+        divergences = []
+        
+        for symbol, data in all_company_data.items():
+            company_name = data.get('company_name', 'N/A')
+            
+            # Compter signaux d'achat vs vente
+            signals = {
+                'MM': data.get('mm_decision'),
+                'Bollinger': data.get('bollinger_decision'),
+                'MACD': data.get('macd_decision'),
+                'RSI': data.get('rsi_decision'),
+                'Stochastique': data.get('stochastic_decision')
+            }
+            
+            buy_signals = [k for k, v in signals.items() if v and 'Achat' in str(v)]
+            sell_signals = [k for k, v in signals.items() if v and 'Vente' in str(v)]
+            
+            # Score de divergence (écart entre signaux)
+            divergence_score = abs(len(buy_signals) - len(sell_signals))
+            
+            # Divergence avec fondamental
+            final_rec = data.get('recommendation', 'CONSERVER')
+            fund_is_buy = 'ACHAT' in final_rec
+            fund_is_sell = 'VENTE' in final_rec
+            
+            tech_majority_buy = len(buy_signals) > len(sell_signals)
+            tech_majority_sell = len(sell_signals) > len(buy_signals)
+            
+            if (tech_majority_buy and fund_is_sell) or (tech_majority_sell and fund_is_buy):
+                divergence_score += 3  # Bonus si divergence tech/fondamental
+            
+            if divergence_score > 0:
+                divergences.append({
+                    'symbol': symbol,
+                    'company_name': company_name,
+                    'divergence_score': divergence_score,
+                    'buy_signals': buy_signals,
+                    'sell_signals': sell_signals,
+                    'final_recommendation': final_rec,
+                    'description': self._describe_divergence(buy_signals, sell_signals, final_rec)
+                })
+        
+        # Trier par score décroissant
+        divergences.sort(key=lambda x: x['divergence_score'], reverse=True)
+        
+        return divergences[:10]  # Top 10
+
+    def _describe_divergence(self, buy_signals, sell_signals, final_rec):
+        """Génère une description textuelle de la divergence"""
+        desc = []
+        
+        if buy_signals:
+            desc.append(f"Signaux d'achat: {', '.join(buy_signals)}")
+        
+        if sell_signals:
+            desc.append(f"Signaux de vente: {', '.join(sell_signals)}")
+        
+        desc.append(f"Recommandation finale: {final_rec}")
+        
+        return " | ".join(desc)
+
+    def _calculate_risk_horizon_matrix(self, all_company_data):
+        """5. MATRICE RISQUE vs HORIZON"""
+        logging.info("📈 Calcul de la matrice Risque/Horizon...")
+        
+        matrix = {
+            'faible_court': [],
+            'faible_moyen': [],
+            'faible_long': [],
+            'moyen_court': [],
+            'moyen_moyen': [],
+            'moyen_long': [],
+            'eleve_court': [],
+            'eleve_moyen': [],
+            'eleve_long': []
+        }
+        
+        for symbol, data in all_company_data.items():
+            company_name = data.get('company_name', 'N/A')
+            full_name = f"{symbol} ({company_name})"
+            
+            risk = data.get('risk_level', 'Moyen').lower()
+            horizon = data.get('investment_horizon', 'Moyen terme').lower()
+            
+            # Normaliser horizon
+            if 'court' in horizon:
+                horizon_cat = 'court'
+            elif 'long' in horizon:
+                horizon_cat = 'long'
+            else:
+                horizon_cat = 'moyen'
+            
+            # Normaliser risque
+            if 'faible' in risk:
+                risk_cat = 'faible'
+            elif 'élevé' in risk or 'eleve' in risk:
+                risk_cat = 'eleve'
+            else:
+                risk_cat = 'moyen'
+            
+            key = f"{risk_cat}_{horizon_cat}"
+            if key in matrix:
+                matrix[key].append(full_name)
+        
+        return matrix
+
+    # ============================================================================
+    # SAUVEGARDE ET GÉNÉRATION DOCUMENT
+    # ============================================================================
+    
     def _save_to_database(self, report_date, synthesis_text, top_10, flop_10, market_events, all_company_data, filename):
         """Sauvegarde structurée dans la base de données"""
         logging.info("💾 Sauvegarde dans la base de données...")
@@ -629,9 +930,32 @@ IMPORTANT:
             logging.error(f"❌ Erreur sauvegarde DB: {e}")
             self.db_conn.rollback()
 
+    def _add_table_with_shading(self, doc, data, headers, column_widths=None):
+        """Ajoute un tableau avec mise en forme"""
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = 'Light Grid Accent 1'
+        
+        # En-têtes
+        hdr_cells = table.rows[0].cells
+        for i, header in enumerate(headers):
+            hdr_cells[i].text = header
+            hdr_cells[i].paragraphs[0].runs[0].font.bold = True
+            # Couleur de fond grise pour l'en-tête
+            shading_elm = OxmlElement('w:shd')
+            shading_elm.set(qn('w:fill'), 'D9D9D9')
+            hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
+        
+        # Données
+        for row_data in data:
+            row = table.add_row()
+            for i, value in enumerate(row_data):
+                row.cells[i].text = str(value)
+        
+        return table
+
     def _create_word_document(self, all_analyses, all_company_data):
-        """Création du document Word professionnel"""
-        logging.info("📄 Création du document Word...")
+        """Création du document Word professionnel ULTRA-COMPLET"""
+        logging.info("📄 Création du document Word ULTIMATE...")
         
         doc = Document()
         
@@ -639,12 +963,13 @@ IMPORTANT:
         style.font.name = 'Calibri'
         style.font.size = Pt(11)
         
+        # ========== PAGE DE TITRE ==========
         title = doc.add_heading('RAPPORT D\'ANALYSE BRVM', 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title_run = title.runs[0]
         title_run.font.color.rgb = RGBColor(0, 51, 102)
         
-        subtitle = doc.add_paragraph(f"Rapport d'investissement professionnel")
+        subtitle = doc.add_paragraph(f"Rapport d'investissement professionnel - Édition Ultimate")
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         subtitle_run = subtitle.runs[0]
         subtitle_run.font.size = Pt(12)
@@ -656,10 +981,17 @@ IMPORTANT:
         date_run.font.size = Pt(10)
         date_run.font.italic = True
         
+        version_p = doc.add_paragraph(f"Version 29.0 - Analyses Multi-AI (DeepSeek + Gemini + Mistral)")
+        version_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        version_run = version_p.runs[0]
+        version_run.font.size = Pt(9)
+        version_run.font.italic = True
+        version_run.font.color.rgb = RGBColor(128, 128, 128)
+        
         doc.add_paragraph()
         doc.add_page_break()
         
-        # SYNTHÈSE ENRICHIE
+        # ========== SYNTHÈSE GÉNÉRALE ==========
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
         
         market_indicators = self._get_market_indicators()
@@ -689,7 +1021,7 @@ IMPORTANT:
         intro.paragraph_format.space_after = Pt(12)
         doc.add_paragraph()
         
-        # TOP 10 ACHATS
+        # ========== TOP 10 ACHATS ==========
         doc.add_heading('📈 TOP 10 DES OPPORTUNITÉS D\'ACHAT', level=2)
         
         sorted_buy = sorted(
@@ -701,7 +1033,8 @@ IMPORTANT:
         top_10_list = []
         for idx, (symbol, data) in enumerate(sorted_buy, 1):
             p = doc.add_paragraph(style='List Number')
-            p.add_run(f"{symbol} - {data.get('company_name', 'N/A')}").bold = True
+            company_name = data.get('company_name', 'N/A')
+            p.add_run(f"{symbol} - {company_name}").bold = True
             p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
             
             rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
@@ -712,7 +1045,7 @@ IMPORTANT:
             
             top_10_list.append({
                 'symbol': symbol,
-                'name': data.get('company_name'),
+                'name': company_name,
                 'price': float(data.get('current_price', 0)),
                 'recommendation': data.get('recommendation'),
                 'confidence': data.get('confidence_level'),
@@ -721,7 +1054,7 @@ IMPORTANT:
         
         doc.add_paragraph()
         
-        # FLOP 10 VENTES
+        # ========== FLOP 10 VENTES ==========
         doc.add_heading('📉 TOP 10 DES ACTIONS À ÉVITER', level=2)
         
         sorted_sell = sorted(
@@ -732,7 +1065,8 @@ IMPORTANT:
         flop_10_list = []
         for idx, (symbol, data) in enumerate(sorted_sell, 1):
             p = doc.add_paragraph(style='List Number')
-            p.add_run(f"{symbol} - {data.get('company_name', 'N/A')}").bold = True
+            company_name = data.get('company_name', 'N/A')
+            p.add_run(f"{symbol} - {company_name}").bold = True
             p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
             
             rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
@@ -743,7 +1077,7 @@ IMPORTANT:
             
             flop_10_list.append({
                 'symbol': symbol,
-                'name': data.get('company_name'),
+                'name': company_name,
                 'price': float(data.get('current_price', 0)),
                 'recommendation': data.get('recommendation'),
                 'confidence': data.get('confidence_level'),
@@ -751,8 +1085,246 @@ IMPORTANT:
             })
         
         doc.add_paragraph()
+        doc.add_page_break()
         
-        # ÉVÉNEMENTS MARQUANTS
+        # ========== 1. ANALYSE PAR SECTEUR ==========
+        doc.add_heading('📊 ANALYSE PAR SECTEUR', level=1)
+        
+        sector_analysis = self._calculate_sector_analysis(all_company_data)
+        
+        doc.add_paragraph(
+            "Cette section présente une analyse comparative de tous les secteurs représentés à la BRVM, "
+            "incluant la performance moyenne, le sentiment général du marché et le niveau de risque moyen."
+        )
+        doc.add_paragraph()
+        
+        for sector, stats in sorted(sector_analysis.items(), key=lambda x: x[1]['performance_moyenne'], reverse=True):
+            doc.add_heading(f"Secteur: {sector}", level=3)
+            
+            p = doc.add_paragraph()
+            p.add_run(f"Nombre de sociétés: ").bold = True
+            p.add_run(f"{stats['nb_societes']}\n")
+            
+            p.add_run(f"Performance moyenne (100j): ").bold = True
+            perf_run = p.add_run(f"{stats['performance_moyenne']:.2f}%\n")
+            if stats['performance_moyenne'] > 0:
+                perf_run.font.color.rgb = RGBColor(0, 128, 0)
+            else:
+                perf_run.font.color.rgb = RGBColor(192, 0, 0)
+            
+            p.add_run(f"Sentiment général: ").bold = True
+            p.add_run(f"{stats['sentiment_general']}\n")
+            
+            p.add_run(f"Risque moyen: ").bold = True
+            p.add_run(f"{stats['risque_moyen']}\n")
+            
+            p.add_run(f"Prix moyen: ").bold = True
+            p.add_run(f"{stats['prix_moyen']:.0f} FCFA\n")
+            
+            # Liste des sociétés du secteur
+            p.add_run(f"\nSociétés: ").bold = True
+            p.add_run(", ".join(stats['societes']))
+            
+            doc.add_paragraph()
+        
+        doc.add_page_break()
+        
+        # ========== 2. MATRICE DE CONVERGENCE ==========
+        doc.add_heading('🔄 MATRICE DE CONVERGENCE DES SIGNAUX', level=1)
+        
+        convergence_matrix = self._calculate_signal_convergence_matrix(all_company_data)
+        
+        doc.add_paragraph(
+            "Cette matrice identifie les sociétés présentant une convergence ou une divergence "
+            "entre les signaux techniques et fondamentaux."
+        )
+        doc.add_paragraph()
+        
+        # Convergence forte
+        doc.add_heading('✅ Convergence Forte (Technique + Fondamental = ACHAT FORT)', level=3)
+        if convergence_matrix['convergence_forte']:
+            for company in convergence_matrix['convergence_forte']:
+                doc.add_paragraph(f"• {company}", style='List Bullet')
+        else:
+            doc.add_paragraph("Aucune société dans cette catégorie.")
+        doc.add_paragraph()
+        
+        # Convergence achat
+        doc.add_heading('✅ Convergence Achat (Technique + Fondamental = ACHAT)', level=3)
+        if convergence_matrix['convergence_achat']:
+            for company in convergence_matrix['convergence_achat']:
+                doc.add_paragraph(f"• {company}", style='List Bullet')
+        else:
+            doc.add_paragraph("Aucune société dans cette catégorie.")
+        doc.add_paragraph()
+        
+        # Convergence vente
+        doc.add_heading('⚠️ Convergence Vente (Technique + Fondamental = VENTE)', level=3)
+        if convergence_matrix['convergence_vente']:
+            for company in convergence_matrix['convergence_vente']:
+                doc.add_paragraph(f"• {company}", style='List Bullet')
+        else:
+            doc.add_paragraph("Aucune société dans cette catégorie.")
+        doc.add_paragraph()
+        
+        # Divergence forte
+        doc.add_heading('❌ Divergence Forte (Signaux opposés)', level=3)
+        if convergence_matrix['divergence_forte']:
+            for company in convergence_matrix['divergence_forte']:
+                doc.add_paragraph(f"• {company}", style='List Bullet')
+        else:
+            doc.add_paragraph("Aucune société dans cette catégorie.")
+        doc.add_paragraph()
+        
+        # Divergence modérée
+        doc.add_heading('⚡ Divergence Modérée', level=3)
+        if convergence_matrix['divergence_moderee']:
+            for company in convergence_matrix['divergence_moderee']:
+                doc.add_paragraph(f"• {company}", style='List Bullet')
+        else:
+            doc.add_paragraph("Aucune société dans cette catégorie.")
+        
+        doc.add_page_break()
+        
+        # ========== 3. ANALYSE DE LIQUIDITÉ ==========
+        doc.add_heading('💧 ANALYSE DE LIQUIDITÉ', level=1)
+        
+        liquidity_analysis = self._calculate_liquidity_analysis(all_company_data)
+        
+        doc.add_paragraph(
+            "Cette analyse compare les volumes moyens échangés pour identifier les titres les plus liquides "
+            "(faciles à acheter/vendre) et ceux présentant un risque de liquidité."
+        )
+        doc.add_paragraph()
+        
+        # Haute liquidité
+        doc.add_heading('🟢 Titres à Haute Liquidité (Top 20%)', level=3)
+        high_liq_data = []
+        for item in liquidity_analysis['high_liquidity']:
+            high_liq_data.append([
+                f"{item['symbol']} ({item['company_name']})",
+                f"{item['avg_volume']:.0f}",
+                f"{item['avg_value']:.0f} FCFA",
+                f"{item['performance']:.2f}%",
+                item['recommendation']
+            ])
+        
+        if high_liq_data:
+            self._add_table_with_shading(doc, high_liq_data, 
+                                        ['Société', 'Vol. Moy.', 'Valeur Moy.', 'Perf. 100j', 'Recom.'])
+        doc.add_paragraph()
+        
+        # Faible liquidité
+        doc.add_heading('🔴 Titres à Faible Liquidité (Bottom 40%) - RISQUE ÉLEVÉ', level=3)
+        low_liq_data = []
+        for item in liquidity_analysis['low_liquidity'][:10]:  # Top 10 des moins liquides
+            low_liq_data.append([
+                f"{item['symbol']} ({item['company_name']})",
+                f"{item['avg_volume']:.0f}",
+                f"{item['avg_value']:.0f} FCFA",
+                f"{item['performance']:.2f}%",
+                item['recommendation']
+            ])
+        
+        if low_liq_data:
+            self._add_table_with_shading(doc, low_liq_data, 
+                                        ['Société', 'Vol. Moy.', 'Valeur Moy.', 'Perf. 100j', 'Recom.'])
+        
+        doc.add_paragraph()
+        p_warning = doc.add_paragraph()
+        p_warning.add_run("⚠️ ATTENTION: ").bold = True
+        p_warning.add_run(
+            "Les titres à faible liquidité présentent un risque de ne pas pouvoir sortir facilement "
+            "de sa position. À privilégier uniquement pour un investissement de long terme."
+        )
+        
+        doc.add_page_break()
+        
+        # ========== 4. TOP 10 DIVERGENCES ==========
+        doc.add_heading('⚠️ TOP 10 DES DIVERGENCES MAJEURES', level=1)
+        
+        top_divergences = self._calculate_top_divergences(all_company_data)
+        
+        doc.add_paragraph(
+            "Cette section liste les sociétés présentant les écarts les plus importants "
+            "entre les différents indicateurs techniques et fondamentaux."
+        )
+        doc.add_paragraph()
+        
+        for idx, div in enumerate(top_divergences, 1):
+            doc.add_heading(f"{idx}. {div['symbol']} - {div['company_name']}", level=3)
+            
+            p = doc.add_paragraph()
+            p.add_run(f"Score de divergence: ").bold = True
+            p.add_run(f"{div['divergence_score']}/8\n")
+            
+            p.add_run(f"Description: ").bold = True
+            p.add_run(f"{div['description']}\n")
+            
+            doc.add_paragraph()
+        
+        doc.add_page_break()
+        
+        # ========== 5. MATRICE RISQUE vs HORIZON ==========
+        doc.add_heading('📈 MATRICE RISQUE vs HORIZON DE PLACEMENT', level=1)
+        
+        risk_horizon_matrix = self._calculate_risk_horizon_matrix(all_company_data)
+        
+        doc.add_paragraph(
+            "Cette matrice croise le niveau de risque avec l'horizon de placement recommandé "
+            "pour faciliter la sélection de titres selon votre profil d'investisseur."
+        )
+        doc.add_paragraph()
+        
+        # Tableau récapitulatif
+        matrix_data = [
+            ['RISQUE / HORIZON', 'Court Terme', 'Moyen Terme', 'Long Terme'],
+            [
+                'Risque Faible',
+                str(len(risk_horizon_matrix['faible_court'])),
+                str(len(risk_horizon_matrix['faible_moyen'])),
+                str(len(risk_horizon_matrix['faible_long']))
+            ],
+            [
+                'Risque Moyen',
+                str(len(risk_horizon_matrix['moyen_court'])),
+                str(len(risk_horizon_matrix['moyen_moyen'])),
+                str(len(risk_horizon_matrix['moyen_long']))
+            ],
+            [
+                'Risque Élevé',
+                str(len(risk_horizon_matrix['eleve_court'])),
+                str(len(risk_horizon_matrix['eleve_moyen'])),
+                str(len(risk_horizon_matrix['eleve_long']))
+            ]
+        ]
+        
+        self._add_table_with_shading(doc, matrix_data[1:], matrix_data[0])
+        doc.add_paragraph()
+        
+        # Détail par catégorie
+        categories = [
+            ('Faible Risque - Court Terme', 'faible_court', '🟢'),
+            ('Faible Risque - Moyen Terme', 'faible_moyen', '🟢'),
+            ('Faible Risque - Long Terme', 'faible_long', '🟢'),
+            ('Risque Moyen - Court Terme', 'moyen_court', '🟡'),
+            ('Risque Moyen - Moyen Terme', 'moyen_moyen', '🟡'),
+            ('Risque Moyen - Long Terme', 'moyen_long', '🟡'),
+            ('Risque Élevé - Court Terme', 'eleve_court', '🔴'),
+            ('Risque Élevé - Moyen Terme', 'eleve_moyen', '🔴'),
+            ('Risque Élevé - Long Terme', 'eleve_long', '🔴'),
+        ]
+        
+        for cat_name, cat_key, emoji in categories:
+            if risk_horizon_matrix[cat_key]:
+                doc.add_heading(f"{emoji} {cat_name}", level=3)
+                for company in risk_horizon_matrix[cat_key]:
+                    doc.add_paragraph(f"• {company}", style='List Bullet')
+                doc.add_paragraph()
+        
+        doc.add_page_break()
+        
+        # ========== ÉVÉNEMENTS MARQUANTS ==========
         doc.add_heading('📰 FAITS MARQUANTS RÉCENTS', level=2)
         market_events = self._get_market_events()
         events_p = doc.add_paragraph(market_events)
@@ -760,19 +1332,23 @@ IMPORTANT:
         
         doc.add_page_break()
         
-        # Table des matières
-        doc.add_heading('TABLE DES MATIÈRES', level=1)
-        for idx, symbol in enumerate(sorted(all_analyses.keys()), 1):
-            toc_p = doc.add_paragraph(f"{idx}. {symbol}")
+        # ========== TABLE DES MATIÈRES ==========
+        doc.add_heading('TABLE DES MATIÈRES - ANALYSES DÉTAILLÉES', level=1)
+        for idx, (symbol, data) in enumerate(sorted(all_company_data.items()), 1):
+            company_name = data.get('company_name', 'N/A')
+            toc_p = doc.add_paragraph(f"{idx}. {symbol} - {company_name}")
             toc_p.paragraph_format.left_indent = Pt(20)
         
         doc.add_page_break()
         
-        # Analyses détaillées
-        doc.add_heading('ANALYSES DÉTAILLÉES', level=1)
+        # ========== ANALYSES DÉTAILLÉES ==========
+        doc.add_heading('ANALYSES DÉTAILLÉES PAR SOCIÉTÉ', level=1)
         
         for idx, (symbol, analysis) in enumerate(sorted(all_analyses.items()), 1):
-            company_heading = doc.add_heading(f"{idx}. {symbol}", level=2)
+            company_data = all_company_data.get(symbol, {})
+            company_name = company_data.get('company_name', 'N/A')
+            
+            company_heading = doc.add_heading(f"{idx}. {symbol} - {company_name}", level=2)
             company_heading.paragraph_format.space_before = Pt(18)
             company_heading_run = company_heading.runs[0]
             company_heading_run.font.color.rgb = RGBColor(0, 102, 204)
@@ -798,19 +1374,35 @@ IMPORTANT:
             if idx % 2 == 0 and idx < len(all_analyses):
                 doc.add_page_break()
         
-        # Pied de page
+        # ========== PIED DE PAGE ==========
         doc.add_page_break()
         footer = doc.add_heading('NOTES IMPORTANTES', level=1)
         footer_text = doc.add_paragraph(
-            "1. Les analyses techniques sont basées sur les 5 indicateurs classiques.\n"
-            "2. Les analyses fondamentales proviennent des rapports financiers officiels.\n"
-            "3. Les recommandations sont générées par intelligence artificielle Multi-AI (DeepSeek, Gemini, Mistral).\n"
-            "4. Tous les cours sont en FCFA (Francs CFA).\n"
-            "5. Les prédictions sont des estimations basées sur des modèles statistiques.\n"
-            "6. Ce document est confidentiel et destiné à l'usage professionnel."
+            "1. Les analyses techniques sont basées sur les 5 indicateurs classiques (MM, Bollinger, MACD, RSI, Stochastique).\n"
+            "2. Les analyses fondamentales proviennent des rapports financiers officiels de la BRVM.\n"
+            "3. Les recommandations sont générées par intelligence artificielle Multi-AI (DeepSeek, Gemini, Mistral) avec rotation automatique.\n"
+            "4. Tous les cours et valeurs sont exprimés en FCFA (Francs CFA).\n"
+            "5. Les prédictions sont des estimations statistiques et ne garantissent pas les performances futures.\n"
+            "6. L'analyse de liquidité est basée sur les 30 derniers jours de transactions.\n"
+            "7. Les matrices de convergence et de divergence sont des outils d'aide à la décision complémentaires.\n"
+            "8. Ce document est strictement confidentiel et destiné à l'usage professionnel uniquement.\n"
+            "9. Consultez toujours un conseiller financier agréé avant toute décision d'investissement.\n"
+            f"10. Rapport généré automatiquement - Version 29.0 Ultimate - {len(all_analyses)} sociétés analysées."
         )
         
-        filename = f"Rapport_Professionnel_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+        # Signature IA
+        doc.add_paragraph()
+        sig = doc.add_paragraph()
+        sig.add_run("Analyse Multi-AI - ").italic = True
+        sig.add_run(f"DeepSeek: {self.request_count['deepseek']} req | ").italic = True
+        sig.add_run(f"Gemini: {self.request_count['gemini']} req | ").italic = True
+        sig.add_run(f"Mistral: {self.request_count['mistral']} req").italic = True
+        sig.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sig.runs[0].font.size = Pt(8)
+        sig.runs[0].font.color.rgb = RGBColor(128, 128, 128)
+        
+        # Sauvegarde
+        filename = f"Rapport_Ultimate_BRVM_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         doc.save(filename)
         
         logging.info(f"   ✅ Document créé: {filename}")
@@ -818,12 +1410,14 @@ IMPORTANT:
         # Préparer la synthèse pour la DB
         if market_indicators and market_indicators.get('composite'):
             synthesis_text = (
-                f"Analyse de {len(all_analyses)} sociétés. "
+                f"Analyse ULTIMATE de {len(all_analyses)} sociétés. "
                 f"Indices: BRVM Composite {market_indicators['composite']:.2f} pts. "
-                f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA."
+                f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA. "
+                f"Multi-AI: DeepSeek ({self.request_count['deepseek']}), "
+                f"Gemini ({self.request_count['gemini']}), Mistral ({self.request_count['mistral']})."
             )
         else:
-            synthesis_text = f"Analyse de {len(all_analyses)} sociétés de la BRVM."
+            synthesis_text = f"Analyse ULTIMATE de {len(all_analyses)} sociétés de la BRVM."
         
         self._save_to_database(
             datetime.now().date(),
@@ -838,10 +1432,11 @@ IMPORTANT:
         return filename
 
     def generate_all_reports(self, new_fundamental_analyses):
-        """Génération du rapport complet avec Multi-AI"""
+        """Génération du rapport ULTIMATE complet avec toutes les analyses"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V28.0 - Multi-AI)")
-        logging.info("🤖 Providers: DeepSeek → Gemini → Mistral")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V29.0 ULTIMATE)")
+        logging.info("🤖 Multi-AI: DeepSeek → Gemini → Mistral")
+        logging.info("📊 Analyses: Sectorielles + Convergence + Liquidité + Divergences + Risque/Horizon")
         logging.info("="*80)
         
         # Vérifier qu'au moins une clé API est disponible
@@ -875,6 +1470,7 @@ IMPORTANT:
         for idx, row in df.iterrows():
             symbol = row['symbol']
             company_id = row['company_id']
+            company_name = row.get('company_name', 'N/A')
             
             hist_df = self._get_historical_data_100days(company_id)
             
@@ -955,7 +1551,7 @@ IMPORTANT:
             
             all_company_data[symbol] = {
                 'company_id': company_id,
-                'company_name': row.get('company_name'),
+                'company_name': company_name,
                 'sector': row.get('sector'),
                 'current_price': float(row.get('price', 0)) if pd.notna(row.get('price')) else None,
                 'price_evolution_100d': price_evolution_100d,
@@ -988,12 +1584,18 @@ IMPORTANT:
         
         filename = self._create_word_document(all_analyses, all_company_data)
         
-        logging.info(f"\n✅ Rapport généré: {filename}")
+        logging.info(f"\n✅ Rapport ULTIMATE généré: {filename}")
         logging.info(f"📊 Statistiques requêtes Multi-AI:")
         logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
         logging.info(f"   - Gemini: {self.request_count['gemini']}")
         logging.info(f"   - Mistral: {self.request_count['mistral']}")
         logging.info(f"   - TOTAL: {self.request_count['total']}")
+        logging.info(f"\n📋 Analyses incluses:")
+        logging.info(f"   ✅ Analyse par secteur")
+        logging.info(f"   ✅ Matrice de convergence des signaux")
+        logging.info(f"   ✅ Analyse de liquidité")
+        logging.info(f"   ✅ Top 10 divergences majeures")
+        logging.info(f"   ✅ Matrice Risque vs Horizon")
 
     def __del__(self):
         if self.db_conn and not self.db_conn.closed:
