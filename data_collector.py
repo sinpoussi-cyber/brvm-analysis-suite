@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR V9.0 - SUPABASE UNIQUEMENT (avec variations journalières et YTD)
+# MODULE: DATA COLLECTOR V28.0 - CORRIGÉ (Format numérique + Nouveaux secteurs)
 # ==============================================================================
 
 import re
@@ -114,12 +114,25 @@ def date_exists_in_db(conn, trade_date):
 
 
 # ==============================================================================
-# Nettoyage valeurs numériques
+# Nettoyage valeurs numériques - CORRECTION MAJEURE
 # ==============================================================================
 def clean_and_convert_numeric(value):
+    """
+    Nettoie et convertit une valeur numérique.
+    Gère les formats français (virgule) et anglais (point)
+    """
     if value is None or value == "":
         return None
-    cleaned_value = re.sub(r"\s+", "", str(value)).replace(",", ".")
+    
+    # Convertir en string
+    cleaned_value = str(value).strip()
+    
+    # Supprimer les espaces
+    cleaned_value = re.sub(r'\s+', '', cleaned_value)
+    
+    # CORRECTION: Remplacer la virgule par un point pour les décimales
+    cleaned_value = cleaned_value.replace(',', '.')
+    
     try:
         return float(cleaned_value)
     except (ValueError, TypeError):
@@ -165,14 +178,21 @@ def extract_data_from_pdf(pdf_url):
 
 
 # ==============================================================================
-# Extraction des indicateurs de marché depuis PDF
+# Extraction des indicateurs de marché depuis PDF - CORRECTION MAJEURE
 # ==============================================================================
 def extract_market_indicators(pdf_text: str) -> dict:
-    """Extrait les indicateurs de marché (valeurs brutes uniquement)."""
+    """Extrait les indicateurs de marché avec nettoyage des valeurs"""
 
     def get_value(label, text):
-        match = re.search(rf"{label}\s+([\d\s,]+)", text)
-        return match.group(1).strip() if match else None
+        """Récupère et nettoie une valeur numérique"""
+        match = re.search(rf"{label}\s+([\d\s,\.]+)", text)
+        if match:
+            raw_value = match.group(1).strip()
+            # Nettoyer: supprimer espaces, remplacer virgule par point
+            cleaned = re.sub(r'\s+', '', raw_value)
+            cleaned = cleaned.replace(',', '.')
+            return cleaned
+        return None
 
     indicators = {}
     indicators["brvm_composite"] = {"valeur": get_value("BRVM COMPOSITE", pdf_text)}
@@ -210,43 +230,52 @@ def insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
             conn.commit()
             return cur.rowcount > 0
     except Exception as e:
-        logging.error(f"❌ Erreur insertion DB pour {symbol}: {e}")
+        logging.error(f"❌ Erreur insertion: {e}")
         conn.rollback()
         return False
 
 
 # ==============================================================================
-# Insertion des indicateurs de marché dans DB
+# Insertion des indicateurs de marché - CORRECTION MAJEURE
 # ==============================================================================
-def insert_market_indicators_to_db(conn, indicators: dict, extraction_date):
-    """Insère les indicateurs extraits dans la base Supabase/PostgreSQL."""
-
+def insert_market_indicators_to_db(conn, indicators, trade_date):
+    """Insère les indicateurs de marché avec conversion correcte des valeurs"""
+    
     try:
         with conn.cursor() as cursor:
+            # Extraire et convertir les valeurs
+            brvm_composite = clean_and_convert_numeric(indicators.get("brvm_composite", {}).get("valeur"))
+            brvm_30 = clean_and_convert_numeric(indicators.get("brvm_30", {}).get("valeur"))
+            brvm_prestige = clean_and_convert_numeric(indicators.get("brvm_prestige", {}).get("valeur"))
+            brvm_croissance = clean_and_convert_numeric(indicators.get("brvm_croissance", {}).get("valeur"))
+            capitalisation_globale = clean_and_convert_numeric(indicators.get("capitalisation_globale", {}).get("valeur"))
+            volume_moyen_annuel = clean_and_convert_numeric(indicators.get("volume_moyen_annuel"))
+            valeur_moyenne_annuelle = clean_and_convert_numeric(indicators.get("valeur_moyenne_annuelle"))
+
             insert_query = """
                 INSERT INTO new_market_indicators (
-                    extraction_date,
-                    brvm_composite,
-                    brvm_30,
-                    brvm_prestige,
-                    brvm_croissance,
-                    capitalisation_globale,
-                    volume_moyen_annuel,
-                    valeur_moyenne_annuelle
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
+                    extraction_date, brvm_composite, brvm_30, brvm_prestige, brvm_croissance,
+                    capitalisation_globale, volume_moyen_annuel, valeur_moyenne_annuelle
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (extraction_date) DO UPDATE SET
+                    brvm_composite = EXCLUDED.brvm_composite,
+                    brvm_30 = EXCLUDED.brvm_30,
+                    brvm_prestige = EXCLUDED.brvm_prestige,
+                    brvm_croissance = EXCLUDED.brvm_croissance,
+                    capitalisation_globale = EXCLUDED.capitalisation_globale,
+                    volume_moyen_annuel = EXCLUDED.volume_moyen_annuel,
+                    valeur_moyenne_annuelle = EXCLUDED.valeur_moyenne_annuelle;
             """
 
             values = (
-                extraction_date,
-                indicators["brvm_composite"]["valeur"],
-                indicators["brvm_30"]["valeur"],
-                indicators["brvm_prestige"]["valeur"],
-                indicators["brvm_croissance"]["valeur"],
-                indicators["capitalisation_globale"]["valeur"],
-                indicators["volume_moyen_annuel"],
-                indicators["valeur_moyenne_annuelle"],
+                trade_date,
+                brvm_composite,
+                brvm_30,
+                brvm_prestige,
+                brvm_croissance,
+                capitalisation_globale,
+                volume_moyen_annuel,
+                valeur_moyenne_annuelle
             )
 
             cursor.execute(insert_query, values)
@@ -283,7 +312,10 @@ def update_market_variations(conn):
 
             def pct_change(new, old):
                 try:
-                    new_f, old_f = float(str(new).replace(",", ".")), float(str(old).replace(",", "."))
+                    # Convertir en float en gérant les virgules
+                    new_f = float(str(new).replace(",", ".")) if new else 0
+                    old_f = float(str(old).replace(",", ".")) if old else 0
+                    
                     if old_f == 0:
                         return None
                     return round(((new_f - old_f) / old_f) * 100, 3)
@@ -300,7 +332,7 @@ def update_market_variations(conn):
                 "variation_journaliere_capitalisation_globale": pct_change(latest[7], prev[7]),
             }
 
-            # Données de l’année précédente pour le calcul YTD
+            # Données de l'année précédente pour le calcul YTD
             cur.execute(
                 """
                 SELECT extraction_date, brvm_prestige, brvm_croissance, brvm_composite, brvm_30,
@@ -329,7 +361,7 @@ def update_market_variations(conn):
                 ):
                     variations_ytd[f"variation_ytd_{col}"] = pct_change(latest[i], prev_year[i])
             else:
-                logging.warning("⚠️ Aucune donnée de l’année précédente pour le calcul YTD.")
+                logging.warning("⚠️ Aucune donnée de l'année précédente pour le calcul YTD.")
 
             updates = {**variations_jour, **variations_ytd}
             set_clause = ", ".join([f"{k} = %s" for k in updates.keys()])
@@ -355,7 +387,7 @@ def update_market_variations(conn):
 # ==============================================================================
 def run_data_collection():
     logging.info("=" * 60)
-    logging.info("📊 ÉTAPE 1: COLLECTE DES DONNÉES (SUPABASE UNIQUEMENT)")
+    logging.info("📊 ÉTAPE 1: COLLECTE DES DONNÉES (V28.0 CORRIGÉ)")
     logging.info("=" * 60)
 
     conn = connect_to_db()
@@ -405,7 +437,7 @@ def run_data_collection():
                     for page in pdf.pages:
                         pdf_text += page.extract_text() or ""
             except Exception as e:
-                logging.warning(f"⚠️ Impossible d’extraire le texte brut du PDF : {e}")
+                logging.warning(f"⚠️ Impossible d'extraire le texte brut du PDF : {e}")
                 pdf_text = ""
 
             indicators = extract_market_indicators(pdf_text)
@@ -453,7 +485,13 @@ def run_data_collection():
 
 
 # ==============================================================================
-# Exécution
+# Point d'entrée avec classe wrapper pour compatibilité
 # ==============================================================================
+class BRVMDataCollector:
+    """Classe wrapper pour compatibilité avec main.py"""
+    def run(self):
+        run_data_collection()
+
+
 if __name__ == "__main__":
     run_data_collection()
