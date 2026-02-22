@@ -1535,12 +1535,22 @@ IMPORTANT:
             
             symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
             if not symbol_predictions.empty:
+                # Filtrer les prédictions avec des prix valides (non NULL)
                 data_dict['predictions'] = [
                     {'date': row['prediction_date'], 'price': row['predicted_price']}
                     for _, row in symbol_predictions.head(10).iterrows()
+                    if pd.notna(row['predicted_price'])
                 ]
-                pred_list = [f"{p['date']}: {p['price']:.0f} FCFA" for p in data_dict['predictions'][:5]]
-                data_dict['predictions_text'] = ", ".join(pred_list)
+                # Générer le texte seulement si des prédictions valides existent
+                if data_dict['predictions']:
+                    pred_list = [
+                        f"{p['date']}: {p['price']:.0f} FCFA" 
+                        for p in data_dict['predictions'][:5]
+                        if p['price'] is not None
+                    ]
+                    data_dict['predictions_text'] = ", ".join(pred_list) if pred_list else "Aucune prédiction disponible"
+                else:
+                    data_dict['predictions_text'] = "Aucune prédiction disponible"
             else:
                 data_dict['predictions_text'] = "Aucune prédiction disponible"
             
