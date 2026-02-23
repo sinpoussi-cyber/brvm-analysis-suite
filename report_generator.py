@@ -552,12 +552,13 @@ IMPORTANT:
         
         for symbol, data in all_company_data.items():
             sector = data.get('sector', 'Non classifié')
-            if not sector:
+            if not sector or str(sector).strip() == '':
                 sector = 'Non classifié'
             
-            sector_stats[sector]['companies'].append(f"{symbol} ({data.get('company_name', 'N/A')})")
+            company_name = data.get('company_name', 'N/A')
+            sector_stats[sector]['companies'].append(f"{symbol} ({company_name})")
             
-            if data.get('price_evolution_100d'):
+            if data.get('price_evolution_100d') and pd.notna(data.get('price_evolution_100d')):
                 sector_stats[sector]['performances'].append(data['price_evolution_100d'])
             
             if data.get('recommendation'):
@@ -566,17 +567,13 @@ IMPORTANT:
             if data.get('risk_level'):
                 sector_stats[sector]['risk_levels'].append(data['risk_level'])
             
-            if data.get('current_price'):
+            if data.get('current_price') and pd.notna(data.get('current_price')):
                 sector_stats[sector]['prices'].append(data['current_price'])
-            
-            # Volume moyen (à calculer depuis historical_data si disponible)
-            if data.get('volume_moyen'):
-                sector_stats[sector]['volumes'].append(data['volume_moyen'])
         
         # Calculer les statistiques par secteur
         sector_analysis = {}
         for sector, stats in sector_stats.items():
-            # Performance moyenne
+            # Performance moyenne (avec gestion du cas vide)
             avg_perf = sum(stats['performances']) / len(stats['performances']) if stats['performances'] else 0
             
             # Sentiment général (recommandation la plus fréquente)
@@ -589,13 +586,16 @@ IMPORTANT:
             avg_risk_score = sum(risk_scores) / len(risk_scores) if risk_scores else 2
             avg_risk = 'Faible' if avg_risk_score < 1.5 else 'Moyen' if avg_risk_score < 2.5 else 'Élevé'
             
+            # Prix moyen (avec gestion du cas vide)
+            prix_moyen = sum(stats['prices']) / len(stats['prices']) if stats['prices'] else 0
+            
             sector_analysis[sector] = {
                 'nb_societes': len(stats['companies']),
                 'societes': stats['companies'],
                 'performance_moyenne': avg_perf,
                 'sentiment_general': sentiment,
                 'risque_moyen': avg_risk,
-                'prix_moyen': sum(stats['prices']) / len(stats['prices']) if stats['prices'] else 0,
+                'prix_moyen': prix_moyen,
                 'distribution_recommandations': dict(rec_counter)
             }
         
@@ -690,26 +690,41 @@ IMPORTANT:
                     avg_volume = df.iloc[0]['avg_volume'] if pd.notna(df.iloc[0]['avg_volume']) else 0
                     avg_value = df.iloc[0]['avg_value'] if pd.notna(df.iloc[0]['avg_value']) else 0
                     
-                    liquidity_data.append({
-                        'symbol': symbol,
-                        'company_name': company_name,
-                        'avg_volume': avg_volume,
-                        'avg_value': avg_value,
-                        'performance': data.get('price_evolution_100d', 0),
-                        'recommendation': data.get('recommendation', 'N/A'),
-                        'risk_level': data.get('risk_level', 'N/A')
-                    })
+                    # Ne garder que les sociétés avec des données de volume
+                    if avg_volume > 0:
+                        liquidity_data.append({
+                            'symbol': symbol,
+                            'company_name': company_name,
+                            'avg_volume': avg_volume,
+                            'avg_value': avg_value,
+                            'performance': data.get('price_evolution_100d', 0) if pd.notna(data.get('price_evolution_100d')) else 0,
+                            'recommendation': data.get('recommendation', 'N/A'),
+                            'risk_level': data.get('risk_level', 'N/A')
+                        })
             except Exception as e:
                 logging.error(f"❌ Erreur volume pour {symbol}: {e}")
         
         # Trier par volume décroissant
         liquidity_data.sort(key=lambda x: x['avg_volume'], reverse=True)
         
-        # Classifier en catégories
+        # Classifier en catégories (avec protection contre les listes vides)
         total = len(liquidity_data)
-        high_liquidity = liquidity_data[:int(total*0.2)]  # Top 20%
-        medium_liquidity = liquidity_data[int(total*0.2):int(total*0.6)]  # Middle 40%
-        low_liquidity = liquidity_data[int(total*0.6):]  # Bottom 40%
+        if total == 0:
+            return {
+                'high_liquidity': [],
+                'medium_liquidity': [],
+                'low_liquidity': [],
+                'all_data': []
+            }
+        
+        # Assurer au moins 1 élément par catégorie si possible
+        high_count = max(1, int(total * 0.2)) if total >= 5 else total
+        medium_start = high_count
+        medium_end = max(medium_start + 1, int(total * 0.6)) if total >= 5 else total
+        
+        high_liquidity = liquidity_data[:high_count]
+        medium_liquidity = liquidity_data[medium_start:medium_end] if total > high_count else []
+        low_liquidity = liquidity_data[medium_end:] if total > medium_end else []
         
         return {
             'high_liquidity': high_liquidity,
@@ -1057,9 +1072,10 @@ IMPORTANT:
         # ========== FLOP 10 VENTES ==========
         doc.add_heading('📉 TOP 10 DES ACTIONS À ÉVITER', level=2)
         
+        # Tri CROISSANT pour avoir les pires scores (VENTE FORTE = 1, VENTE = 2)
         sorted_sell = sorted(
             [(symbol, data) for symbol, data in all_company_data.items()],
-            key=lambda x: x[1].get('recommendation_score', 0)
+            key=lambda x: x[1].get('recommendation_score', 3)  # 3 = CONSERVER par défaut
         )[:10]
         
         flop_10_list = []
@@ -1212,6 +1228,8 @@ IMPORTANT:
         if high_liq_data:
             self._add_table_with_shading(doc, high_liq_data, 
                                         ['Société', 'Vol. Moy.', 'Valeur Moy.', 'Perf. 100j', 'Recom.'])
+        else:
+            doc.add_paragraph("ℹ️ Données insuffisantes pour calculer la liquidité (besoin de 30 jours minimum).")
         doc.add_paragraph()
         
         # Faible liquidité
@@ -1229,6 +1247,8 @@ IMPORTANT:
         if low_liq_data:
             self._add_table_with_shading(doc, low_liq_data, 
                                         ['Société', 'Vol. Moy.', 'Valeur Moy.', 'Perf. 100j', 'Recom.'])
+        else:
+            doc.add_paragraph("ℹ️ Données insuffisantes pour identifier les titres à faible liquidité.")
         
         doc.add_paragraph()
         p_warning = doc.add_paragraph()
