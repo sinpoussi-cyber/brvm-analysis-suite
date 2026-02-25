@@ -1,6 +1,6 @@
 # ==============================================================================
-# MODULE: REPORT GENERATOR V29.0 ULTIMATE - ANALYSES AVANCÉES + MULTI-AI
-# Toutes fonctionnalités V28 + Analyses sectorielles + Matrices + Liquidité
+# MODULE: REPORT GENERATOR V30.0 FINAL - HISTORISATION + RISQUE CHIFFRÉ
+# Toutes fonctionnalités V29 + Historisation DB + Calcul risque + Décisions
 # ==============================================================================
 
 import os
@@ -843,6 +843,139 @@ IMPORTANT:
         
         return matrix
 
+    def _calculate_risk_score(self, data):
+        """
+        ✅ V30: Calcul du score de risque chiffré (0-100) avec 5 critères
+        
+        Critères:
+        - Volatilité (30%)
+        - Beta vs marché (20%)  
+        - Liquidité (20%)
+        - Divergence signaux (15%)
+        - Performance historique (15%)
+        """
+        import numpy as np
+        
+        risk_score = 0
+        details = {}
+        
+        # 1. Volatilité (30%) - écart-type des prix / moyenne
+        hist_df = self._get_historical_data_100days(data.get('company_id'))
+        volatility = 0
+        
+        if not hist_df.empty and len(hist_df) > 1:
+            prices = hist_df['price'].values
+            mean_price = np.mean(prices)
+            if mean_price > 0:
+                volatility = np.std(prices) / mean_price
+            
+            if volatility < 0.05:  # < 5%
+                vol_score = 10
+                details['volatilite'] = f"{volatility*100:.1f}% (Faible)"
+            elif volatility < 0.15:  # 5-15%
+                vol_score = 30
+                details['volatilite'] = f"{volatility*100:.1f}% (Moyenne)"
+            else:  # > 15%
+                vol_score = 60
+                details['volatilite'] = f"{volatility*100:.1f}% (Élevée)"
+            
+            risk_score += vol_score * 0.30
+        else:
+            details['volatilite'] = "Données insuffisantes"
+            risk_score += 30 * 0.30  # Score moyen par défaut
+        
+        # 2. Beta vs marché (20%) - approximation basée sur volatilité
+        beta = volatility / 0.10 if volatility > 0 else 1.0
+        
+        if beta < 0.8:
+            beta_score = 10
+            details['beta'] = f"{beta:.2f} (Défensif)"
+        elif beta < 1.2:
+            beta_score = 20
+            details['beta'] = f"{beta:.2f} (Neutre)"
+        else:
+            beta_score = 40
+            details['beta'] = f"{beta:.2f} (Agressif)"
+        
+        risk_score += beta_score * 0.20
+        
+        # 3. Liquidité (20%) - volume moyen
+        # Calculer le volume moyen depuis historical_data
+        company_id = data.get('company_id')
+        avg_volume = 0
+        
+        if company_id and not hist_df.empty:
+            avg_volume = hist_df['volume'].mean() if 'volume' in hist_df.columns else 0
+        
+        if avg_volume > 10000:
+            liq_score = 5
+            details['liquidite'] = f"{avg_volume:.0f} titres/j (Excellente)"
+        elif avg_volume > 1000:
+            liq_score = 15
+            details['liquidite'] = f"{avg_volume:.0f} titres/j (Bonne)"
+        elif avg_volume > 0:
+            liq_score = 40
+            details['liquidite'] = f"{avg_volume:.0f} titres/j (Faible - RISQUE)"
+        else:
+            liq_score = 30
+            details['liquidite'] = "Non calculable"
+        
+        risk_score += liq_score * 0.20
+        
+        # 4. Divergence signaux (15%)
+        # Calculer le score de divergence
+        tech_signals = []
+        for key in ['mm_decision', 'bollinger_decision', 'macd_decision', 'rsi_decision', 'stochastic_decision']:
+            val = data.get(key)
+            if val:
+                tech_signals.append(str(val))
+        
+        buy_signals = [s for s in tech_signals if 'Achat' in s]
+        sell_signals = [s for s in tech_signals if 'Vente' in s]
+        divergence_score = abs(len(buy_signals) - len(sell_signals))
+        
+        div_score = min(divergence_score * 5, 30)
+        details['divergence'] = f"{divergence_score}/{len(tech_signals)} signaux"
+        
+        risk_score += div_score * 0.15
+        
+        # 5. Performance historique (15%) - stabilité des rendements
+        if not hist_df.empty and len(hist_df) > 1:
+            returns = hist_df['price'].pct_change().dropna()
+            if len(returns) > 0:
+                perf_volatility = returns.std() * 100
+            else:
+                perf_volatility = 10
+            
+            if perf_volatility < 5:
+                perf_score = 5
+                details['stabilite'] = f"{perf_volatility:.1f}% (Excellente)"
+            elif perf_volatility < 15:
+                perf_score = 15
+                details['stabilite'] = f"{perf_volatility:.1f}% (Moyenne)"
+            else:
+                perf_score = 30
+                details['stabilite'] = f"{perf_volatility:.1f}% (Instable)"
+            
+            risk_score += perf_score * 0.15
+        else:
+            details['stabilite'] = "Données insuffisantes"
+            risk_score += 15 * 0.15
+        
+        # Classification finale
+        if risk_score < 20:
+            risk_level = "Faible"
+        elif risk_score < 50:
+            risk_level = "Moyen"
+        else:
+            risk_level = "Élevé"
+        
+        return {
+            'score': round(risk_score, 2),
+            'level': risk_level,
+            'details': details
+        }
+
     # ============================================================================
     # SAUVEGARDE ET GÉNÉRATION DOCUMENT
     # ============================================================================
@@ -879,6 +1012,7 @@ IMPORTANT:
                 report_summary_id = cur.fetchone()[0]
                 
                 for symbol, company_data in all_company_data.items():
+                    # ✅ V30: HISTORISATION - Plus de ON CONFLICT, toujours INSERT
                     cur.execute("""
                         INSERT INTO report_company_analysis (
                             report_summary_id, company_id, symbol, company_name,
@@ -889,7 +1023,8 @@ IMPORTANT:
                             rsi_value, rsi_decision,
                             stochastic_k, stochastic_d, stochastic_decision,
                             price_evolution_text, technical_conclusion, fundamental_analysis, investment_conclusion,
-                            recommendation, confidence_level, risk_level, investment_horizon
+                            recommendation, confidence_level, risk_level, investment_horizon,
+                            technical_decision, fundamental_decision, risk_score, risk_details
                         ) VALUES (
                             %s, %s, %s, %s,
                             %s, %s, %s, %s,
@@ -899,12 +1034,9 @@ IMPORTANT:
                             %s, %s,
                             %s, %s, %s,
                             %s, %s, %s, %s,
+                            %s, %s, %s, %s,
                             %s, %s, %s, %s
-                        )
-                        ON CONFLICT (report_summary_id, symbol) DO UPDATE SET
-                            current_price = EXCLUDED.current_price,
-                            recommendation = EXCLUDED.recommendation,
-                            investment_conclusion = EXCLUDED.investment_conclusion;
+                        );
                     """, (
                         report_summary_id,
                         company_data.get('company_id'),
@@ -935,7 +1067,11 @@ IMPORTANT:
                         company_data.get('recommendation'),
                         company_data.get('confidence_level'),
                         company_data.get('risk_level'),
-                        company_data.get('investment_horizon')
+                        company_data.get('investment_horizon'),
+                        company_data.get('technical_decision', 'NEUTRE'),
+                        company_data.get('fundamental_decision', 'NEUTRE'),
+                        company_data.get('risk_score', 0.0),
+                        company_data.get('risk_details', '{}')
                     ))
                 
                 self.db_conn.commit()
@@ -1579,6 +1715,44 @@ IMPORTANT:
             
             recommendation, rec_score = self._extract_recommendation_from_analysis(analysis)
             
+            # ✅ V30: Calcul de la décision technique (majorité des indicateurs)
+            tech_signals = []
+            for key in ['mm_decision', 'bollinger_decision', 'macd_decision', 'rsi_decision', 'stochastic_decision']:
+                val = row.get(key)
+                if val and pd.notna(val):
+                    tech_signals.append(str(val))
+            
+            buy_count = sum(1 for s in tech_signals if 'Achat' in s)
+            sell_count = sum(1 for s in tech_signals if 'Vente' in s)
+            
+            if buy_count > sell_count:
+                technical_decision = "ACHAT"
+            elif sell_count > buy_count:
+                technical_decision = "VENTE"
+            else:
+                technical_decision = "NEUTRE"
+            
+            # ✅ V30: Décision fondamentale (basée sur recommandation finale)
+            if 'ACHAT' in recommendation.upper():
+                fundamental_decision = "ACHAT"
+            elif 'VENTE' in recommendation.upper():
+                fundamental_decision = "VENTE"
+            else:
+                fundamental_decision = "NEUTRE"
+            
+            # ✅ V30: Calcul du risque chiffré
+            # Créer un dict temporaire pour _calculate_risk_score
+            temp_data = {
+                'company_id': company_id,
+                'mm_decision': row.get('mm_decision'),
+                'bollinger_decision': row.get('bollinger_decision'),
+                'macd_decision': row.get('macd_decision'),
+                'rsi_decision': row.get('rsi_decision'),
+                'stochastic_decision': row.get('stochastic_decision')
+            }
+            
+            risk_data = self._calculate_risk_score(temp_data)
+            
             all_company_data[symbol] = {
                 'company_id': company_id,
                 'company_name': company_name,
@@ -1608,8 +1782,13 @@ IMPORTANT:
                 'recommendation': recommendation,
                 'recommendation_score': rec_score,
                 'confidence_level': 'Moyen',
-                'risk_level': 'Moyen',
-                'investment_horizon': 'Moyen terme'
+                'risk_level': risk_data['level'],  # ✅ V30: Niveau de risque calculé
+                'investment_horizon': 'Moyen terme',
+                # ✅ V30: Nouvelles colonnes
+                'technical_decision': technical_decision,
+                'fundamental_decision': fundamental_decision,
+                'risk_score': risk_data['score'],
+                'risk_details': json.dumps(risk_data['details'], ensure_ascii=False)
             }
         
         filename = self._create_word_document(all_analyses, all_company_data)
