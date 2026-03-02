@@ -90,8 +90,7 @@ class BRVMReportGenerator:
             brvm_30, 
             brvm_prestige, 
             capitalisation_globale,
-            variation_journaliere_brvm_composite,
-            variation_ytd_brvm_composite
+            extraction_date
         FROM new_market_indicators
         ORDER BY extraction_date DESC
         LIMIT 1;
@@ -103,12 +102,34 @@ class BRVMReportGenerator:
                 row = df.iloc[0]
                 composite = row.get('brvm_composite')
                 if pd.notna(composite):
-                    return {
+                    indicators = {
                         'composite': float(composite),
-                        'composite_var_day': float(row.get('variation_journaliere_brvm_composite')) if pd.notna(row.get('variation_journaliere_brvm_composite')) else None,
-                        'composite_var_ytd': float(row.get('variation_ytd_brvm_composite')) if pd.notna(row.get('variation_ytd_brvm_composite')) else None,
                         'capitalisation': float(row.get('capitalisation_globale')) if pd.notna(row.get('capitalisation_globale')) else None
                     }
+                    
+                    # Calcul dynamique de la variation journalière
+                    try:
+                        query_prev = """
+                        SELECT brvm_composite
+                        FROM new_market_indicators 
+                        WHERE extraction_date < (SELECT MAX(extraction_date) FROM new_market_indicators)
+                        ORDER BY extraction_date DESC 
+                        LIMIT 1;
+                        """
+                        df_prev = pd.read_sql(query_prev, self.db_conn)
+                        
+                        if not df_prev.empty and pd.notna(df_prev.iloc[0]['brvm_composite']):
+                            prev_composite = float(df_prev.iloc[0]['brvm_composite'])
+                            current_composite = float(composite)
+                            var_day = ((current_composite - prev_composite) / prev_composite) * 100
+                            indicators['composite_var_day'] = round(var_day, 2)
+                        else:
+                            indicators['composite_var_day'] = None
+                    except Exception as e:
+                        logging.warning(f"⚠️ Calcul variation journalière échoué: {e}")
+                        indicators['composite_var_day'] = None
+                    
+                    return indicators
             return None
         except Exception as e:
             logging.error(f"❌ Erreur récupération indicateurs: {e}")
