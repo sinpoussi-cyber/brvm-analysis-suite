@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: DATA COLLECTOR V30.0 - SIMPLIFIÉ (6 variables uniquement)
+# MODULE: DATA COLLECTOR V30.0 - SIMPLIFIÉ (6 variables uniquement) - VERSION CORRIGÉE
 # ==============================================================================
 
 import re
@@ -150,27 +150,88 @@ def extract_data_from_pdf(pdf_url):
 
 def extract_market_indicators(pdf_text: str) -> dict:
     """
-    Extraction UNIQUEMENT des 6 indicateurs demandés
-    PAS DE VARIATIONS - UNIQUEMENT LES VALEURS BRUTES
+    ✅ VERSION CORRIGÉE - Extraction des 6 indicateurs avec regex robustes
     """
-    def get_value(label, text):
-        """Récupère et nettoie une valeur numérique"""
-        match = re.search(rf"{label}\s+([\d\s,\.]+)", text)
-        if match:
-            raw_value = match.group(1).strip()
-            cleaned = re.sub(r'\s+', '', raw_value)
-            cleaned = cleaned.replace(',', '.')
-            return cleaned
-        return None
-    
-    # ✅ UNIQUEMENT LES 6 VARIABLES DEMANDÉES
     indicators = {}
-    indicators["brvm_composite"] = get_value("BRVM COMPOSITE", pdf_text)
-    indicators["brvm_30"] = get_value("BRVM 30", pdf_text)
-    indicators["brvm_prestige"] = get_value("BRVM-PRESTIGE", pdf_text)
-    indicators["capitalisation_globale"] = get_value("Capitalisation boursière.*Actions.*Droits", pdf_text)
-    indicators["volume_moyen_annuel"] = get_value("Volume moyen annuel par séance", pdf_text)
-    indicators["valeur_moyenne_annuelle"] = get_value("Valeur moyenne annuelle par séance", pdf_text)
+    
+    # 🔧 FIX 1: BRVM COMPOSITE (fonctionne déjà bien)
+    match = re.search(r"BRVM\s+COMPOSITE\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    if match:
+        raw = match.group(1).strip()
+        indicators["brvm_composite"] = re.sub(r'\s+', '', raw).replace(',', '.')
+        logging.info(f"   ✓ BRVM Composite trouvé: {indicators['brvm_composite']}")
+    else:
+        indicators["brvm_composite"] = None
+        logging.warning("   ⚠️ BRVM Composite NON trouvé")
+    
+    # 🔧 FIX 2: BRVM 30 (fonctionne déjà bien)
+    match = re.search(r"BRVM\s+30\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    if match:
+        raw = match.group(1).strip()
+        indicators["brvm_30"] = re.sub(r'\s+', '', raw).replace(',', '.')
+        logging.info(f"   ✓ BRVM 30 trouvé: {indicators['brvm_30']}")
+    else:
+        indicators["brvm_30"] = None
+        logging.warning("   ⚠️ BRVM 30 NON trouvé")
+    
+    # 🔧 FIX 3: BRVM PRESTIGE (CORRECTION MAJEURE - avec espace OU tiret)
+    match = re.search(r"BRVM[\s\-]+PRESTIGE\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    if match:
+        raw = match.group(1).strip()
+        indicators["brvm_prestige"] = re.sub(r'\s+', '', raw).replace(',', '.')
+        logging.info(f"   ✓ BRVM Prestige trouvé: {indicators['brvm_prestige']}")
+    else:
+        indicators["brvm_prestige"] = None
+        logging.warning("   ⚠️ BRVM Prestige NON trouvé")
+    
+    # 🔧 FIX 4: CAPITALISATION GLOBALE (CORRECTION MAJEURE)
+    # Recherche dans tableau "Actions" -> ligne "Capitalisation boursière"
+    match = re.search(
+        r"Capitalisation\s+boursière\s+\(FCFA\)\s*\(Actions\s*[&\+]?\s*Droits\)\s+([\d\s]+)",
+        pdf_text,
+        re.IGNORECASE | re.DOTALL
+    )
+    if match:
+        raw = match.group(1).strip()
+        # Nettoyer TOUS les espaces
+        cleaned = re.sub(r'\s+', '', raw)
+        indicators["capitalisation_globale"] = cleaned
+        logging.info(f"   ✓ Capitalisation Globale trouvée: {indicators['capitalisation_globale']}")
+    else:
+        # Alternative: chercher juste après "Actions"
+        match_alt = re.search(
+            r"Actions\s+Niveau\s+Evol\.\s+Jour\s+Capitalisation\s+boursière[^\d]+([\d\s]+)",
+            pdf_text,
+            re.IGNORECASE | re.DOTALL
+        )
+        if match_alt:
+            raw = match_alt.group(1).strip()
+            cleaned = re.sub(r'\s+', '', raw)
+            indicators["capitalisation_globale"] = cleaned
+            logging.info(f"   ✓ Capitalisation Globale trouvée (alt): {indicators['capitalisation_globale']}")
+        else:
+            indicators["capitalisation_globale"] = None
+            logging.warning("   ⚠️ Capitalisation Globale NON trouvée")
+    
+    # 🔧 FIX 5: VOLUME MOYEN ANNUEL (fonctionne déjà bien)
+    match = re.search(r"Volume\s+moyen\s+annuel\s+par\s+séance\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    if match:
+        raw = match.group(1).strip()
+        indicators["volume_moyen_annuel"] = re.sub(r'\s+', '', raw).replace(',', '.')
+        logging.info(f"   ✓ Volume Moyen Annuel trouvé: {indicators['volume_moyen_annuel']}")
+    else:
+        indicators["volume_moyen_annuel"] = None
+        logging.warning("   ⚠️ Volume Moyen Annuel NON trouvé")
+    
+    # 🔧 FIX 6: VALEUR MOYENNE ANNUELLE (fonctionne déjà bien)
+    match = re.search(r"Valeur\s+moyenne\s+annuelle\s+par\s+séance\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    if match:
+        raw = match.group(1).strip()
+        indicators["valeur_moyenne_annuelle"] = re.sub(r'\s+', '', raw).replace(',', '.')
+        logging.info(f"   ✓ Valeur Moyenne Annuelle trouvée: {indicators['valeur_moyenne_annuelle']}")
+    else:
+        indicators["valeur_moyenne_annuelle"] = None
+        logging.warning("   ⚠️ Valeur Moyenne Annuelle NON trouvée")
     
     return indicators
 
@@ -203,7 +264,6 @@ def insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
 def insert_market_indicators_to_db(conn, indicators, trade_date):
     """
     Insertion UNIQUEMENT des 6 variables demandées dans new_market_indicators
-    PAS DE VARIATIONS - Structure simplifiée
     """
     try:
         with conn.cursor() as cursor:
@@ -214,6 +274,15 @@ def insert_market_indicators_to_db(conn, indicators, trade_date):
             capitalisation_globale = clean_and_convert_numeric(indicators.get("capitalisation_globale"))
             volume_moyen_annuel = clean_and_convert_numeric(indicators.get("volume_moyen_annuel"))
             valeur_moyenne_annuelle = clean_and_convert_numeric(indicators.get("valeur_moyenne_annuelle"))
+            
+            # Log des valeurs avant insertion
+            logging.info(f"   📊 Valeurs à insérer:")
+            logging.info(f"      • BRVM Composite: {brvm_composite}")
+            logging.info(f"      • BRVM 30: {brvm_30}")
+            logging.info(f"      • BRVM Prestige: {brvm_prestige}")
+            logging.info(f"      • Capitalisation: {capitalisation_globale}")
+            logging.info(f"      • Volume Moyen: {volume_moyen_annuel}")
+            logging.info(f"      • Valeur Moyenne: {valeur_moyenne_annuelle}")
             
             # ✅ INSERT simple - 6 variables seulement
             insert_query = """
@@ -256,7 +325,7 @@ def insert_market_indicators_to_db(conn, indicators, trade_date):
 def run_data_collection():
     """Fonction principale de collecte"""
     logging.info("=" * 60)
-    logging.info("📊 ÉTAPE 1: COLLECTE SIMPLIFIÉE (6 VARIABLES)")
+    logging.info("📊 ÉTAPE 1: COLLECTE SIMPLIFIÉE (6 VARIABLES) - VERSION CORRIGÉE")
     logging.info("=" * 60)
     
     conn = connect_to_db()
@@ -311,6 +380,7 @@ def run_data_collection():
                 pdf_text = ""
             
             # ✅ Insertion indicateurs (6 variables seulement)
+            logging.info("   🔍 Extraction des indicateurs de marché...")
             indicators = extract_market_indicators(pdf_text)
             insert_market_indicators_to_db(conn, indicators, trade_date)
             
