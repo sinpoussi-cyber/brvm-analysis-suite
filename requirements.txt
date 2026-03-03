@@ -1,5 +1,5 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V28.0 - BRVM ANALYSIS SUITE (MULTI-AI)
+# REQUIREMENTS.TXT V30.0 - BRVM ANALYSIS SUITE (MULTI-AI)
 # ==============================================================================
 
 # --- Core Dependencies ---
@@ -48,6 +48,9 @@ idna==3.6
 # --- Machine Learning ---
 scikit-learn==1.4.0
 
+# ⭐ AJOUT CRUCIAL: TensorFlow pour les prédictions
+tensorflow==2.15.0
+
 # --- Dependencies pour selenium-wire ---
 h11==0.14.0
 wsproto==1.2.0
@@ -61,5 +64,6 @@ pyOpenSSL==24.0.0
 # - DeepSeek: API REST uniquement, pas de SDK Python officiel requis
 # - Gemini: API REST via generativelanguage.googleapis.com
 # - Mistral: API REST compatible OpenAI
+# - TensorFlow: Requis pour prediction_analyzer.py (LSTM models)
 # - Toutes les API sont appelées via requests pour plus de flexibilité
 # ==============================================================================
