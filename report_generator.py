@@ -205,9 +205,13 @@ class BRVMReportGenerator:
                     '###REPORT###' 
                     ORDER BY fa.report_date DESC
                 ) 
-                FROM fundamental_analysis fa 
-                WHERE fa.company_id = c.id
-                LIMIT 5
+                FROM (
+                    SELECT report_title, report_date, analysis_summary, company_id
+                    FROM fundamental_analysis
+                    WHERE company_id = c.id
+                    ORDER BY report_date DESC
+                    LIMIT 10
+                ) fa
             ) as fundamental_summaries
         FROM companies c
         LEFT JOIN latest_per_company lpc ON c.id = lpc.company_id
@@ -441,7 +445,7 @@ Rédige un paragraphe de 6-8 lignes analysant:
 - Les perspectives et projets mentionnés
 - La solidité financière globale
 - La recommandation fondamentale (acheter/conserver/vendre) BASÉE UNIQUEMENT sur les fondamentaux
-- IMPORTANT: Privilégie les rapports les plus récents et mentionne leur date
+- IMPORTANT: Utilise TOUTES les données fondamentales disponibles, même anciennes. Mentionne explicitement la date des rapports utilisés et précise si les données datent de plusieurs années
 
 **PARTIE 4 : CONCLUSION D'INVESTISSEMENT**
 
@@ -1678,7 +1682,7 @@ IMPORTANT:
             if row.get('fundamental_summaries') and pd.notna(row['fundamental_summaries']):
                 reports = row['fundamental_summaries'].split('###REPORT###')
                 fundamental_parts = []
-                for report in reports[:3]:
+                for report in reports:  # tous les rapports disponibles
                     if report.strip():
                         parts = report.split('|||')
                         if len(parts) == 3:
@@ -1687,6 +1691,7 @@ IMPORTANT:
                 
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
+                    logging.info(f"   📄 {symbol}: {len(fundamental_parts)} rapport(s) fondamental/aux disponible(s)")
             
             data_dict = {
                 'price': row.get('price'),
@@ -1706,7 +1711,7 @@ IMPORTANT:
                 'stochastic_k': row.get('stochastic_k'),
                 'stochastic_d': row.get('stochastic_d'),
                 'stochastic_decision': row.get('stochastic_decision'),
-                'fundamental_analyses': fundamental_text if fundamental_text else "Aucune analyse fondamentale récente disponible.",
+                'fundamental_analyses': fundamental_text if fundamental_text else "Aucun rapport financier disponible dans la base de données pour cette société.",
                 'predictions': []
             }
             
