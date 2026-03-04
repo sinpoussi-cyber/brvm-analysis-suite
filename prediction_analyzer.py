@@ -1,10 +1,17 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.0 — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V12.0 FINAL — BRVM 47 ACTIONS
+# ------------------------------------------------------------------------------
+# VERSION: V12.0 Final (2026-03-04)
+# CORRECTIONS:
+# - Colonne SQL: price → close_price as price (ligne 744)
+# - Compatible TensorFlow 2.10.0 (requirements.txt V32.0)
 # ------------------------------------------------------------------------------
 # - Historique : 100 derniers jours pour toutes les actions
 # - Prediction : 10 prochains jours OUVRABLES (lun-ven, hors feries CI)
-# - Modeles    : GRU / LSTM / BiGRU pre-entraines, chargés depuis ./modeles/
+# - Modeles    : GRU / LSTM / BiGRU pre-entraines, application directe (predict)
 # - Aucun reentrainement : model.fit() absent du fichier
+# - Source données : 100% Supabase (historical_data table)
+# - Pas de fichiers .npy utilisés
 # ==============================================================================
 
 import psycopg2
@@ -28,8 +35,8 @@ DB_HOST     = os.environ.get('DB_HOST')
 DB_PORT     = os.environ.get('DB_PORT')
 
 # Dossier racine des modeles :
-#   MODELS_DIR/ABJC/model_GRU.h5 + scaler.pkl
-#   MODELS_DIR/BICB/model_GRU.h5 + scaler.pkl  ...
+#   MODELS_DIR/ABJC/model_GRU_advanced.keras + scaler_advanced.pkl
+#   MODELS_DIR/BICB/model_GRU_advanced.keras + scaler_advanced.pkl  ...
 MODELS_DIR = os.environ.get('MODELS_DIR', './modeles')
 
 # Nombre fixe de jours historiques recuperes pour TOUTES les actions
@@ -107,6 +114,7 @@ def prochains_jours_ouvrables(last_date, num_days=10):
 # Champs :
 #   best_model    : architecture (GRU, LSTM, BiGRU)
 #   look_back     : fenetre d entree du modele lors de l entrainement
+#                   (utilise uniquement pour la normalisation — voir note)
 #   log_transform : True = log1p applique avant normalisation
 #   units         : nb de neurones couche 1
 #   dropout       : taux de dropout
@@ -116,6 +124,12 @@ def prochains_jours_ouvrables(last_date, num_days=10):
 #   mae_test / rmse_test : erreurs absolues en FCFA
 #   mape_ok / r2_ok      : criteres de qualite
 #   source        : 'base' ou 'advanced'
+#
+# NOTE sur look_back vs HISTORIQUE_JOURS :
+#   - HISTORIQUE_JOURS=100 : nb de jours recuperes depuis PostgreSQL
+#   - look_back            : nb de jours passes dans la fenetre d entree du modele
+#   On passe toujours les look_back DERNIERS jours des 100 au modele.
+#   Avoir 100 jours au lieu de look_back garantit la stabilite de la normalisation.
 # ==============================================================================
 MODELS_PARAMS = {
     "ABJC": {
@@ -296,148 +310,148 @@ MODELS_PARAMS = {
     "PRSC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 4.4124, "r2_test": 0.8929,
-        "mae_test": 51.9673, "rmse_test": 73.4301,
+        "mape_test": 2.5991, "r2_test": 0.9415,
+        "mae_test": 92.9484, "rmse_test": 150.4904,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SAFC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 8.0649, "r2_test": 0.8767,
-        "mae_test": 82.8992, "rmse_test": 110.0766,
+        "mape_test": 6.389, "r2_test": 0.9407,
+        "mae_test": 188.2064, "rmse_test": 229.7859,
         "mape_ok": False, "r2_ok": True, "source": "base",
     },
     "SCRC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 3.5699, "r2_test": 0.8825,
-        "mae_test": 232.4027, "rmse_test": 321.7799,
+        "mape_test": 2.2593, "r2_test": 0.908,
+        "mae_test": 27.2752, "rmse_test": 38.1161,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SDCC": {
-        "best_model": "GRU", "look_back": 60, "log_transform": False,
-        "units": 128, "dropout": 0.3, "lr": 0.001,
-        "mape_test": 2.7743, "r2_test": 0.7852,
-        "mae_test": 83.9033, "rmse_test": 109.1371,
+        "best_model": "BiGRU", "look_back": 60, "log_transform": False,
+        "units": 128, "dropout": 0.2, "lr": 0.001,
+        "mape_test": 0.894, "r2_test": 0.7271,
+        "mae_test": 54.2668, "rmse_test": 83.0719,
         "mape_ok": True, "r2_ok": False, "source": "advanced",
     },
     "SDSC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 0.9749, "r2_test": 0.9773,
-        "mae_test": 89.9862, "rmse_test": 147.6046,
+        "mape_test": 1.6092, "r2_test": 0.8197,
+        "mae_test": 24.6265, "rmse_test": 35.4773,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SEMC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 4.3066, "r2_test": 0.2618,
-        "mae_test": 91.9363, "rmse_test": 133.8867,
-        "mape_ok": True, "r2_ok": False, "source": "base",
+        "mape_test": 3.0298, "r2_test": 0.9278,
+        "mae_test": 48.9581, "rmse_test": 122.1576,
+        "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SGBC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 1.2654, "r2_test": 0.7998,
-        "mae_test": 165.8896, "rmse_test": 233.4798,
-        "mape_ok": True, "r2_ok": False, "source": "base",
+        "mape_test": 1.4225, "r2_test": 0.864,
+        "mae_test": 401.0225, "rmse_test": 545.7458,
+        "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SHEC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 0.8476, "r2_test": 0.9648,
-        "mae_test": 34.3506, "rmse_test": 50.2604,
+        "mape_test": 2.5238, "r2_test": 0.9357,
+        "mae_test": 35.9683, "rmse_test": 48.6736,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SIBC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 1.7124, "r2_test": 0.9452,
-        "mae_test": 157.6125, "rmse_test": 208.823,
+        "mape_test": 1.3876, "r2_test": 0.9345,
+        "mae_test": 80.5968, "rmse_test": 109.4666,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SICC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 4.2826, "r2_test": 0.7621,
-        "mae_test": 76.5113, "rmse_test": 111.7914,
+        "mape_test": 2.6798, "r2_test": 0.6157,
+        "mae_test": 96.6064, "rmse_test": 136.6697,
         "mape_ok": True, "r2_ok": False, "source": "base",
     },
     "SIVC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 6.7969, "r2_test": 0.9164,
-        "mae_test": 273.3043, "rmse_test": 406.4991,
+        "mape_test": 5.8402, "r2_test": 0.9471,
+        "mae_test": 82.4994, "rmse_test": 137.8727,
         "mape_ok": False, "r2_ok": True, "source": "base",
     },
     "SLBC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 0.7757, "r2_test": 0.9678,
-        "mae_test": 56.6924, "rmse_test": 74.3967,
+        "mape_test": 2.1569, "r2_test": 0.9713,
+        "mae_test": 516.3673, "rmse_test": 803.0428,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SMBC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 3.1618, "r2_test": 0.9502,
-        "mae_test": 105.8071, "rmse_test": 189.6301,
+        "mape_test": 1.6586, "r2_test": 0.8521,
+        "mae_test": 166.7241, "rmse_test": 233.2252,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SNTS": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 2.7048, "r2_test": 0.9575,
-        "mae_test": 469.7736, "rmse_test": 579.6098,
-        "mape_ok": True, "r2_ok": True, "source": "base",
+        "mape_test": 0.8219, "r2_test": 0.7655,
+        "mae_test": 213.7565, "rmse_test": 317.6393,
+        "mape_ok": True, "r2_ok": False, "source": "base",
     },
     "SOGC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 4.5966, "r2_test": 0.9346,
-        "mae_test": 177.5943, "rmse_test": 244.7797,
+        "mape_test": 1.3089, "r2_test": 0.8368,
+        "mae_test": 104.4954, "rmse_test": 159.1333,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "SPHC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 2.2934, "r2_test": 0.9368,
-        "mae_test": 131.6327, "rmse_test": 186.5063,
+        "mape_test": 1.5344, "r2_test": 0.8196,
+        "mae_test": 117.3221, "rmse_test": 175.6748,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "STAC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 4.7024, "r2_test": 0.915,
-        "mae_test": 67.8564, "rmse_test": 109.0464,
+        "mape_test": 3.9611, "r2_test": 0.9398,
+        "mae_test": 45.6627, "rmse_test": 58.9501,
         "mape_ok": True, "r2_ok": True, "source": "base",
     },
     "STBC": {
-        "best_model": "GRU", "look_back": 60, "log_transform": False,
-        "units": 64, "dropout": 0.3, "lr": 0.001,
-        "mape_test": 3.3966, "r2_test": 0.9161,
-        "mae_test": 95.0399, "rmse_test": 134.4509,
-        "mape_ok": True, "r2_ok": True, "source": "advanced",
+        "best_model": "BiGRU", "look_back": 60, "log_transform": False,
+        "units": 128, "dropout": 0.2, "lr": 0.001,
+        "mape_test": 1.4802, "r2_test": 0.6015,
+        "mae_test": 290.9748, "rmse_test": 470.6074,
+        "mape_ok": True, "r2_ok": False, "source": "advanced",
     },
     "TTLC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 1.7086, "r2_test": 0.8944,
-        "mae_test": 65.6393, "rmse_test": 104.239,
-        "mape_ok": True, "r2_ok": True, "source": "base",
+        "mape_test": 1.0205, "r2_test": 0.6746,
+        "mae_test": 24.4032, "rmse_test": 38.4843,
+        "mape_ok": True, "r2_ok": False, "source": "base",
     },
     "TTLS": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 3.4924, "r2_test": 0.9079,
-        "mae_test": 121.6054, "rmse_test": 169.8251,
-        "mape_ok": True, "r2_ok": True, "source": "base",
+        "mape_test": 0.9356, "r2_test": 0.7746,
+        "mae_test": 23.7037, "rmse_test": 33.6514,
+        "mape_ok": True, "r2_ok": False, "source": "base",
     },
     "UNLC": {
         "best_model": "GRU", "look_back": 20, "log_transform": False,
         "units": 64, "dropout": 0.2, "lr": 0.001,
-        "mape_test": 7.3503, "r2_test": 0.8945,
-        "mae_test": 326.7509, "rmse_test": 450.7997,
+        "mape_test": 5.7498, "r2_test": 0.9566,
+        "mae_test": 2139.2477, "rmse_test": 2978.6427,
         "mape_ok": False, "r2_ok": True, "source": "base",
     },
     "UNXC": {
@@ -488,19 +502,15 @@ def load_action_model(symbol):
         logging.warning(f"{symbol} : dossier absent ({action_dir})")
         return None, None
 
-    # Chercher fichiers .keras ou .h5
-    keras_files = [f for f in os.listdir(action_dir) if f.endswith(".keras") or f.endswith(".h5")]
+    keras_files = [f for f in os.listdir(action_dir) if f.endswith(".keras")]
     if not keras_files:
-        logging.warning(f"{symbol} : aucun fichier .keras/.h5 dans {action_dir}")
+        logging.warning(f"{symbol} : aucun fichier .keras dans {action_dir}")
         return None, None
 
-    # Chercher scaler (scaler_advanced.pkl ou scaler.pkl)
     scaler_path = os.path.join(action_dir, "scaler_advanced.pkl")
     if not os.path.exists(scaler_path):
-        scaler_path = os.path.join(action_dir, "scaler.pkl")
-        if not os.path.exists(scaler_path):
-            logging.warning(f"{symbol} : scaler.pkl absent")
-            return None, None
+        logging.warning(f"{symbol} : scaler_advanced.pkl absent")
+        return None, None
 
     try:
         model_path = os.path.join(action_dir, keras_files[0])
@@ -532,6 +542,18 @@ def predire_10_jours(prices, dates, symbol):
     Applique le modele pre-entraine de l action sur les 100 derniers cours
     pour predire les NB_JOURS_PREDICTION prochains jours ouvrables BRVM.
 
+    Processus (aucun entrainement) :
+      1. Prendre les look_back derniers cours des 100 disponibles
+      2. Normaliser avec scaler (identique a l echelle d entrainement)
+      3. model.predict() iteratif sur NB_JOURS_PREDICTION jours
+         chaque prediction devient l entree du jour suivant
+      4. Denormaliser → valeurs en FCFA
+      5. Calculer intervalles de confiance et niveaux
+
+    Dates generees : jours ouvrables uniquement
+      - Lundi a Vendredi
+      - Hors jours feries CI 2026 (JOURS_FERIES)
+
     Retourne un dict ou None si echec.
     """
     params        = MODELS_PARAMS[symbol]
@@ -548,6 +570,8 @@ def predire_10_jours(prices, dates, symbol):
     log_transform = params["log_transform"]
     arr           = np.array(prices.values, dtype=float)
 
+    # Securite : verifier qu on a au moins look_back jours
+    # (normalement garanti par process_company_prediction)
     if len(arr) < look_back:
         logging.error(
             f"{symbol} : {len(arr)} cours recus < look_back={look_back}. "
@@ -560,20 +584,21 @@ def predire_10_jours(prices, dates, symbol):
     raw_date      = dates.iloc[-1]
     last_date     = raw_date.date() if isinstance(raw_date, datetime) else raw_date
 
-    # Dates des 10 prochains jours ouvrables
+    # Dates des 10 prochains jours ouvrables (sam/dim + feries exclus)
     future_dates = prochains_jours_ouvrables(last_date, NB_JOURS_PREDICTION)
 
-    # Prendre les look_back derniers cours
+    # --- Etape 1 : prendre les look_back derniers cours ---
     sequence = arr[-look_back:].copy()
 
-    # Transformation log si volatile
+    # --- Etape 2 : transformation log si action volatile ---
     if log_transform:
         sequence = np.log1p(sequence)
 
-    # Normalisation
+    # --- Etape 3 : normalisation (meme echelle que l entrainement) ---
     seq_scaled = scaler.transform(sequence.reshape(-1, 1))
 
-    # Prediction iterative
+    # --- Etape 4 : prediction iterative ---
+    # Aucun apprentissage — model.predict() lit les poids fixes du .keras
     current_seq    = seq_scaled.copy()
     preds_scaled   = []
 
@@ -583,7 +608,7 @@ def predire_10_jours(prices, dates, symbol):
         preds_scaled.append(p)
         current_seq = np.append(current_seq, [[p]], axis=0)
 
-    # Denormalisation
+    # --- Etape 5 : denormalisation ---
     pred_raw = scaler.inverse_transform(
         np.array(preds_scaled).reshape(-1, 1)
     ).flatten()
@@ -593,7 +618,8 @@ def predire_10_jours(prices, dates, symbol):
     else:
         predictions = pred_raw
 
-    # Intervalles de confiance
+    # --- Intervalles de confiance ---
+    # Bases sur la volatilite journaliere des 30 derniers cours connus
     n_recent   = min(30, len(arr) - 1)
     volatilite = float(np.std(np.diff(arr[-n_recent - 1:]))) if n_recent > 0 \
                  else float(np.std(arr))
@@ -601,27 +627,31 @@ def predire_10_jours(prices, dates, symbol):
     lower_bounds = []
     upper_bounds = []
     for i, pred in enumerate(predictions):
+        # L incertitude augmente avec l horizon (facteur +5% par jour)
         marge = volatilite * (1 + i * 0.05)
         lower_bounds.append(float(pred - marge))
         upper_bounds.append(float(pred + marge))
 
-    # Niveau de confiance par jour
+    # --- Niveau de confiance par jour ---
     mape    = params["mape_test"]
     r2      = params["r2_test"]
     both_ok = params["mape_ok"] and params["r2_ok"]
 
     def _niveau_confiance(jour_idx):
-        j = jour_idx + 1
+        j = jour_idx + 1  # J+1 a J+10
         if both_ok:
+            # Les deux criteres satisfaits
             return "Elevee" if j <= 3 else "Moyenne"
         elif params["mape_ok"]:
+            # MAPE OK mais R2 insuffisant (action peu liquide)
             return "Moyenne" if j <= 3 else "Faible"
         else:
+            # MAPE >= 5% (action volatile : SAFC, SIVC, UNLC)
             return "Faible"
 
     confidence_par_jour = [_niveau_confiance(i) for i in range(NB_JOURS_PREDICTION)]
 
-    # Variation totale
+    # Variation totale J+10 vs dernier cours connu
     variation_pct = ((float(predictions[-1]) - last_price) / last_price) * 100
 
     confiance_globale = (
@@ -631,7 +661,7 @@ def predire_10_jours(prices, dates, symbol):
     )
 
     return {
-        "dates"              : future_dates,
+        "dates"              : future_dates,           # liste de date (10 jours ouvrables)
         "predictions"        : [float(p) for p in predictions],
         "lower_bound"        : lower_bounds,
         "upper_bound"        : upper_bounds,
@@ -652,13 +682,16 @@ def predire_10_jours(prices, dates, symbol):
 
 def save_predictions_to_db(conn, company_id, symbol, prediction_data):
     """
-    Supprime les anciennes predictions et insere les nouvelles.
+    Supprime les anciennes predictions de l action et insere les nouvelles.
+    10 lignes par action dans la table predictions.
     """
     try:
         with conn.cursor() as cur:
+            # Suppression des predictions existantes pour cette action
             cur.execute(
                 "DELETE FROM predictions WHERE company_id = %s", (company_id,))
 
+            # Insertion des 10 nouvelles predictions
             for i, pred_date in enumerate(prediction_data["dates"]):
                 cur.execute("""
                     INSERT INTO predictions (
@@ -695,7 +728,13 @@ def save_predictions_to_db(conn, company_id, symbol, prediction_data):
 
 def process_company_prediction(conn, company_id, symbol):
     """
-    Traite une action: recupere 100 jours, applique modele, sauvegarde.
+    Pour une action :
+      1. Recupere les 100 derniers cours depuis historical_data (PostgreSQL)
+      2. Verifie qu on a au moins look_back jours (sinon ignore l action)
+      3. Applique le modele pre-entraine → predire_10_jours()
+      4. Sauvegarde en base → save_predictions_to_db()
+
+    Pas de reentrainement, pas de fallback lineaire.
     """
     logging.info(f"--- {symbol} ---")
 
@@ -706,9 +745,10 @@ def process_company_prediction(conn, company_id, symbol):
     look_back = MODELS_PARAMS[symbol]["look_back"]
 
     try:
+        # Recuperation des 100 derniers cours (fixes pour toutes les actions)
         df = pd.read_sql(
             """
-            SELECT trade_date, price
+            SELECT trade_date, close_price as price
             FROM historical_data
             WHERE company_id = %s
             ORDER BY trade_date DESC
@@ -722,6 +762,7 @@ def process_company_prediction(conn, company_id, symbol):
         logging.info(f"{symbol} : {nb_dispo} jours disponibles "
                      f"(look_back={look_back}, historique requis={HISTORIQUE_JOURS})")
 
+        # Verification minimale : il faut au moins look_back jours pour le modele
         if nb_dispo < look_back:
             logging.warning(
                 f"{symbol} : IGNORE — seulement {nb_dispo} jours disponibles "
@@ -735,16 +776,16 @@ def process_company_prediction(conn, company_id, symbol):
                 f"Prediction quand meme possible (look_back={look_back} satisfait)."
             )
 
-        # Remise en ordre chronologique
+        # Remise en ordre chronologique (du plus ancien au plus recent)
         df = df.iloc[::-1].reset_index(drop=True)
 
-        # Application du modele
+        # Application du modele pre-entraine
         result = predire_10_jours(df["price"], df["trade_date"], symbol)
 
         if result is None:
             return False
 
-        # Logs
+        # Affichage du resume dans les logs
         logging.info(
             f"{symbol} | {result['model_type']} | "
             f"MAPE={result['mape_test']}% | R2={result['r2_test']} | "
@@ -755,6 +796,7 @@ def process_company_prediction(conn, company_id, symbol):
             f"({result['last_date']})"
         )
 
+        # Afficher les 10 predictions
         for i, (d, p, c) in enumerate(zip(
                 result["dates"],
                 result["predictions"],
@@ -770,7 +812,7 @@ def process_company_prediction(conn, company_id, symbol):
             f"{result['avg_change_percent']:+.2f}%"
         )
 
-        # Sauvegarde
+        # Sauvegarde en base
         return save_predictions_to_db(conn, company_id, symbol, result)
 
     except Exception as e:
@@ -784,13 +826,14 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.0 — BRVM 47 ACTIONS")
+    logging.info("PREDICTIONS V11.0 — BRVM 47 ACTIONS")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Calendrier : jours feries CI 2026 exclus ({len(JOURS_FERIES)} jours)")
     logging.info(f"Modeles : {MODELS_DIR}")
     logging.info("=" * 70)
 
+    # Afficher le calendrier des jours feries
     logging.info("Jours feries CI 2026 exclus des predictions :")
     for jf in sorted(JOURS_FERIES):
         logging.info(f"  {jf} ({jf.strftime('%A %d %B %Y')})")
