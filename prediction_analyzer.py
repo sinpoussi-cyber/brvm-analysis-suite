@@ -1,10 +1,11 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.0 FINAL — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V12.1 FINAL — BRVM 47 ACTIONS
 # ------------------------------------------------------------------------------
-# VERSION: V12.0 Final (2026-03-04)
+# VERSION: V12.1 Final (2026-03-04)
 # CORRECTIONS:
 # - Colonne SQL: price → close_price as price (ligne 744)
-# - Compatible TensorFlow 2.10.0 (requirements.txt V32.0)
+# - Compatible TensorFlow 2.12.0 (requirements.txt V33.0)
+# - Patch batch_shape → batch_input_shape (ligne 515-525)
 # ------------------------------------------------------------------------------
 # - Historique : 100 derniers jours pour toutes les actions
 # - Prediction : 10 prochains jours OUVRABLES (lun-ven, hors feries CI)
@@ -513,8 +514,28 @@ def load_action_model(symbol):
         return None, None
 
     try:
+        # ⚠️ PATCH COMPATIBILITÉ TensorFlow 2.12+ avec modèles anciens
+        # Les modèles .h5 anciens utilisent 'batch_shape' qui a été remplacé par 'batch_input_shape'
+        # Ce patch permet de charger les anciens modèles avec TensorFlow récent
+        from tensorflow.keras.layers import InputLayer
+        
+        original_init = InputLayer.__init__
+        
+        def patched_init(self, *args, **kwargs):
+            # Convertir batch_shape en batch_input_shape si présent
+            if 'batch_shape' in kwargs:
+                kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+            return original_init(self, *args, **kwargs)
+        
+        # Appliquer le patch temporairement
+        InputLayer.__init__ = patched_init
+        
         model_path = os.path.join(action_dir, keras_files[0])
         model  = load_model(model_path, compile=False)
+        
+        # Restaurer la méthode originale
+        InputLayer.__init__ = original_init
+        
         model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
         scaler = joblib.load(scaler_path)
 
