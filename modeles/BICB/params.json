@@ -1,0 +1,40 @@
+{
+    "action": "BICB",
+    "best_model": "GRU",
+    "look_back": 20,
+    "n_observations": 202,
+    "train_size": 181,
+    "test_size": 21,
+    "date_fin_train": "2026-01-16",
+    "date_debut_test": "2026-01-19",
+    "metrics_test": {
+        "MAPE_%": 0.5271,
+        "R2": -0.0856,
+        "MAE": 26.1752,
+        "RMSE": 33.7579
+    },
+    "criteres_qualite": {
+        "MAPE_inferieur_5pct": true,
+        "R2_superieur_0.80": false
+    },
+    "architecture": {
+        "type": "GRU",
+        "couches": "2 couches récurrentes + 2 Dropout + Dense(1)",
+        "units_c1": 64,
+        "units_c2": 32,
+        "dropout": 0.2,
+        "lr_initial": 0.001,
+        "optimizer": "Adam",
+        "loss": "MSE",
+        "look_back": 20,
+        "batch_size": 16,
+        "epochs_max": 150,
+        "early_stop_patience": 20
+    },
+    "fichiers_sauvegardes": {
+        "modele": "/content/resultats_modeles/BICB/model_GRU.h5",
+        "scaler": "/content/resultats_modeles/BICB/scaler.pkl",
+        "last_sequence": "/content/resultats_modeles/BICB/last_sequence.npy",
+        "parametres": "/content/resultats_modeles/BICB/params.json"
+    }
+}

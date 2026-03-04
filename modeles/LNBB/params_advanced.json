@@ -1,0 +1,23 @@
+{
+    "action": "LNBB",
+    "best_model": "BiGRU",
+    "look_back": 60,
+    "log_transform": false,
+    "date_fin_train": "2026-01-05",
+    "hyperparametres": {
+        "units": 64,
+        "dropout": 0.3,
+        "lr": 0.001
+    },
+    "metrics_test": {
+        "MAPE_%": 0.8472,
+        "R2": 0.808,
+        "MAE": 34.0482,
+        "RMSE": 44.0087
+    },
+    "criteres_qualite": {
+        "MAPE_inferieur_5pct": true,
+        "R2_superieur_0.80": true
+    },
+    "fichier_modele": "/content/resultats_modeles/LNBB/model_BiGRU_advanced.keras"
+}
