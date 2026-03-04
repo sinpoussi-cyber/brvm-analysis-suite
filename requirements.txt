@@ -1,5 +1,5 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V30.0 - BRVM ANALYSIS SUITE (MULTI-AI)
+# REQUIREMENTS.TXT V32.0 FINAL - BRVM ANALYSIS SUITE (MULTI-AI)
 # ==============================================================================
 
 # --- Core Dependencies ---
@@ -48,8 +48,14 @@ idna==3.6
 # --- Machine Learning ---
 scikit-learn==1.4.0
 
-# ⭐ AJOUT CRUCIAL: TensorFlow pour les prédictions
-tensorflow==2.15.0
+# ⚠️ CORRECTION CRITIQUE V32.0: TensorFlow 2.10 pour compatibilité modèles .h5
+# Les modèles .h5 ont été entraînés avec TensorFlow 2.10.x qui utilise 'batch_shape'
+# TensorFlow 2.13+ a supprimé ce paramètre, causant l'erreur:
+# "Unrecognized keyword arguments: ['batch_shape']"
+# Résultat Run #210: 0/47 predictions → Downgrade vers 2.10.0
+tensorflow==2.10.0
+keras==2.10.0
+# Si cette version échoue, essayer: tensorflow==2.9.0 ou tensorflow==2.8.0
 
 # --- Dependencies pour selenium-wire ---
 h11==0.14.0
@@ -60,10 +66,12 @@ kaitaistruct==0.10
 pyOpenSSL==24.0.0
 
 # ==============================================================================
-# NOTES:
+# NOTES DE VERSION:
+# - V32.0 (2026-03-04): TensorFlow 2.10.0 pour compatibilité modèles existants
+# - V31.0: TensorFlow 2.15.0 (INCOMPATIBLE - 0/47 predictions réussies)
 # - DeepSeek: API REST uniquement, pas de SDK Python officiel requis
 # - Gemini: API REST via generativelanguage.googleapis.com
 # - Mistral: API REST compatible OpenAI
-# - TensorFlow: Requis pour prediction_analyzer.py (LSTM models)
+# - TensorFlow: Requis pour prediction_analyzer.py (GRU/LSTM/BiGRU models)
 # - Toutes les API sont appelées via requests pour plus de flexibilité
 # ==============================================================================
