@@ -1,0 +1,23 @@
+{
+    "action": "SDCC",
+    "best_model": "BiGRU",
+    "look_back": 60,
+    "log_transform": false,
+    "date_fin_train": "2025-08-14",
+    "hyperparametres": {
+        "units": 128,
+        "dropout": 0.2,
+        "lr": 0.001
+    },
+    "metrics_test": {
+        "MAPE_%": 0.894,
+        "R2": 0.7271,
+        "MAE": 54.2668,
+        "RMSE": 83.0719
+    },
+    "criteres_qualite": {
+        "MAPE_inferieur_5pct": true,
+        "R2_superieur_0.80": false
+    },
+    "fichier_modele": "/content/resultats_modeles/SDCC/model_BiGRU_advanced.keras"
+}
