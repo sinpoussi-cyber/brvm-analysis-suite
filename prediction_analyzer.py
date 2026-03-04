@@ -1,9 +1,9 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.1 FINAL — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V12.2 CORRIGÉ — BRVM 47 ACTIONS
 # ------------------------------------------------------------------------------
-# VERSION: V12.1 Final (2026-03-04)
+# VERSION: V12.2 (2026-03-04)
 # CORRECTIONS:
-# - Colonne SQL: price → close_price as price (ligne 744)
+# - Colonne SQL: price au lieu de close_price (ligne 744)
 # - Compatible TensorFlow 2.12.0 (requirements.txt V33.0)
 # - Patch batch_shape → batch_input_shape (ligne 515-525)
 # ------------------------------------------------------------------------------
@@ -55,6 +55,7 @@ _models_cache = {}
 # Liste exhaustive fournie — mise a jour annuelle recommandee
 # ==============================================================================
 JOURS_FERIES = {
+    date(2026,  1,  1),  # Jour de l'An
     date(2026,  3, 17),  # Lendemain de la nuit du destin
     date(2026,  3, 20),  # Aid al-Fitr
     date(2026,  4,  6),  # Lundi de Paques
@@ -766,10 +767,11 @@ def process_company_prediction(conn, company_id, symbol):
     look_back = MODELS_PARAMS[symbol]["look_back"]
 
     try:
-        # Recuperation des 100 derniers cours (fixes pour toutes les actions)
+        # ✅ CORRECTION: Suppression de 'close_price' qui n'existe pas
+        # La colonne dans la table historical_data s'appelle 'price'
         df = pd.read_sql(
             """
-            SELECT trade_date, close_price as price
+            SELECT trade_date, price  -- Changé de 'close_price as price' à 'price'
             FROM historical_data
             WHERE company_id = %s
             ORDER BY trade_date DESC
@@ -847,7 +849,7 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V11.0 — BRVM 47 ACTIONS")
+    logging.info("PREDICTIONS V12.2 — BRVM 47 ACTIONS")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Calendrier : jours feries CI 2026 exclus ({len(JOURS_FERIES)} jours)")
