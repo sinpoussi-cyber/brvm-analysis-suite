@@ -1,12 +1,12 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.4 — BRVM 47 ACTIONS (Support .h5 + custom_objects)
+# MODULE: PREDICTION ANALYZER V12.5 — BRVM 47 ACTIONS (CORRECTION InputLayer)
 # ------------------------------------------------------------------------------
-# VERSION: V12.4 (2026-03-05)
+# VERSION: V12.5 (2026-03-05)
 # CORRECTIONS:
 # - Support des fichiers .h5 (ancien format Keras)
 # - Ajout de custom_objects pour compatibilité TensorFlow 2.12
 # - Colonne SQL: price (corrigé)
-# - Patch batch_shape → batch_input_shape
+# - FIX: UnboundLocalError sur InputLayer (patch corrigé)
 # ==============================================================================
 
 import psycopg2
@@ -443,7 +443,7 @@ def connect_to_db():
 
 
 # ==============================================================================
-# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl)
+# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION CORRIGÉE
 # ==============================================================================
 
 def load_action_model(symbol):
@@ -451,6 +451,7 @@ def load_action_model(symbol):
     Charge le modele Keras (.h5) et le scaler MinMaxScaler depuis le disque.
     ✅ Support des fichiers .h5 (ancien format)
     ✅ Ajout de custom_objects pour compatibilité TensorFlow 2.12
+    ✅ FIX: UnboundLocalError sur InputLayer résolu
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
@@ -476,21 +477,10 @@ def load_action_model(symbol):
         model_path = os.path.join(action_dir, h5_files[0])
         logging.info(f"{symbol} : Chargement modèle {h5_files[0]}")
         
-        # ✅ SOLUTION CLÉ : custom_objects pour compatibilité avec anciens modèles
-        custom_objects = {
-            'GRU': GRU,
-            'LSTM': LSTM,
-            'Bidirectional': Bidirectional,
-            'Dense': Dense,
-            'Dropout': Dropout,
-            'InputLayer': InputLayer
-        }
-        
-        # Patch pour batch_shape → batch_input_shape
-        from tensorflow.keras.layers import InputLayer
-        
+        # ✅ SOLUTION CLÉ : Sauvegarder la méthode originale d'InputLayer
         original_init = InputLayer.__init__
         
+        # ✅ Patch pour batch_shape → batch_input_shape
         def patched_init(self, *args, **kwargs):
             if 'batch_shape' in kwargs:
                 kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
@@ -498,6 +488,16 @@ def load_action_model(symbol):
         
         # Appliquer le patch
         InputLayer.__init__ = patched_init
+        
+        # ✅ Définir custom_objects APRÈS avoir importé InputLayer
+        custom_objects = {
+            'GRU': GRU,
+            'LSTM': LSTM,
+            'Bidirectional': Bidirectional,
+            'Dense': Dense,
+            'Dropout': Dropout,
+            'InputLayer': InputLayer  # ✅ Maintenant InputLayer est bien défini
+        }
         
         # Charger le modèle avec custom_objects
         model = load_model(model_path, compile=False, custom_objects=custom_objects)
@@ -778,7 +778,7 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.4 — BRVM 47 ACTIONS (Support .h5 + custom_objects)")
+    logging.info("PREDICTIONS V12.5 — BRVM 47 ACTIONS (Correction InputLayer)")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Modeles : {MODELS_DIR} (fichiers .h5 acceptés)")
