@@ -1,12 +1,12 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.3 — BRVM 47 ACTIONS (Support .h5)
+# MODULE: PREDICTION ANALYZER V12.4 — BRVM 47 ACTIONS (Support .h5 + custom_objects)
 # ------------------------------------------------------------------------------
-# VERSION: V12.3 (2026-03-05)
+# VERSION: V12.4 (2026-03-05)
 # CORRECTIONS:
-# - Support des fichiers .h5 (ancien format Keras) au lieu de .keras
+# - Support des fichiers .h5 (ancien format Keras)
+# - Ajout de custom_objects pour compatibilité TensorFlow 2.12
 # - Colonne SQL: price (corrigé)
-# - Compatible TensorFlow 2.12.0
-# - Patch batch_shape → batch_input_shape (ligne 515-525)
+# - Patch batch_shape → batch_input_shape
 # ==============================================================================
 
 import psycopg2
@@ -16,8 +16,10 @@ import os
 import logging
 import joblib
 from datetime import date, datetime, timedelta
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, Bidirectional, InputLayer
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s: %(message)s')
@@ -88,7 +90,7 @@ def prochains_jours_ouvrables(last_date, num_days=10):
 
 
 # ==============================================================================
-# PARAMETRES DES 47 MODELES (inchangé)
+# PARAMETRES DES 47 MODELES — integres directement dans le code
 # ==============================================================================
 MODELS_PARAMS = {
     "ABJC": {
@@ -447,7 +449,8 @@ def connect_to_db():
 def load_action_model(symbol):
     """
     Charge le modele Keras (.h5) et le scaler MinMaxScaler depuis le disque.
-    ✅ Support des fichiers .h5 (ancien format) au lieu de .keras
+    ✅ Support des fichiers .h5 (ancien format)
+    ✅ Ajout de custom_objects pour compatibilité TensorFlow 2.12
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
@@ -458,19 +461,32 @@ def load_action_model(symbol):
         logging.warning(f"{symbol} : dossier absent ({action_dir})")
         return None, None
 
-    # ✅ RECHERCHE DES FICHIERS .h5 (au lieu de .keras)
+    # ✅ Recherche des fichiers .h5
     h5_files = [f for f in os.listdir(action_dir) if f.endswith(".h5")]
     if not h5_files:
         logging.warning(f"{symbol} : aucun fichier .h5 dans {action_dir}")
         return None, None
 
-    scaler_path = os.path.join(action_dir, "scaler.pkl")  # ✅ scaler.pkl (sans advanced)
+    scaler_path = os.path.join(action_dir, "scaler.pkl")
     if not os.path.exists(scaler_path):
         logging.warning(f"{symbol} : scaler.pkl absent")
         return None, None
 
     try:
-        # ⚠️ PATCH COMPATIBILITÉ TensorFlow 2.12+ avec modèles anciens
+        model_path = os.path.join(action_dir, h5_files[0])
+        logging.info(f"{symbol} : Chargement modèle {h5_files[0]}")
+        
+        # ✅ SOLUTION CLÉ : custom_objects pour compatibilité avec anciens modèles
+        custom_objects = {
+            'GRU': GRU,
+            'LSTM': LSTM,
+            'Bidirectional': Bidirectional,
+            'Dense': Dense,
+            'Dropout': Dropout,
+            'InputLayer': InputLayer
+        }
+        
+        # Patch pour batch_shape → batch_input_shape
         from tensorflow.keras.layers import InputLayer
         
         original_init = InputLayer.__init__
@@ -483,9 +499,8 @@ def load_action_model(symbol):
         # Appliquer le patch
         InputLayer.__init__ = patched_init
         
-        model_path = os.path.join(action_dir, h5_files[0])
-        logging.info(f"{symbol} : Chargement modèle {h5_files[0]}")
-        model = load_model(model_path, compile=False)
+        # Charger le modèle avec custom_objects
+        model = load_model(model_path, compile=False, custom_objects=custom_objects)
         
         # Restaurer la méthode originale
         InputLayer.__init__ = original_init
@@ -763,7 +778,7 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.3 — BRVM 47 ACTIONS (Support .h5)")
+    logging.info("PREDICTIONS V12.4 — BRVM 47 ACTIONS (Support .h5 + custom_objects)")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Modeles : {MODELS_DIR} (fichiers .h5 acceptés)")
