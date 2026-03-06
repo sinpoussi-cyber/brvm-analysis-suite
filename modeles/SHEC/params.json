@@ -1,0 +1,40 @@
+{
+    "action": "SHEC",
+    "best_model": "GRU",
+    "look_back": 20,
+    "n_observations": 1279,
+    "train_size": 1151,
+    "test_size": 128,
+    "date_fin_train": "2025-08-14",
+    "date_debut_test": "2025-08-18",
+    "metrics_test": {
+        "MAPE_%": 2.5238,
+        "R2": 0.9357,
+        "MAE": 35.9683,
+        "RMSE": 48.6736
+    },
+    "criteres_qualite": {
+        "MAPE_inferieur_5pct": true,
+        "R2_superieur_0.80": true
+    },
+    "architecture": {
+        "type": "GRU",
+        "couches": "2 couches récurrentes + 2 Dropout + Dense(1)",
+        "units_c1": 64,
+        "units_c2": 32,
+        "dropout": 0.2,
+        "lr_initial": 0.001,
+        "optimizer": "Adam",
+        "loss": "MSE",
+        "look_back": 20,
+        "batch_size": 16,
+        "epochs_max": 150,
+        "early_stop_patience": 20
+    },
+    "fichiers_sauvegardes": {
+        "modele": "/content/resultats_modeles/SHEC/model_GRU.h5",
+        "scaler": "/content/resultats_modeles/SHEC/scaler.pkl",
+        "last_sequence": "/content/resultats_modeles/SHEC/last_sequence.npy",
+        "parametres": "/content/resultats_modeles/SHEC/params.json"
+    }
+}
