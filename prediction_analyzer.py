@@ -1,12 +1,12 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.7 — BRVM 47 ACTIONS (CORRECTION batch_shape)
+# MODULE: PREDICTION ANALYZER V12.8 — BRVM 47 ACTIONS (CORRECTION FINALE)
 # ------------------------------------------------------------------------------
-# VERSION: V12.7 (2026-03-06)
+# VERSION: V12.8 (2026-03-06)
 # CORRECTIONS:
 # - Support des fichiers .h5 (ancien format Keras)
-# - Correction de l'erreur "Unrecognized keyword arguments: ['batch_shape']"
-# - Patch complet d'InputLayer pour convertir batch_shape → batch_input_shape
-# - Ajout de custom_objects avec contexte pour compatibilité TensorFlow 2.12
+# - Correction définitive de l'erreur "Unknown dtype policy: 'DTypePolicy'"
+# - Utilisation de plusieurs méthodes de chargement en cascade
+# - Désactivation complète de la politique de dtype mixed precision
 # ==============================================================================
 
 import psycopg2
@@ -20,6 +20,10 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, Bidirectional, InputLayer
+
+# Désactiver complètement la mixed precision
+tf.keras.mixed_precision.set_global_policy('float32')
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s: %(message)s')
@@ -443,15 +447,15 @@ def connect_to_db():
 
 
 # ==============================================================================
-# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION CORRIGÉE V12.7
+# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION ULTIME V12.8
 # ==============================================================================
 
 def load_action_model(symbol):
     """
     Charge le modele Keras (.h5) et le scaler MinMaxScaler depuis le disque.
     ✅ Support des fichiers .h5 (ancien format)
-    ✅ Correction de l'erreur "Unrecognized keyword arguments: ['batch_shape']"
-    ✅ Patch complet d'InputLayer pour convertir batch_shape → batch_input_shape
+    ✅ Correction définitive de l'erreur "Unknown dtype policy: 'DTypePolicy'"
+    ✅ Utilisation de plusieurs méthodes de chargement en cascade
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
@@ -473,24 +477,27 @@ def load_action_model(symbol):
         logging.warning(f"{symbol} : scaler.pkl absent")
         return None, None
 
+    model = None
+    errors = []
+    
+    # Méthode 1: Chargement avec custom_objects et safe_mode
     try:
         model_path = os.path.join(action_dir, h5_files[0])
-        logging.info(f"{symbol} : Chargement modèle {h5_files[0]}")
-
-        # ✅ SOLUTION FINALE : Patch complet d'InputLayer pour gérer batch_shape
-        # Sauvegarder la méthode originale
+        logging.info(f"{symbol} : Chargement modèle {h5_files[0]} (méthode 1)")
+        
+        # Désactiver toute politique de dtype personnalisée
+        tf.keras.mixed_precision.set_global_policy('float32')
+        
+        # Patch complet d'InputLayer pour gérer batch_shape
         original_init = InputLayer.__init__
         
         def patched_init(self, *args, **kwargs):
-            """Convertit batch_shape en batch_input_shape si présent"""
             if 'batch_shape' in kwargs:
                 kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
             return original_init(self, *args, **kwargs)
         
-        # Appliquer le patch
         InputLayer.__init__ = patched_init
         
-        # Définir les custom_objects
         custom_objects = {
             'GRU': GRU,
             'LSTM': LSTM,
@@ -500,15 +507,66 @@ def load_action_model(symbol):
             'InputLayer': InputLayer,
         }
         
-        # Forcer la politique de dtype
-        tf.keras.mixed_precision.set_global_policy('float32')
+        with tf.keras.utils.custom_object_scope(custom_objects):
+            model = load_model(model_path, compile=False)
         
-        # Charger le modèle
-        model = load_model(model_path, compile=False, custom_objects=custom_objects)
-        
-        # Restaurer la méthode originale
         InputLayer.__init__ = original_init
+        logging.info(f"{symbol} : Modèle chargé avec succès (méthode 1)")
+        
+    except Exception as e1:
+        errors.append(f"Méthode 1: {str(e1)}")
+        
+        # Méthode 2: Sans custom_objects mais avec contexte
+        try:
+            logging.info(f"{symbol} : Tentative méthode 2...")
+            model = load_model(model_path, compile=False)
+            logging.info(f"{symbol} : Modèle chargé avec succès (méthode 2)")
+            
+        except Exception as e2:
+            errors.append(f"Méthode 2: {str(e2)}")
+            
+            # Méthode 3: Avec safe_mode=False
+            try:
+                logging.info(f"{symbol} : Tentative méthode 3...")
+                model = load_model(model_path, compile=False, safe_mode=False)
+                logging.info(f"{symbol} : Modèle chargé avec succès (méthode 3)")
+                
+            except Exception as e3:
+                errors.append(f"Méthode 3: {str(e3)}")
+                
+                # Méthode 4: Chargement des poids uniquement
+                try:
+                    logging.info(f"{symbol} : Tentative méthode 4 (poids uniquement)...")
+                    # Créer un modèle simple avec la bonne architecture
+                    params = MODELS_PARAMS.get(symbol, {})
+                    look_back = params.get("look_back", 20)
+                    model_type = params.get("best_model", "GRU")
+                    
+                    # Reconstruire l'architecture
+                    inputs = tf.keras.Input(shape=(look_back, 1))
+                    
+                    if model_type == "LSTM":
+                        x = LSTM(params.get("units", 64), return_sequences=False)(inputs)
+                    elif model_type == "BiGRU":
+                        x = Bidirectional(GRU(params.get("units", 64)))(inputs)
+                    else:  # GRU par défaut
+                        x = GRU(params.get("units", 64), return_sequences=False)(inputs)
+                    
+                    x = Dropout(params.get("dropout", 0.2))(x)
+                    outputs = Dense(1)(x)
+                    
+                    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+                    
+                    # Charger les poids
+                    model.load_weights(model_path)
+                    logging.info(f"{symbol} : Poids chargés avec succès (méthode 4)")
+                    
+                except Exception as e4:
+                    errors.append(f"Méthode 4: {str(e4)}")
+                    logging.error(f"{symbol} : Toutes les méthodes ont échoué: {errors}")
+                    return None, None
 
+    try:
         # Compiler le modèle après chargement
         model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
         scaler = joblib.load(scaler_path)
@@ -527,7 +585,7 @@ def load_action_model(symbol):
         return model, scaler
 
     except Exception as e:
-        logging.error(f"{symbol} : erreur chargement modele — {e}")
+        logging.error(f"{symbol} : erreur finale — {e}")
         import traceback
         traceback.print_exc()
         return None, None
@@ -783,7 +841,7 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.7 — BRVM 47 ACTIONS (Correction batch_shape)")
+    logging.info("PREDICTIONS V12.8 — BRVM 47 ACTIONS (Correction Finale)")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Modeles : {MODELS_DIR} (fichiers .h5 acceptés)")
