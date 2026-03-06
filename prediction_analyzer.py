@@ -1,12 +1,12 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.5 — BRVM 47 ACTIONS (CORRECTION InputLayer)
+# MODULE: PREDICTION ANALYZER V12.6 — BRVM 47 ACTIONS (CORRECTION DTypePolicy)
 # ------------------------------------------------------------------------------
-# VERSION: V12.5 (2026-03-05)
+# VERSION: V12.6 (2026-03-06)
 # CORRECTIONS:
 # - Support des fichiers .h5 (ancien format Keras)
-# - Ajout de custom_objects pour compatibilité TensorFlow 2.12
-# - Colonne SQL: price (corrigé)
-# - FIX: UnboundLocalError sur InputLayer (patch corrigé)
+# - Ajout de custom_objects avec contexte pour compatibilité TensorFlow 2.12
+# - Correction de l'erreur "Unknown dtype policy: 'DTypePolicy'"
+# - Forçage de la politique de dtype à 'float32'
 # ==============================================================================
 
 import psycopg2
@@ -443,15 +443,15 @@ def connect_to_db():
 
 
 # ==============================================================================
-# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION CORRIGÉE
+# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION CORRIGÉE V12.6
 # ==============================================================================
 
 def load_action_model(symbol):
     """
     Charge le modele Keras (.h5) et le scaler MinMaxScaler depuis le disque.
     ✅ Support des fichiers .h5 (ancien format)
-    ✅ Ajout de custom_objects pour compatibilité TensorFlow 2.12
-    ✅ FIX: UnboundLocalError sur InputLayer résolu
+    ✅ Ajout de custom_objects et dtype_policy pour compatibilité TensorFlow 2.x
+    ✅ FIX: Erreur 'Unknown dtype policy: 'DTypePolicy'' résolue
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
@@ -476,35 +476,24 @@ def load_action_model(symbol):
     try:
         model_path = os.path.join(action_dir, h5_files[0])
         logging.info(f"{symbol} : Chargement modèle {h5_files[0]}")
-        
-        # ✅ SOLUTION CLÉ : Sauvegarder la méthode originale d'InputLayer
-        original_init = InputLayer.__init__
-        
-        # ✅ Patch pour batch_shape → batch_input_shape
-        def patched_init(self, *args, **kwargs):
-            if 'batch_shape' in kwargs:
-                kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-            return original_init(self, *args, **kwargs)
-        
-        # Appliquer le patch
-        InputLayer.__init__ = patched_init
-        
-        # ✅ Définir custom_objects APRÈS avoir importé InputLayer
+
+        # ✅ SOLUTION FINALE : Utiliser un contexte custom_object_scope
         custom_objects = {
             'GRU': GRU,
             'LSTM': LSTM,
             'Bidirectional': Bidirectional,
             'Dense': Dense,
             'Dropout': Dropout,
-            'InputLayer': InputLayer  # ✅ Maintenant InputLayer est bien défini
+            'InputLayer': InputLayer,
         }
-        
-        # Charger le modèle avec custom_objects
-        model = load_model(model_path, compile=False, custom_objects=custom_objects)
-        
-        # Restaurer la méthode originale
-        InputLayer.__init__ = original_init
-        
+
+        # Charger le modèle avec le scope personnalisé
+        with tf.keras.utils.custom_object_scope(custom_objects):
+            # Forcer la politique de dtype AVANT le chargement
+            tf.keras.mixed_precision.set_global_policy('float32')
+            model = load_model(model_path, compile=False)
+
+        # Compiler le modèle après chargement
         model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
         scaler = joblib.load(scaler_path)
 
@@ -517,7 +506,7 @@ def load_action_model(symbol):
             )
         else:
             logging.info(f"{symbol} | modele charge (parametres non trouves dans MODELS_PARAMS)")
-        
+
         _models_cache[symbol] = (model, scaler)
         return model, scaler
 
@@ -778,7 +767,7 @@ def process_company_prediction(conn, company_id, symbol):
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.5 — BRVM 47 ACTIONS (Correction InputLayer)")
+    logging.info("PREDICTIONS V12.6 — BRVM 47 ACTIONS (Correction DTypePolicy)")
     logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"Modeles : {MODELS_DIR} (fichiers .h5 acceptés)")
