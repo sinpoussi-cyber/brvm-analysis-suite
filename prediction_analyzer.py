@@ -1,12 +1,11 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V12.8 — BRVM 47 ACTIONS (CORRECTION FINALE)
+# MODULE: PREDICTION ANALYZER V14.0 — BRVM 47 ACTIONS (Format .keras)
 # ------------------------------------------------------------------------------
-# VERSION: V12.8 (2026-03-06)
-# CORRECTIONS:
-# - Support des fichiers .h5 (ancien format Keras)
-# - Correction définitive de l'erreur "Unknown dtype policy: 'DTypePolicy'"
-# - Utilisation de plusieurs méthodes de chargement en cascade
-# - Désactivation complète de la politique de dtype mixed precision
+# VERSION: V14.0 (2026-03-07)
+# CARACTÉRISTIQUES:
+# - Compatible avec les modèles au format .keras (nouveau format TensorFlow)
+# - Support natif sans patchs ni custom_objects
+# - Chargement simplifié et robuste
 # ==============================================================================
 
 import psycopg2
@@ -19,11 +18,6 @@ from datetime import date, datetime, timedelta
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, Bidirectional, InputLayer
-
-# Désactiver complètement la mixed precision
-tf.keras.mixed_precision.set_global_policy('float32')
-os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s: %(message)s')
@@ -36,7 +30,7 @@ DB_HOST     = os.environ.get('DB_HOST')
 DB_PORT     = os.environ.get('DB_PORT')
 
 # Dossier racine des modeles :
-#   MODELS_DIR/ABJC/model_GRU.h5 + scaler.pkl + params.json
+#   MODELS_DIR/ABJC/model_ABJC.keras + scaler.pkl
 MODELS_DIR = os.environ.get('MODELS_DIR', './modeles')
 
 # Nombre fixe de jours historiques recuperes pour TOUTES les actions
@@ -45,7 +39,7 @@ HISTORIQUE_JOURS = 100
 # Nombre de jours ouvrables a predire
 NB_JOURS_PREDICTION = 10
 
-# Cache memoire : evite de recharger les fichiers .h5/.pkl a chaque appel
+# Cache memoire
 _models_cache = {}
 
 
@@ -94,7 +88,7 @@ def prochains_jours_ouvrables(last_date, num_days=10):
 
 
 # ==============================================================================
-# PARAMETRES DES 47 MODELES — integres directement dans le code
+# PARAMETRES DES 47 MODELES (identiques à la version précédente)
 # ==============================================================================
 MODELS_PARAMS = {
     "ABJC": {
@@ -434,28 +428,28 @@ MODELS_PARAMS = {
 # ==============================================================================
 
 def connect_to_db():
+    """Connexion à la base PostgreSQL"""
     try:
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
             host=DB_HOST, port=DB_PORT
         )
-        logging.info("Connexion PostgreSQL reussie")
+        logging.info("✅ Connexion PostgreSQL réussie")
         return conn
     except Exception as e:
-        logging.error(f"Erreur connexion DB: {e}")
+        logging.error(f"❌ Erreur connexion DB: {e}")
         return None
 
 
 # ==============================================================================
-# CHARGEMENT DES MODELES PRE-ENTRAINES (.h5 + .pkl) - VERSION ULTIME V12.8
+# CHARGEMENT DES MODELES AU FORMAT .KERAS
 # ==============================================================================
 
 def load_action_model(symbol):
     """
-    Charge le modele Keras (.h5) et le scaler MinMaxScaler depuis le disque.
-    ✅ Support des fichiers .h5 (ancien format)
-    ✅ Correction définitive de l'erreur "Unknown dtype policy: 'DTypePolicy'"
-    ✅ Utilisation de plusieurs méthodes de chargement en cascade
+    Charge le modèle Keras au format .keras et le scaler MinMaxScaler
+    ✅ Format .keras natif - plus besoin de patchs
+    ✅ Compatible avec TensorFlow 2.x
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
@@ -463,154 +457,69 @@ def load_action_model(symbol):
     action_dir = os.path.join(MODELS_DIR, symbol)
 
     if not os.path.isdir(action_dir):
-        logging.warning(f"{symbol} : dossier absent ({action_dir})")
+        logging.warning(f"⚠️ {symbol} : dossier absent ({action_dir})")
         return None, None
 
-    # ✅ Recherche des fichiers .h5
-    h5_files = [f for f in os.listdir(action_dir) if f.endswith(".h5")]
-    if not h5_files:
-        logging.warning(f"{symbol} : aucun fichier .h5 dans {action_dir}")
+    # Recherche des fichiers .keras (nouveau format)
+    keras_files = [f for f in os.listdir(action_dir) if f.endswith(".keras")]
+    if not keras_files:
+        logging.warning(f"⚠️ {symbol} : aucun fichier .keras trouvé dans {action_dir}")
         return None, None
 
     scaler_path = os.path.join(action_dir, "scaler.pkl")
     if not os.path.exists(scaler_path):
-        logging.warning(f"{symbol} : scaler.pkl absent")
+        logging.warning(f"⚠️ {symbol} : scaler.pkl absent")
         return None, None
 
-    model = None
-    errors = []
-    
-    # Méthode 1: Chargement avec custom_objects et safe_mode
     try:
-        model_path = os.path.join(action_dir, h5_files[0])
-        logging.info(f"{symbol} : Chargement modèle {h5_files[0]} (méthode 1)")
-        
-        # Désactiver toute politique de dtype personnalisée
-        tf.keras.mixed_precision.set_global_policy('float32')
-        
-        # Patch complet d'InputLayer pour gérer batch_shape
-        original_init = InputLayer.__init__
-        
-        def patched_init(self, *args, **kwargs):
-            if 'batch_shape' in kwargs:
-                kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-            return original_init(self, *args, **kwargs)
-        
-        InputLayer.__init__ = patched_init
-        
-        custom_objects = {
-            'GRU': GRU,
-            'LSTM': LSTM,
-            'Bidirectional': Bidirectional,
-            'Dense': Dense,
-            'Dropout': Dropout,
-            'InputLayer': InputLayer,
-        }
-        
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = load_model(model_path, compile=False)
-        
-        InputLayer.__init__ = original_init
-        logging.info(f"{symbol} : Modèle chargé avec succès (méthode 1)")
-        
-    except Exception as e1:
-        errors.append(f"Méthode 1: {str(e1)}")
-        
-        # Méthode 2: Sans custom_objects mais avec contexte
-        try:
-            logging.info(f"{symbol} : Tentative méthode 2...")
-            model = load_model(model_path, compile=False)
-            logging.info(f"{symbol} : Modèle chargé avec succès (méthode 2)")
-            
-        except Exception as e2:
-            errors.append(f"Méthode 2: {str(e2)}")
-            
-            # Méthode 3: Avec safe_mode=False
-            try:
-                logging.info(f"{symbol} : Tentative méthode 3...")
-                model = load_model(model_path, compile=False, safe_mode=False)
-                logging.info(f"{symbol} : Modèle chargé avec succès (méthode 3)")
-                
-            except Exception as e3:
-                errors.append(f"Méthode 3: {str(e3)}")
-                
-                # Méthode 4: Chargement des poids uniquement
-                try:
-                    logging.info(f"{symbol} : Tentative méthode 4 (poids uniquement)...")
-                    # Créer un modèle simple avec la bonne architecture
-                    params = MODELS_PARAMS.get(symbol, {})
-                    look_back = params.get("look_back", 20)
-                    model_type = params.get("best_model", "GRU")
-                    
-                    # Reconstruire l'architecture
-                    inputs = tf.keras.Input(shape=(look_back, 1))
-                    
-                    if model_type == "LSTM":
-                        x = LSTM(params.get("units", 64), return_sequences=False)(inputs)
-                    elif model_type == "BiGRU":
-                        x = Bidirectional(GRU(params.get("units", 64)))(inputs)
-                    else:  # GRU par défaut
-                        x = GRU(params.get("units", 64), return_sequences=False)(inputs)
-                    
-                    x = Dropout(params.get("dropout", 0.2))(x)
-                    outputs = Dense(1)(x)
-                    
-                    model = tf.keras.Model(inputs=inputs, outputs=outputs)
-                    
-                    # Charger les poids
-                    model.load_weights(model_path)
-                    logging.info(f"{symbol} : Poids chargés avec succès (méthode 4)")
-                    
-                except Exception as e4:
-                    errors.append(f"Méthode 4: {str(e4)}")
-                    logging.error(f"{symbol} : Toutes les méthodes ont échoué: {errors}")
-                    return None, None
+        model_path = os.path.join(action_dir, keras_files[0])
+        logging.info(f"📥 {symbol} : Chargement modèle {keras_files[0]}")
 
-    try:
-        # Compiler le modèle après chargement
+        # Chargement simple - le format .keras contient tout
+        model = load_model(model_path, compile=False)
+        
+        # Compilation
         model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
         scaler = joblib.load(scaler_path)
 
         p = MODELS_PARAMS.get(symbol, {})
         if p:
             logging.info(
-                f"{symbol} | modele charge : {p.get('best_model', 'N/A')} "
+                f"   ✓ {symbol} | {p.get('best_model', 'N/A')} "
                 f"look_back={p.get('look_back', 'N/A')} "
-                f"MAPE={p.get('mape_test', 'N/A')}% R2={p.get('r2_test', 'N/A')}"
+                f"MAPE={p.get('mape_test', 'N/A')}%"
             )
         else:
-            logging.info(f"{symbol} | modele charge (parametres non trouves dans MODELS_PARAMS)")
+            logging.info(f"   ✓ {symbol} | Modèle chargé")
 
         _models_cache[symbol] = (model, scaler)
         return model, scaler
 
     except Exception as e:
-        logging.error(f"{symbol} : erreur finale — {e}")
+        logging.error(f"❌ {symbol} : erreur chargement — {e}")
         import traceback
         traceback.print_exc()
         return None, None
 
 
 # ==============================================================================
-# APPLICATION DU MODELE — PREDICTION DES 10 PROCHAINS JOURS OUVRABLES
+# PRÉDICTION DES 10 PROCHAINS JOURS OUVRABLES
 # ==============================================================================
 
 def predire_10_jours(prices, dates, symbol):
     """
-    Applique le modele pre-entraine de l action sur les 100 derniers cours
-    pour predire les NB_JOURS_PREDICTION prochains jours ouvrables BRVM.
+    Applique le modèle pré-entraîné pour prédire les prochains jours ouvrables
     """
     params = MODELS_PARAMS.get(symbol, {})
     if not params:
-        logging.error(f"{symbol} : parametres non trouves dans MODELS_PARAMS")
+        logging.error(f"❌ {symbol} : paramètres non trouvés")
         return None
         
     model, scaler = load_action_model(symbol)
 
     if model is None:
         logging.error(
-            f"{symbol} : fichier .h5 introuvable — "
-            f"verifiez que le modele est depose dans {MODELS_DIR}/{symbol}/"
+            f"❌ {symbol} : modèle .keras introuvable dans {MODELS_DIR}/{symbol}/"
         )
         return None
 
@@ -620,8 +529,7 @@ def predire_10_jours(prices, dates, symbol):
 
     if len(arr) < look_back:
         logging.error(
-            f"{symbol} : {len(arr)} cours recus < look_back={look_back}. "
-            f"Impossible de predire."
+            f"❌ {symbol} : {len(arr)} cours < look_back={look_back}"
         )
         return None
 
@@ -631,7 +539,7 @@ def predire_10_jours(prices, dates, symbol):
 
     future_dates = prochains_jours_ouvrables(last_date, NB_JOURS_PREDICTION)
 
-    # Prendre les look_back derniers cours
+    # Préparation de la séquence
     sequence = arr[-look_back:].copy()
 
     if log_transform:
@@ -639,7 +547,7 @@ def predire_10_jours(prices, dates, symbol):
 
     seq_scaled = scaler.transform(sequence.reshape(-1, 1))
 
-    # Prediction iterative
+    # Prédiction itérative
     current_seq = seq_scaled.copy()
     preds_scaled = []
 
@@ -649,7 +557,7 @@ def predire_10_jours(prices, dates, symbol):
         preds_scaled.append(p)
         current_seq = np.append(current_seq, [[p]], axis=0)
 
-    # Denormalisation
+    # Dénormalisation
     pred_raw = scaler.inverse_transform(
         np.array(preds_scaled).reshape(-1, 1)
     ).flatten()
@@ -673,13 +581,12 @@ def predire_10_jours(prices, dates, symbol):
 
     # Niveau de confiance par jour
     mape = params.get("mape_test", 5.0)
-    r2 = params.get("r2_test", 0.5)
     both_ok = params.get("mape_ok", False) and params.get("r2_ok", False)
 
     def _niveau_confiance(jour_idx):
         j = jour_idx + 1
         if both_ok:
-            return "Elevee" if j <= 3 else "Moyenne"
+            return "Élevée" if j <= 3 else "Moyenne"
         elif params.get("mape_ok", False):
             return "Moyenne" if j <= 3 else "Faible"
         else:
@@ -690,7 +597,7 @@ def predire_10_jours(prices, dates, symbol):
     variation_pct = ((float(predictions[-1]) - last_price) / last_price) * 100
 
     confiance_globale = (
-        "Elevee"  if both_ok and abs(variation_pct) < 5 else
+        "Élevée"  if both_ok and abs(variation_pct) < 5 else
         "Moyenne" if params.get("mape_ok", False) else
         "Faible"
     )
@@ -707,7 +614,6 @@ def predire_10_jours(prices, dates, symbol):
         "overall_confidence": confiance_globale,
         "model_type": params.get("best_model", "N/A"),
         "mape_test": mape,
-        "r2_test": r2,
     }
 
 
@@ -716,11 +622,13 @@ def predire_10_jours(prices, dates, symbol):
 # ==============================================================================
 
 def save_predictions_to_db(conn, company_id, symbol, prediction_data):
-    """Supprime les anciennes predictions et insere les nouvelles."""
+    """Sauvegarde les prédictions en base"""
     try:
         with conn.cursor() as cur:
+            # Suppression des anciennes prédictions
             cur.execute("DELETE FROM predictions WHERE company_id = %s", (company_id,))
 
+            # Insertion des nouvelles
             for i, pred_date in enumerate(prediction_data["dates"]):
                 cur.execute("""
                     INSERT INTO predictions (
@@ -738,15 +646,11 @@ def save_predictions_to_db(conn, company_id, symbol, prediction_data):
 
             conn.commit()
 
-        logging.info(
-            f"{symbol} : {len(prediction_data['dates'])} predictions "
-            f"sauvegardees ({prediction_data['dates'][0]} → "
-            f"{prediction_data['dates'][-1]})"
-        )
+        logging.info(f"✅ {symbol} : {len(prediction_data['dates'])} prédictions sauvegardées")
         return True
 
     except Exception as e:
-        logging.error(f"{symbol} : erreur sauvegarde — {e}")
+        logging.error(f"❌ {symbol} : erreur sauvegarde — {e}")
         conn.rollback()
         return False
 
@@ -756,17 +660,17 @@ def save_predictions_to_db(conn, company_id, symbol, prediction_data):
 # ==============================================================================
 
 def process_company_prediction(conn, company_id, symbol):
-    """Traite une societe pour generer les predictions."""
+    """Traite une société pour générer les prédictions"""
     logging.info(f"--- {symbol} ---")
 
     if symbol not in MODELS_PARAMS:
-        logging.warning(f"{symbol} : absent de MODELS_PARAMS, ignore.")
+        logging.warning(f"⚠️ {symbol} : absent de MODELS_PARAMS")
         return False
 
     look_back = MODELS_PARAMS[symbol]["look_back"]
 
     try:
-        # ✅ Requete SQL corrigee (price au lieu de close_price)
+        # Récupération des données historiques
         df = pd.read_sql(
             """
             SELECT trade_date, price
@@ -780,120 +684,117 @@ def process_company_prediction(conn, company_id, symbol):
         )
 
         nb_dispo = len(df)
-        logging.info(f"{symbol} : {nb_dispo} jours disponibles "
-                     f"(look_back={look_back}, historique requis={HISTORIQUE_JOURS})")
+        logging.info(f"📊 {symbol} : {nb_dispo} jours disponibles")
 
         if nb_dispo < look_back:
             logging.warning(
-                f"{symbol} : IGNORE — seulement {nb_dispo} jours disponibles "
-                f"alors que le modele necessite look_back={look_back} jours minimum."
+                f"⚠️ {symbol} : IGNORÉ - {nb_dispo} jours < look_back={look_back}"
             )
             return False
 
-        if nb_dispo < HISTORIQUE_JOURS:
-            logging.warning(
-                f"{symbol} : seulement {nb_dispo}/{HISTORIQUE_JOURS} jours disponibles. "
-                f"Prediction quand meme possible."
-            )
-
         df = df.iloc[::-1].reset_index(drop=True)
-
         result = predire_10_jours(df["price"], df["trade_date"], symbol)
 
         if result is None:
             return False
 
+        # Affichage des résultats
         logging.info(
-            f"{symbol} | {result['model_type']} | "
-            f"MAPE={result['mape_test']}% | R2={result['r2_test']} | "
-            f"Confiance globale: {result['overall_confidence']}"
+            f"📈 {symbol} | {result['model_type']} | "
+            f"MAPE={result['mape_test']}% | Confiance: {result['overall_confidence']}"
         )
-        logging.info(
-            f"{symbol} | Dernier cours : {result['last_price']:.2f} FCFA "
-            f"({result['last_date']})"
-        )
+        logging.info(f"💰 Dernier cours : {result['last_price']:.2f} FCFA")
 
         for i, (d, p, c) in enumerate(zip(
                 result["dates"],
                 result["predictions"],
                 result["confidence_per_day"])):
-            ferie_info = " [FERIE]" if d in JOURS_FERIES else ""
             logging.info(
-                f"  J+{i+1:2d} | {d} ({d.strftime('%A')}{ferie_info}) | "
+                f"   J+{i+1:2d} | {d.strftime('%d/%m/%Y')} | "
                 f"{p:10.2f} FCFA | {c}"
             )
 
         logging.info(
-            f"{symbol} | Variation J+10 vs aujourd hui : "
-            f"{result['avg_change_percent']:+.2f}%"
+            f"📊 Variation J+10 : {result['avg_change_percent']:+.2f}%"
         )
 
         return save_predictions_to_db(conn, company_id, symbol, result)
 
     except Exception as e:
-        logging.error(f"{symbol} : erreur inattendue — {e}", exc_info=True)
+        logging.error(f"❌ {symbol} : erreur — {e}")
         return False
 
 
 # ==============================================================================
-# POINT D ENTREE PRINCIPAL
+# POINT D'ENTRÉE PRINCIPAL
 # ==============================================================================
 
 def run_prediction_analysis():
+    """Fonction principale d'exécution"""
+    
     logging.info("=" * 70)
-    logging.info("PREDICTIONS V12.8 — BRVM 47 ACTIONS (Correction Finale)")
-    logging.info(f"Historique : {HISTORIQUE_JOURS} jours par action")
-    logging.info(f"Predictions : {NB_JOURS_PREDICTION} jours ouvrables")
-    logging.info(f"Modeles : {MODELS_DIR} (fichiers .h5 acceptés)")
+    logging.info("🔮 PREDICTIONS V14.0 — BRVM 47 ACTIONS (Format .keras)")
+    logging.info("=" * 70)
+    logging.info(f"📊 Historique : {HISTORIQUE_JOURS} jours par action")
+    logging.info(f"📈 Prédictions : {NB_JOURS_PREDICTION} jours ouvrables")
+    logging.info(f"📁 Modèles : {MODELS_DIR} (format .keras)")
     logging.info("=" * 70)
 
-    logging.info("Jours feries CI 2026 exclus des predictions :")
-    for jf in sorted(JOURS_FERIES):
-        logging.info(f"  {jf} ({jf.strftime('%A %d %B %Y')})")
+    # Affichage des jours fériés
+    logging.info("📅 Jours fériés 2026 exclus :")
+    for jf in sorted(JOURS_FERIES)[:5]:  # Afficher seulement les 5 premiers
+        logging.info(f"   {jf.strftime('%d/%m/%Y')}")
+    logging.info("   ...")
 
     conn = connect_to_db()
     if not conn:
         return
 
     try:
+        # Récupération des sociétés
         with conn.cursor() as cur:
             cur.execute("SELECT id, symbol FROM companies ORDER BY symbol;")
             companies = cur.fetchall()
 
+        # Statistiques
         symbols = [s for _, s in companies]
-        known = [s for s in symbols if s in MODELS_PARAMS]
-        unknown = [s for s in symbols if s not in MODELS_PARAMS]
-        has_files = [s for s in known if os.path.isdir(os.path.join(MODELS_DIR, s))]
-        no_files = [s for s in known if not os.path.isdir(os.path.join(MODELS_DIR, s))]
+        with_keras = []
+        without_keras = []
+        
+        for sym in symbols:
+            action_dir = os.path.join(MODELS_DIR, sym)
+            if os.path.isdir(action_dir) and any(f.endswith('.keras') for f in os.listdir(action_dir)):
+                with_keras.append(sym)
+            else:
+                without_keras.append(sym)
 
-        logging.info(f"\n{len(companies)} societes | "
-                     f"params: {len(known)}/47 | "
-                     f"fichiers .h5: {len(has_files)}/{len(known)}")
+        logging.info(f"\n📊 {len(companies)} sociétés")
+        logging.info(f"   ✅ Modèles .keras : {len(with_keras)}")
+        logging.info(f"   ⚠️  Sans modèle : {len(without_keras)}")
 
-        if no_files:
-            logging.warning(
-                f"Modeles absents du serveur ({len(no_files)}) : {no_files}"
-            )
-        if unknown:
-            logging.warning(f"Actions hors MODELS_PARAMS : {unknown}")
+        if without_keras:
+            logging.warning(f"   ❌ Modèles manquants : {', '.join(without_keras[:5])}...")
 
+        # Traitement
         success = 0
         ignored = 0
+        
         for cid, sym in companies:
-            ok = process_company_prediction(conn, cid, sym)
-            if ok:
+            if process_company_prediction(conn, cid, sym):
                 success += 1
             else:
                 ignored += 1
 
-        logging.info("=" * 70)
-        logging.info(f"TERMINE : {success}/{len(companies)} predictions reussies")
-        logging.info(f"Ignores : {ignored} (fichier manquant ou donnees insuffisantes)")
-        logging.info(f"Total lignes inserees : {success * NB_JOURS_PREDICTION}")
+        # Résumé final
+        logging.info("\n" + "=" * 70)
+        logging.info("✅ PRÉDICTIONS TERMINÉES")
+        logging.info(f"   📈 Succès : {success}/{len(companies)}")
+        logging.info(f"   ⚠️  Ignorés : {ignored}")
+        logging.info(f"   💾 Total insertions : {success * NB_JOURS_PREDICTION}")
         logging.info("=" * 70)
 
     except Exception as e:
-        logging.error(f"Erreur generale : {e}", exc_info=True)
+        logging.error(f"❌ Erreur générale : {e}", exc_info=True)
     finally:
         conn.close()
 
