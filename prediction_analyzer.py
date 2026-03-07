@@ -1,11 +1,12 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V14.0 — BRVM 47 ACTIONS (Format .keras)
+# MODULE: PREDICTION ANALYZER V14.1 — BRVM 47 ACTIONS (Format .keras)
 # ------------------------------------------------------------------------------
-# VERSION: V14.0 (2026-03-07)
-# CARACTÉRISTIQUES:
-# - Compatible avec les modèles au format .keras (nouveau format TensorFlow)
-# - Support natif sans patchs ni custom_objects
-# - Chargement simplifié et robuste
+# VERSION: V14.1 (2026-03-07)
+# CORRECTIONS:
+# - Ajout du safe_mode=True pour la compatibilité des modèles
+# - Gestion améliorée des erreurs de chargement
+# - Fallback avec chargement manuel des poids si nécessaire
+# - Support amélioré des différentes versions de Keras/TensorFlow
 # ==============================================================================
 
 import psycopg2
@@ -442,64 +443,121 @@ def connect_to_db():
 
 
 # ==============================================================================
-# CHARGEMENT DES MODELES AU FORMAT .KERAS
+# CHARGEMENT DES MODELES AU FORMAT .KERAS - VERSION CORRIGÉE
 # ==============================================================================
 
 def load_action_model(symbol):
     """
-    Charge le modèle Keras au format .keras et le scaler MinMaxScaler
-    ✅ Format .keras natif - plus besoin de patchs
-    ✅ Compatible avec TensorFlow 2.x
+    Charge le modèle Keras au format .keras en utilisant une approche robuste
+    avec plusieurs tentatives de chargement pour gérer les problèmes de compatibilité.
     """
     if symbol in _models_cache:
         return _models_cache[symbol]
 
     action_dir = os.path.join(MODELS_DIR, symbol)
 
+    # Vérification de l'existence du dossier
     if not os.path.isdir(action_dir):
         logging.warning(f"⚠️ {symbol} : dossier absent ({action_dir})")
         return None, None
 
-    # Recherche des fichiers .keras (nouveau format)
+    # Recherche du fichier .keras
     keras_files = [f for f in os.listdir(action_dir) if f.endswith(".keras")]
     if not keras_files:
         logging.warning(f"⚠️ {symbol} : aucun fichier .keras trouvé dans {action_dir}")
         return None, None
 
+    # Vérification du scaler
     scaler_path = os.path.join(action_dir, "scaler.pkl")
     if not os.path.exists(scaler_path):
         logging.warning(f"⚠️ {symbol} : scaler.pkl absent")
         return None, None
 
+    model_path = os.path.join(action_dir, keras_files[0])
+    logging.info(f"📥 {symbol} : Chargement modèle {keras_files[0]}")
+
+    # TENTATIVE 1: Chargement avec safe_mode=True (recommandé pour compatibilité)
     try:
-        model_path = os.path.join(action_dir, keras_files[0])
-        logging.info(f"📥 {symbol} : Chargement modèle {keras_files[0]}")
-
-        # Chargement simple - le format .keras contient tout
-        model = load_model(model_path, compile=False)
-        
-        # Compilation
-        model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
-        scaler = joblib.load(scaler_path)
-
-        p = MODELS_PARAMS.get(symbol, {})
-        if p:
-            logging.info(
-                f"   ✓ {symbol} | {p.get('best_model', 'N/A')} "
-                f"look_back={p.get('look_back', 'N/A')} "
-                f"MAPE={p.get('mape_test', 'N/A')}%"
-            )
-        else:
-            logging.info(f"   ✓ {symbol} | Modèle chargé")
-
-        _models_cache[symbol] = (model, scaler)
-        return model, scaler
-
+        model = load_model(model_path, compile=False, safe_mode=True)
+        logging.info(f"   ✓ {symbol} : Chargé avec safe_mode=True")
     except Exception as e:
-        logging.error(f"❌ {symbol} : erreur chargement — {e}")
-        import traceback
-        traceback.print_exc()
+        logging.warning(f"   ⚠️ {symbol} : Échec safe_mode=True - {str(e)[:100]}")
+        model = None
+
+    # TENTATIVE 2: Chargement standard sans safe_mode
+    if model is None:
+        try:
+            model = load_model(model_path, compile=False)
+            logging.info(f"   ✓ {symbol} : Chargé avec mode standard")
+        except Exception as e:
+            logging.warning(f"   ⚠️ {symbol} : Échec mode standard - {str(e)[:100]}")
+            model = None
+
+    # TENTATIVE 3: Chargement avec custom_objects vide
+    if model is None:
+        try:
+            model = load_model(model_path, compile=False, custom_objects={})
+            logging.info(f"   ✓ {symbol} : Chargé avec custom_objects={{}}")
+        except Exception as e:
+            logging.warning(f"   ⚠️ {symbol} : Échec custom_objects - {str(e)[:100]}")
+            model = None
+
+    # TENTATIVE 4: Chargement manuel des poids (dernier recours)
+    if model is None:
+        try:
+            # Charger l'architecture et les poids séparément
+            import json
+            import h5py
+            
+            with h5py.File(model_path, 'r') as f:
+                # Essayer de charger la configuration
+                if 'model_config' in f.attrs:
+                    config = json.loads(f.attrs['model_config'])
+                    
+                    # Reconstruire le modèle à partir de la config
+                    from tensorflow.keras.models import model_from_json
+                    model = model_from_json(json.dumps(config))
+                    
+                    # Charger les poids
+                    model.load_weights(model_path)
+                    
+                    logging.info(f"   ✓ {symbol} : Chargé via reconstruction manuelle")
+        except Exception as e:
+            logging.error(f"   ❌ {symbol} : Échec reconstruction manuelle - {e}")
+            model = None
+
+    # Si toutes les tentatives ont échoué
+    if model is None:
+        logging.error(f"❌ {symbol} : Impossible de charger le modèle après 4 tentatives")
         return None, None
+
+    # Compilation du modèle
+    try:
+        model.compile(optimizer=Adam(1e-3), loss="mean_squared_error")
+    except Exception as e:
+        logging.warning(f"   ⚠️ {symbol} : Problème compilation - {e}")
+        # On continue même sans compilation réussie
+
+    # Chargement du scaler
+    try:
+        scaler = joblib.load(scaler_path)
+    except Exception as e:
+        logging.error(f"❌ {symbol} : Erreur chargement scaler - {e}")
+        return None, None
+
+    # Affichage des paramètres si disponibles
+    p = MODELS_PARAMS.get(symbol, {})
+    if p:
+        logging.info(
+            f"   ✓ {symbol} | {p.get('best_model', 'N/A')} "
+            f"look_back={p.get('look_back', 'N/A')} "
+            f"MAPE={p.get('mape_test', 'N/A')}%"
+        )
+    else:
+        logging.info(f"   ✓ {symbol} | Modèle chargé")
+
+    _models_cache[symbol] = (model, scaler)
+    return model, scaler
 
 
 # ==============================================================================
@@ -545,7 +603,11 @@ def predire_10_jours(prices, dates, symbol):
     if log_transform:
         sequence = np.log1p(sequence)
 
-    seq_scaled = scaler.transform(sequence.reshape(-1, 1))
+    try:
+        seq_scaled = scaler.transform(sequence.reshape(-1, 1))
+    except Exception as e:
+        logging.error(f"❌ {symbol} : Erreur transformation scaler - {e}")
+        return None
 
     # Prédiction itérative
     current_seq = seq_scaled.copy()
@@ -553,14 +615,22 @@ def predire_10_jours(prices, dates, symbol):
 
     for _ in range(NB_JOURS_PREDICTION):
         x_input = current_seq[-look_back:].reshape(1, look_back, 1)
-        p = model.predict(x_input, verbose=0)[0, 0]
+        try:
+            p = model.predict(x_input, verbose=0)[0, 0]
+        except Exception as e:
+            logging.error(f"❌ {symbol} : Erreur prédiction - {e}")
+            return None
         preds_scaled.append(p)
         current_seq = np.append(current_seq, [[p]], axis=0)
 
     # Dénormalisation
-    pred_raw = scaler.inverse_transform(
-        np.array(preds_scaled).reshape(-1, 1)
-    ).flatten()
+    try:
+        pred_raw = scaler.inverse_transform(
+            np.array(preds_scaled).reshape(-1, 1)
+        ).flatten()
+    except Exception as e:
+        logging.error(f"❌ {symbol} : Erreur inverse transform - {e}")
+        return None
 
     if log_transform:
         predictions = np.expm1(pred_raw)
@@ -733,7 +803,7 @@ def run_prediction_analysis():
     """Fonction principale d'exécution"""
     
     logging.info("=" * 70)
-    logging.info("🔮 PREDICTIONS V14.0 — BRVM 47 ACTIONS (Format .keras)")
+    logging.info("🔮 PREDICTIONS V14.1 — BRVM 47 ACTIONS (Format .keras)")
     logging.info("=" * 70)
     logging.info(f"📊 Historique : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"📈 Prédictions : {NB_JOURS_PREDICTION} jours ouvrables")
