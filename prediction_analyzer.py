@@ -1,36 +1,40 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V15.1 — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V16.0 — BRVM 47 ACTIONS
 # ------------------------------------------------------------------------------
-# Structure exacte des dossiers modeles/ :
+# CORRECTION CRITIQUE V16.0 :
+#   Les fichiers .keras sont au format KERAS 3 (ZIP contenant config.json +
+#   model.weights.h5). TF 2.x ne sait pas les lire nativement.
+#   Solution : load_keras3_model() ouvre le ZIP, reconstruit l'architecture
+#   en TF2 depuis le config.json, puis charge les poids depuis model.weights.h5.
 #
-#   SOURCE "base"     (42 symboles) :
-#       modeles/SYMBOL/model_*.keras          (sans "_advanced")
-#       modeles/SYMBOL/scaler.pkl
+# Types de modèles gérés :
+#   - GRU    : Input → GRU(64,rs=True) → Dropout → GRU(32,rs=False) → Dropout → Dense(1)
+#   - GRU adv: Input → GRU(128,rs=True) → Dropout → GRU(64,rs=False) → Dropout → Dense(1)
+#   - LSTM   : Input → LSTM(64,rs=True) → Dropout → LSTM(32,rs=False) → Dropout → Dense(1)
+#   - BiGRU  : Input → Bidir(GRU,rs=True) → Drop → Bidir(GRU,rs=False) → Drop → Dense(16) → Dense(1)
 #
-#   SOURCE "advanced" (5 symboles : BICB, BOAM, LNBB, SDCC, STBC) :
-#       modeles/SYMBOL/model_*_advanced.keras
-#       modeles/SYMBOL/scaler_advanced.pkl
-#
-# Corrections V15.1 :
-#   - _resolve_paths() : sélection automatique du bon .keras ET du bon .pkl
-#     selon le champ "source" dans MODELS_PARAMS (pas keras_files[0] aveugle)
-#   - 4 tentatives de chargement du modèle (safe_mode → standard → custom_objects → H5)
-#   - Requêtes SQL entièrement paramétrées (pas d'injection possible)
-#   - Intervalles de confiance dynamiques (volatilité réelle, borne inf ≥ 0)
-#   - Pré-audit affiché au démarrage (OK / sans keras / sans scaler)
-#   - Classe PredictionAnalyzer pour compatibilité avec main.py
+# Structure fichiers :
+#   source "base"     (42 symboles) : model_*.keras + scaler.pkl
+#   source "advanced" ( 5 symboles) : model_*_advanced.keras + scaler_advanced.pkl
 # ==============================================================================
 
 import os
+import json
 import logging
+import zipfile
+import tempfile
 import joblib
 from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import psycopg2
+
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import (
+    GRU, LSTM, Dense, Dropout, Bidirectional, Input
+)
 from tensorflow.keras.optimizers import Adam
 
 logging.basicConfig(
@@ -47,16 +51,10 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_HOST     = os.environ.get("DB_HOST")
 DB_PORT     = os.environ.get("DB_PORT")
 
-# Dossier racine des modèles (peut être surchargé via env)
-MODELS_DIR = os.environ.get("MODELS_DIR", "./modeles")
-
-# Nombre de jours historiques récupérés en base
-HISTORIQUE_JOURS = 100
-
-# Nombre de jours ouvrables à prédire
+MODELS_DIR          = os.environ.get("MODELS_DIR", "./modeles")
+HISTORIQUE_JOURS    = 100
 NB_JOURS_PREDICTION = 10
 
-# Cache mémoire : évite de recharger modèle + scaler à chaque appel
 _models_cache: dict = {}
 
 
@@ -64,32 +62,30 @@ _models_cache: dict = {}
 # CALENDRIER BRVM — JOURS FÉRIÉS 2026 (Côte d'Ivoire)
 # ==============================================================================
 JOURS_FERIES = {
-    date(2026,  1,  1),   # Jour de l'An
-    date(2026,  3, 17),   # Lendemain de la nuit du destin
-    date(2026,  3, 20),   # Aïd al-Fitr
-    date(2026,  4,  6),   # Lundi de Pâques
-    date(2026,  5,  1),   # Fête du Travail
-    date(2026,  5, 14),   # Ascension
-    date(2026,  5, 27),   # Fête de la Tabaski
-    date(2026,  6, 25),   # Lundi de Pentecôte
-    date(2026,  8,  7),   # Fête Nationale
-    date(2026,  8, 15),   # Assomption
-    date(2026,  8, 26),   # Lendemain de la naissance du Prophète
-    date(2026, 11,  1),   # Toussaint
-    date(2026, 11, 15),   # Journée de la Paix
-    date(2026, 12, 25),   # Noël
+    date(2026,  1,  1),
+    date(2026,  3, 17),
+    date(2026,  3, 20),
+    date(2026,  4,  6),
+    date(2026,  5,  1),
+    date(2026,  5, 14),
+    date(2026,  5, 27),
+    date(2026,  6, 25),
+    date(2026,  8,  7),
+    date(2026,  8, 15),
+    date(2026,  8, 26),
+    date(2026, 11,  1),
+    date(2026, 11, 15),
+    date(2026, 12, 25),
 }
 
 
 def est_jour_ouvrable(d: date) -> bool:
-    """True si le jour est ouvrable pour la BRVM (lun-ven, hors fériés)."""
     if isinstance(d, datetime):
         d = d.date()
     return d.weekday() <= 4 and d not in JOURS_FERIES
 
 
 def prochains_jours_ouvrables(last_date: date, num_days: int = 10) -> list:
-    """Retourne les `num_days` prochains jours ouvrables après `last_date`."""
     if isinstance(last_date, datetime):
         last_date = last_date.date()
     result, current = [], last_date + timedelta(days=1)
@@ -107,283 +103,190 @@ MODELS_PARAMS = {
     "ABJC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.3029,  "r2_test": 0.9702,
-               "mae_test": 56.7898,  "rmse_test": 82.8963,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BICB":  {"best_model": "GRU",   "look_back": 40, "log_transform": False,
                "units": 128, "dropout": 0.3, "lr": 0.001,
                "mape_test": 0.5486,  "r2_test": 0.026,
-               "mae_test": 27.2097,  "rmse_test": 31.9756,
                "mape_ok": True,  "r2_ok": False, "source": "advanced"},
-
     "BICC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.228,   "r2_test": 0.9604,
-               "mae_test": 223.7151, "rmse_test": 311.1981,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BNBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.6073,  "r2_test": 0.8689,
-               "mae_test": 58.0034,  "rmse_test": 76.1172,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BOAB":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.2835,  "r2_test": 0.9786,
-               "mae_test": 72.6666,  "rmse_test": 108.6415,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BOABF": {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.4895,  "r2_test": 0.9334,
-               "mae_test": 59.4871,  "rmse_test": 85.423,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BOAC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.2125,  "r2_test": 0.8286,
-               "mae_test": 86.9316,  "rmse_test": 116.6847,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "BOAM":  {"best_model": "GRU",   "look_back": 60, "log_transform": False,
                "units": 128, "dropout": 0.3, "lr": 0.001,
                "mape_test": 1.2732,  "r2_test": 0.919,
-               "mae_test": 50.7325,  "rmse_test": 75.7902,
                "mape_ok": True,  "r2_ok": True,  "source": "advanced"},
-
     "BOAN":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 0.9249,  "r2_test": 0.4895,
-               "mae_test": 23.9206,  "rmse_test": 37.3064,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "BOAS":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.2579,  "r2_test": 0.9136,
-               "mae_test": 68.7593,  "rmse_test": 93.3971,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "CABC":  {"best_model": "LSTM",  "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.297,   "r2_test": 0.9698,
-               "mae_test": 74.8147,  "rmse_test": 112.3374,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "CBIBF": {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 0.8918,  "r2_test": 0.9489,
-               "mae_test": 97.5603,  "rmse_test": 182.6674,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "CFAC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 4.9873,  "r2_test": 0.9171,
-               "mae_test": 74.9188,  "rmse_test": 104.0824,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "CIEC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.2747,  "r2_test": 0.9283,
-               "mae_test": 31.3877,  "rmse_test": 41.8254,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "ECOC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.6051,  "r2_test": 0.9663,
-               "mae_test": 242.3242, "rmse_test": 322.4865,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "ETIT":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.8994,  "r2_test": 0.9016,
-               "mae_test": 0.6444,   "rmse_test": 0.8767,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "FTSC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.3064,  "r2_test": 0.97,
-               "mae_test": 85.1475,  "rmse_test": 172.66,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "LNBB":  {"best_model": "BiGRU", "look_back": 60, "log_transform": False,
                "units": 64,  "dropout": 0.3, "lr": 0.001,
                "mape_test": 0.8472,  "r2_test": 0.808,
-               "mae_test": 34.0482,  "rmse_test": 44.0087,
                "mape_ok": True,  "r2_ok": True,  "source": "advanced"},
-
     "NEIC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.304,   "r2_test": 0.9577,
-               "mae_test": 32.305,   "rmse_test": 45.6816,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "NSBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.1638,  "r2_test": 0.9502,
-               "mae_test": 134.0294, "rmse_test": 198.8487,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "NTLC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.2438,  "r2_test": 0.7337,
-               "mae_test": 263.3087, "rmse_test": 505.3043,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "ONTBF": {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.3025,  "r2_test": 0.8338,
-               "mae_test": 32.1992,  "rmse_test": 46.0577,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "ORAC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.1112,  "r2_test": 0.6873,
-               "mae_test": 163.1519, "rmse_test": 217.7093,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "ORGT":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.0779,  "r2_test": 0.9122,
-               "mae_test": 72.8122,  "rmse_test": 97.3733,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "PALC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.7197,  "r2_test": 0.8472,
-               "mae_test": 143.8505, "rmse_test": 226.2105,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "PRSC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.5991,  "r2_test": 0.9415,
-               "mae_test": 92.9484,  "rmse_test": 150.4904,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SAFC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 6.389,   "r2_test": 0.9407,
-               "mae_test": 188.2064, "rmse_test": 229.7859,
                "mape_ok": False, "r2_ok": True,  "source": "base"},
-
     "SCRC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.2593,  "r2_test": 0.908,
-               "mae_test": 27.2752,  "rmse_test": 38.1161,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SDCC":  {"best_model": "BiGRU", "look_back": 60, "log_transform": False,
                "units": 128, "dropout": 0.2, "lr": 0.001,
                "mape_test": 0.894,   "r2_test": 0.7271,
-               "mae_test": 54.2668,  "rmse_test": 83.0719,
                "mape_ok": True,  "r2_ok": False, "source": "advanced"},
-
     "SDSC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.6092,  "r2_test": 0.8197,
-               "mae_test": 24.6265,  "rmse_test": 35.4773,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SEMC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.0298,  "r2_test": 0.9278,
-               "mae_test": 48.9581,  "rmse_test": 122.1576,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SGBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.4225,  "r2_test": 0.864,
-               "mae_test": 401.0225, "rmse_test": 545.7458,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SHEC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.5238,  "r2_test": 0.9357,
-               "mae_test": 35.9683,  "rmse_test": 48.6736,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SIBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.3876,  "r2_test": 0.9345,
-               "mae_test": 80.5968,  "rmse_test": 109.4666,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SICC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.6798,  "r2_test": 0.6157,
-               "mae_test": 96.6064,  "rmse_test": 136.6697,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "SIVC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 5.8402,  "r2_test": 0.9471,
-               "mae_test": 82.4994,  "rmse_test": 137.8727,
                "mape_ok": False, "r2_ok": True,  "source": "base"},
-
     "SLBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 2.1569,  "r2_test": 0.9713,
-               "mae_test": 516.3673, "rmse_test": 803.0428,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SMBC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.6586,  "r2_test": 0.8521,
-               "mae_test": 166.7241, "rmse_test": 233.2252,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SNTS":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 0.8219,  "r2_test": 0.7655,
-               "mae_test": 213.7565, "rmse_test": 317.6393,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "SOGC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.3089,  "r2_test": 0.8368,
-               "mae_test": 104.4954, "rmse_test": 159.1333,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "SPHC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.5344,  "r2_test": 0.8196,
-               "mae_test": 117.3221, "rmse_test": 175.6748,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "STAC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 3.9611,  "r2_test": 0.9398,
-               "mae_test": 45.6627,  "rmse_test": 58.9501,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
-
     "STBC":  {"best_model": "BiGRU", "look_back": 60, "log_transform": False,
                "units": 128, "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.4802,  "r2_test": 0.6015,
-               "mae_test": 290.9748, "rmse_test": 470.6074,
                "mape_ok": True,  "r2_ok": False, "source": "advanced"},
-
     "TTLC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 1.0205,  "r2_test": 0.6746,
-               "mae_test": 24.4032,  "rmse_test": 38.4843,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "TTLS":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 0.9356,  "r2_test": 0.7746,
-               "mae_test": 23.7037,  "rmse_test": 33.6514,
                "mape_ok": True,  "r2_ok": False, "source": "base"},
-
     "UNLC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 5.7498,  "r2_test": 0.9566,
-               "mae_test": 2139.2477,"rmse_test": 2978.6427,
                "mape_ok": False, "r2_ok": True,  "source": "base"},
-
     "UNXC":  {"best_model": "GRU",   "look_back": 20, "log_transform": False,
                "units": 64,  "dropout": 0.2, "lr": 0.001,
                "mape_test": 4.6783,  "r2_test": 0.9245,
-               "mae_test": 65.961,   "rmse_test": 92.9702,
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
 }
 
@@ -393,27 +296,17 @@ MODELS_PARAMS = {
 # ==============================================================================
 
 def _resolve_paths(symbol: str):
-    """
-    Retourne (keras_path, scaler_path) selon la convention de nommage réelle :
-
-      source == "base"     → model_*.keras (sans _advanced) + scaler.pkl
-      source == "advanced" → model_*_advanced.keras          + scaler_advanced.pkl
-
-    Retourne (None, None) si un fichier est introuvable.
-    """
     action_dir = os.path.join(MODELS_DIR, symbol)
-
     if not os.path.isdir(action_dir):
         logging.warning(f"⚠️  {symbol} : dossier absent ({action_dir})")
         return None, None
 
     source    = MODELS_PARAMS.get(symbol, {}).get("source", "base")
     all_files = os.listdir(action_dir)
-
-    # ---- Sélection du fichier .keras ----
     keras_files = [f for f in all_files if f.endswith(".keras")]
+
     if not keras_files:
-        logging.warning(f"⚠️  {symbol} : aucun fichier .keras dans {action_dir}")
+        logging.warning(f"⚠️  {symbol} : aucun .keras dans {action_dir}")
         return None, None
 
     if source == "advanced":
@@ -421,11 +314,8 @@ def _resolve_paths(symbol: str):
     else:
         candidates = [f for f in keras_files if "_advanced" not in f]
 
-    # Fallback : prendre le premier .keras disponible si le candidat idéal manque
-    keras_file = sorted(candidates)[0] if candidates else sorted(keras_files)[0]
-    keras_path = os.path.join(action_dir, keras_file)
-
-    # ---- Sélection du fichier scaler ----
+    keras_file  = sorted(candidates)[0] if candidates else sorted(keras_files)[0]
+    keras_path  = os.path.join(action_dir, keras_file)
     scaler_name = "scaler_advanced.pkl" if source == "advanced" else "scaler.pkl"
     scaler_path = os.path.join(action_dir, scaler_name)
 
@@ -437,11 +327,149 @@ def _resolve_paths(symbol: str):
 
 
 # ==============================================================================
+# CHARGEMENT KERAS 3 → TF2 : CŒUR DE LA CORRECTION V16.0
+# ==============================================================================
+
+def _build_model_from_config(config: dict) -> tf.keras.Model:
+    """
+    Reconstruit un modèle TF2/Keras 2 depuis un config.json Keras 3.
+    Gère : Sequential GRU, Sequential LSTM, Sequential BiGRU.
+    """
+    layers_cfg = config["config"]["layers"]
+
+    # Détecter le type global
+    layer_names = [l["class_name"] for l in layers_cfg]
+    has_bidir   = "Bidirectional" in layer_names
+    has_lstm    = "LSTM" in layer_names
+
+    # Extraire input_shape depuis la première couche (InputLayer)
+    input_cfg   = layers_cfg[0]["config"]
+    batch_shape = input_cfg["batch_shape"]   # [None, look_back, 1]
+    look_back   = batch_shape[1]
+
+    model = Sequential()
+    model.add(Input(shape=(look_back, 1)))
+
+    if has_bidir:
+        # BiGRU — lire les vraies configs depuis le JSON
+        for l in layers_cfg[1:]:
+            cls = l["class_name"]
+            cfg = l["config"]
+            if cls == "Bidirectional":
+                inner_cfg = cfg["layer"]["config"]
+                inner_units = inner_cfg["units"]
+                return_seq   = inner_cfg["return_sequences"]
+                model.add(Bidirectional(GRU(inner_units,
+                                            return_sequences=return_seq)))
+            elif cls == "Dropout":
+                model.add(Dropout(cfg["rate"]))
+            elif cls == "Dense":
+                model.add(Dense(cfg["units"],
+                                activation=cfg.get("activation", "linear")))
+    elif has_lstm:
+        # LSTM
+        for l in layers_cfg[1:]:
+            cls = l["class_name"]
+            cfg = l["config"]
+            if cls == "LSTM":
+                model.add(LSTM(cfg["units"],
+                               return_sequences=cfg["return_sequences"]))
+            elif cls == "Dropout":
+                model.add(Dropout(cfg["rate"]))
+            elif cls == "Dense":
+                model.add(Dense(cfg["units"],
+                                activation=cfg.get("activation", "linear")))
+    else:
+        # GRU standard ou advanced
+        for l in layers_cfg[1:]:
+            cls = l["class_name"]
+            cfg = l["config"]
+            if cls == "GRU":
+                model.add(GRU(cfg["units"],
+                              return_sequences=cfg["return_sequences"]))
+            elif cls == "Dropout":
+                model.add(Dropout(cfg["rate"]))
+            elif cls == "Dense":
+                model.add(Dense(cfg["units"],
+                                activation=cfg.get("activation", "linear")))
+
+    model.compile(optimizer=Adam(learning_rate=1e-3), loss="mse")
+    return model
+
+
+def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
+    """
+    Charge un fichier .keras (format Keras 3 ZIP) dans TF2.
+
+    Étapes :
+      1. Ouvre le ZIP
+      2. Lit config.json → reconstruit l'architecture avec _build_model_from_config
+      3. Extrait model.weights.h5 dans un dossier temporaire
+      4. Charge les poids via model.load_weights (format H5 Keras 3)
+         Si ça échoue, tente by_name=True puis un chargement manuel couche par couche.
+    """
+    try:
+        if not zipfile.is_zipfile(keras_path):
+            logging.error(f"❌ {symbol} : {os.path.basename(keras_path)} n'est pas un ZIP Keras 3")
+            return None
+
+        with zipfile.ZipFile(keras_path, "r") as zf:
+            config  = json.loads(zf.read("config.json"))
+            names   = zf.namelist()
+
+            # Extraire model.weights.h5 dans un dossier temp
+            with tempfile.TemporaryDirectory() as tmp:
+                if "model.weights.h5" not in names:
+                    logging.error(f"❌ {symbol} : model.weights.h5 absent dans le ZIP")
+                    return None
+                zf.extract("model.weights.h5", tmp)
+                weights_path = os.path.join(tmp, "model.weights.h5")
+
+                model = _build_model_from_config(config)
+                logging.info(f"   ✓ {symbol} : architecture reconstruite ({model.count_params()} params)")
+
+                # Tentative 1 : load_weights standard
+                try:
+                    model.load_weights(weights_path)
+                    logging.info(f"   ✓ {symbol} : poids chargés (standard)")
+                    return model
+                except Exception as e1:
+                    logging.warning(f"   ↳ load_weights standard échoué : {str(e1)[:100]}")
+
+                # Tentative 2 : by_name=True
+                try:
+                    model.load_weights(weights_path, by_name=True)
+                    logging.info(f"   ✓ {symbol} : poids chargés (by_name=True)")
+                    return model
+                except Exception as e2:
+                    logging.warning(f"   ↳ load_weights by_name échoué : {str(e2)[:100]}")
+
+                # Tentative 3 : lecture directe H5 couche par couche
+                try:
+                    import h5py
+                    with h5py.File(weights_path, "r") as hf:
+                        for layer in model.layers:
+                            if layer.name in hf:
+                                grp = hf[layer.name]
+                                w_list = [grp[k][()] for k in grp.keys()]
+                                if w_list:
+                                    layer.set_weights(w_list)
+                    logging.info(f"   ✓ {symbol} : poids chargés (h5py couche par couche)")
+                    return model
+                except Exception as e3:
+                    logging.error(f"   ↳ h5py couche par couche échoué : {str(e3)[:100]}")
+
+    except Exception as e:
+        logging.error(f"❌ {symbol} : erreur load_keras3_model — {e}")
+
+    return None
+
+
+# ==============================================================================
 # CONNEXION BASE DE DONNÉES
 # ==============================================================================
 
 def connect_to_db():
-    """Connexion à la base PostgreSQL. Retourne la connexion ou None."""
     try:
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
@@ -455,14 +483,11 @@ def connect_to_db():
 
 
 # ==============================================================================
-# CHARGEMENT DU MODÈLE ET DU SCALER
+# CHARGEMENT DU MODÈLE ET DU SCALER (avec cache)
 # ==============================================================================
 
 def load_action_model(symbol: str):
-    """
-    Charge (model, scaler) depuis le cache ou depuis le disque.
-    Retourne (None, None) en cas d'échec.
-    """
+    """Retourne (model, scaler) depuis le cache ou le disque."""
     if symbol in _models_cache:
         return _models_cache[symbol]
 
@@ -472,57 +497,11 @@ def load_action_model(symbol: str):
 
     logging.info(f"📥 {symbol} : chargement de {os.path.basename(keras_path)}")
 
-    model = None
-
-    # Tentative 1 — safe_mode=True (compatibilité maximale inter-versions)
-    try:
-        model = load_model(keras_path, compile=False, safe_mode=True)
-        logging.info(f"   ✓ {symbol} : safe_mode=True")
-    except Exception as e:
-        logging.warning(f"   ↳ safe_mode=True échoué : {str(e)[:80]}")
-
-    # Tentative 2 — mode standard
+    model = load_keras3_model(keras_path, symbol)
     if model is None:
-        try:
-            model = load_model(keras_path, compile=False)
-            logging.info(f"   ✓ {symbol} : mode standard")
-        except Exception as e:
-            logging.warning(f"   ↳ mode standard échoué : {str(e)[:80]}")
-
-    # Tentative 3 — custom_objects vide
-    if model is None:
-        try:
-            model = load_model(keras_path, compile=False, custom_objects={})
-            logging.info(f"   ✓ {symbol} : custom_objects={{}}")
-        except Exception as e:
-            logging.warning(f"   ↳ custom_objects échoué : {str(e)[:80]}")
-
-    # Tentative 4 — reconstruction manuelle depuis H5
-    if model is None:
-        try:
-            import json
-            import h5py
-            from tensorflow.keras.models import model_from_json
-            with h5py.File(keras_path, "r") as f:
-                if "model_config" in f.attrs:
-                    config = json.loads(f.attrs["model_config"])
-                    model = model_from_json(json.dumps(config))
-                    model.load_weights(keras_path)
-                    logging.info(f"   ✓ {symbol} : reconstruction H5")
-        except Exception as e:
-            logging.error(f"   ↳ reconstruction H5 échouée : {e}")
-
-    if model is None:
-        logging.error(f"❌ {symbol} : modèle non chargeable après 4 tentatives")
+        logging.error(f"❌ {symbol} : modèle non chargeable")
         return None, None
 
-    # Compilation (non bloquante)
-    try:
-        model.compile(optimizer=Adam(learning_rate=1e-3), loss="mean_squared_error")
-    except Exception as e:
-        logging.warning(f"   ↳ compilation échouée (non bloquant) : {e}")
-
-    # Chargement du scaler
     try:
         scaler = joblib.load(scaler_path)
         logging.info(f"   ✓ {symbol} : scaler chargé ({os.path.basename(scaler_path)})")
@@ -542,15 +521,10 @@ def load_action_model(symbol: str):
 
 
 # ==============================================================================
-# PRÉDICTION DES NB_JOURS_PREDICTION PROCHAINS JOURS OUVRABLES
+# PRÉDICTION DES NB_JOURS_PREDICTION JOURS OUVRABLES SUIVANTS
 # ==============================================================================
 
 def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
-    """
-    Génère les prédictions pour les NB_JOURS_PREDICTION jours ouvrables suivants.
-
-    Retourne un dict ou None en cas d'échec.
-    """
     params = MODELS_PARAMS.get(symbol)
     if not params:
         logging.error(f"❌ {symbol} : introuvable dans MODELS_PARAMS")
@@ -565,16 +539,14 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 
     arr = np.array(prices.values, dtype=float)
     if len(arr) < look_back:
-        logging.error(f"❌ {symbol} : {len(arr)} jours disponibles < look_back={look_back}")
+        logging.error(f"❌ {symbol} : {len(arr)} jours < look_back={look_back}")
         return None
 
-    # Dernière date et cours connus
     last_price = float(arr[-1])
     raw_date   = dates.iloc[-1]
     last_date  = raw_date.date() if isinstance(raw_date, datetime) else raw_date
     future_dates = prochains_jours_ouvrables(last_date, NB_JOURS_PREDICTION)
 
-    # Normalisation de la séquence d'entrée
     sequence = arr[-look_back:].copy()
     if log_transform:
         sequence = np.log1p(sequence)
@@ -582,10 +554,10 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
     try:
         seq_scaled = scaler.transform(sequence.reshape(-1, 1))
     except Exception as e:
-        logging.error(f"❌ {symbol} : normalisation scaler échouée — {e}")
+        logging.error(f"❌ {symbol} : normalisation échouée — {e}")
         return None
 
-    # Prédiction itérative (auto-régressive)
+    # Prédiction itérative auto-régressive
     current_seq  = seq_scaled.copy()
     preds_scaled = []
 
@@ -599,7 +571,6 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
         preds_scaled.append(p_val)
         current_seq = np.vstack([current_seq, [[p_val]]])
 
-    # Dénormalisation
     try:
         pred_raw = scaler.inverse_transform(
             np.array(preds_scaled).reshape(-1, 1)
@@ -610,7 +581,7 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 
     predictions = np.expm1(pred_raw) if log_transform else pred_raw
 
-    # Intervalles de confiance (volatilité réelle, marge croissante dans le temps)
+    # Intervalles de confiance basés sur la volatilité réelle
     n_recent   = min(30, len(arr) - 1)
     volatilite = (
         float(np.std(np.diff(arr[-n_recent - 1:])))
@@ -620,10 +591,9 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
     lower_bounds, upper_bounds = [], []
     for i, pred in enumerate(predictions):
         marge = volatilite * (1 + i * 0.05)
-        lower_bounds.append(float(max(0.0, pred - marge)))   # jamais négatif
+        lower_bounds.append(float(max(0.0, pred - marge)))
         upper_bounds.append(float(pred + marge))
 
-    # Niveaux de confiance par jour
     both_ok = params["mape_ok"] and params["r2_ok"]
 
     def _niveau(j_idx: int) -> str:
@@ -635,7 +605,6 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
         return "Faible"
 
     confidence_par_jour = [_niveau(i) for i in range(NB_JOURS_PREDICTION)]
-
     variation_pct = (
         ((float(predictions[-1]) - last_price) / last_price) * 100
         if last_price else 0.0
@@ -666,10 +635,6 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 # ==============================================================================
 
 def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bool:
-    """
-    Supprime les prédictions existantes et insère les nouvelles.
-    Requêtes entièrement paramétrées.
-    """
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -707,7 +672,6 @@ def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bo
 # ==============================================================================
 
 def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
-    """Récupère l'historique, génère les prédictions et les sauvegarde."""
     logging.info(f"--- {symbol} ---")
 
     if symbol not in MODELS_PARAMS:
@@ -738,14 +702,12 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
             )
             return False
 
-        # Remettre dans l'ordre chronologique (DESC → ASC)
         df = df.iloc[::-1].reset_index(drop=True)
 
         result = predire_10_jours(df["price"], df["trade_date"], symbol)
         if result is None:
             return False
 
-        # Affichage
         logging.info(
             f"📈 {symbol} | {result['model_type']} | "
             f"MAPE={result['mape_test']}% | Confiance: {result['overall_confidence']}"
@@ -773,10 +735,8 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
 # ==============================================================================
 
 def run_prediction_analysis():
-    """Lance l'analyse de prédiction pour toutes les sociétés en base."""
-
     logging.info("=" * 70)
-    logging.info("🔮 PREDICTIONS V15.1 — BRVM 47 ACTIONS")
+    logging.info("🔮 PREDICTIONS V16.0 — BRVM 47 ACTIONS (Keras 3 → TF2)")
     logging.info("=" * 70)
     logging.info(f"📁 Modèles      : {MODELS_DIR}")
     logging.info(f"📊 Historique   : {HISTORIQUE_JOURS} jours par action")
@@ -814,7 +774,6 @@ def run_prediction_analysis():
             logging.warning(f"⚠️  Sans scaler .pkl     : {', '.join(no_scaler)}")
         logging.info("")
 
-        # Traitement
         success, ignored = 0, 0
         for cid, sym in companies:
             if process_company_prediction(conn, cid, sym):
@@ -822,7 +781,6 @@ def run_prediction_analysis():
             else:
                 ignored += 1
 
-        # Résumé
         logging.info("\n" + "=" * 70)
         logging.info("✅ PRÉDICTIONS TERMINÉES")
         logging.info(f"   📈 Succès    : {success}/{len(companies)}")
@@ -836,8 +794,8 @@ def run_prediction_analysis():
         conn.close()
 
 
-# Classe wrapper pour compatibilité avec main.py
 class PredictionAnalyzer:
+    """Wrapper pour compatibilité avec main.py"""
     def run(self):
         run_prediction_analysis()
 
