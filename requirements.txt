@@ -1,13 +1,28 @@
 # ==============================================================================
-# REQUIREMENTS.TXT V33.1 - CONFLITS NUMPY RÉSOLUS
+# REQUIREMENTS.TXT V34.0 — BRVM Analysis Suite
+# Python 3.11 | GitHub Actions Ubuntu runner
+# ==============================================================================
+#
+# CHANGEMENTS V34.0 :
+#   tensorflow  : 2.12.0 → 2.15.1
+#       2.12 avait des bugs non documentés avec Python 3.11
+#       2.15.1 = dernière version TF2 "pure" avant TF 2.16 qui bundle Keras 3
+#       et casserait le chargement de nos modèles via tf.keras
+#   h5py        : AJOUTÉ (nécessaire pour charger model.weights.h5 des .keras Keras 3)
+#   joblib      : AJOUTÉ (chargement scaler.pkl, déjà installé par scikit-learn
+#                 mais déclaré explicitement pour éviter toute ambiguïté)
+#   numpy       : 1.23.5 → 1.26.4  (dernière numpy 1.x, compatible TF 2.15 + pandas 2.x)
+#   scikit-learn: 1.4.2  → 1.5.2   (compatible numpy 1.26.x)
+#   pandas      : 2.2.3  → inchangé
+#
 # ==============================================================================
 
-# --- Core Dependencies ---
+# --- Core ---
 requests==2.31.0
 beautifulsoup4==4.12.3
 lxml==5.1.0
-pandas==2.2.3  # ⬆️ Version plus récente compatible avec numpy<2
-numpy==1.23.5  # ⬇️ Version compatible avec TensorFlow 2.12.0
+numpy==1.26.4
+pandas==2.2.3
 
 # --- Database ---
 psycopg2-binary==2.9.9
@@ -29,7 +44,7 @@ pillow==10.2.0
 python-docx==1.1.0
 openpyxl==3.1.2
 
-# --- AI APIs (Multi-provider support) ---
+# --- AI APIs ---
 anthropic==0.18.1
 openai==1.12.0
 
@@ -42,10 +57,14 @@ charset-normalizer==3.3.2
 idna==3.6
 
 # --- Machine Learning ---
-scikit-learn==1.4.2  # ⬆️ Version compatible avec numpy 1.23.5
+scikit-learn==1.5.2
+joblib==1.4.2
 
-# ✅ TensorFlow 2.12.0 pour Python 3.11 - MAINTENANT COMPATIBLE
-tensorflow==2.12.0
+# --- TensorFlow / Keras ---
+# 2.15.1 = dernière version TF2 pure (avant TF 2.16 qui bundle Keras 3)
+# Compatible Python 3.11, numpy<2, h5py
+tensorflow==2.15.1
+h5py==3.11.0
 
 # --- Dependencies pour selenium-wire ---
 h11==0.14.0
@@ -56,8 +75,22 @@ kaitaistruct==0.10
 pyOpenSSL==24.0.0
 
 # ==============================================================================
-# NOTES DE CORRECTION:
-# - numpy 1.23.5 est compatible avec TensorFlow 2.12.0 (<1.24)
-# - pandas 2.2.3 accepte numpy>=1.22.4,<2
-# - scikit-learn 1.4.2 accepte numpy>=1.19.5,<2.0
+# NOTES DE COMPATIBILITÉ :
+#
+# Python 3.11
+#   tensorflow 2.15.1 ✅   numpy 1.26.4 ✅   pandas 2.2.3 ✅
+#   scikit-learn 1.5.2 ✅  h5py 3.11.0 ✅    joblib 1.4.2 ✅
+#
+# Pourquoi tensorflow==2.15.1 et pas 2.12.0 ?
+#   TF 2.12 + Python 3.11 = bugs de désérialisation InputLayer (erreur observée
+#   dans les logs). TF 2.15.1 corrige ces problèmes et reste compatible avec
+#   notre code (tf.keras = Keras 2, pas Keras 3).
+#
+# Pourquoi h5py ?
+#   Nos fichiers .keras sont au format Keras 3 (ZIP contenant model.weights.h5).
+#   prediction_analyzer.py extrait et charge ce fichier H5 via h5py en fallback.
+#
+# NE PAS passer à tensorflow>=2.16 :
+#   TF 2.16+ bundle Keras 3 comme backend par défaut, ce qui changerait
+#   le comportement de tf.keras et casserait le chargement des modèles.
 # ==============================================================================
