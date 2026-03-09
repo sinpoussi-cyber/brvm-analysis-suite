@@ -202,7 +202,7 @@ class BRVMReportGenerator:
                     fa.report_title || '|||' || 
                     fa.report_date || '|||' || 
                     fa.analysis_summary, 
-                    '###REPORT###' 
+                    E'\n\n--- RAPPORT SUIVANT ---\n\n' 
                     ORDER BY fa.report_date DESC
                 ) 
                 FROM (
@@ -226,7 +226,9 @@ class BRVMReportGenerator:
                 logging.warning("⚠️  Aucune donnée récente trouvée")
                 return pd.DataFrame()
             
+            has_fundamental = df['fundamental_summaries'].notna().sum()
             logging.info(f"   ✅ {len(df)} société(s) récupérée(s)")
+            logging.info(f"   📊 {has_fundamental}/{len(df)} ont des analyses fondamentales")
             return df
             
         except Exception as e:
@@ -388,12 +390,48 @@ class BRVMReportGenerator:
             return None, None
 
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
-        """Génération analyse professionnelle avec rotation Multi-AI"""
+        """
+        Génération analyse professionnelle avec rotation Multi-AI.
+        ✅ V30: instruction fondamentale dynamique + vérification post-génération
+        """
         
         if attempt > 1:
             logging.info(f"    🔄 {symbol}: Tentative {attempt}/{max_attempts}")
         
-        prompt = f"""Tu es un analyste financier professionnel. Analyse l'action {symbol} et génère un rapport structuré en 4 parties.
+        # ── Préparer l'instruction fondamentale selon la disponibilité des données ──
+        fundamental_text = data_dict.get('fundamental_analyses', '')
+        has_fundamental = (
+            fundamental_text
+            and fundamental_text.strip()
+            and "Aucun rapport" not in fundamental_text
+        )
+        
+        if has_fundamental:
+            nb_rapports = fundamental_text.count('--- RAPPORT SUIVANT ---') + 1
+            preview = fundamental_text[:300].replace('\n', ' ') + "..."
+            logging.info(f"    📊 {symbol}: {len(fundamental_text)} caractères d'analyses fondamentales ({nb_rapports} rapport(s))")
+            logging.info(f"    📋 Extrait: {preview}")
+            
+            instruction_fondamentale = f"""
+⚠️ INSTRUCTION IMPÉRATIVE — ANALYSES FONDAMENTALES DISPONIBLES:
+{len(fundamental_text)} caractères de données financières officielles sont fournis ci-dessous ({nb_rapports} rapport(s)).
+
+TU DOIS OBLIGATOIREMENT:
+1. UTILISER CES DONNÉES dans la Partie 3 — c'est une instruction ABSOLUE, non optionnelle
+2. Mentionner explicitement la date de CHAQUE rapport utilisé
+3. Citer les chiffres clés: chiffre d'affaires, résultat net, dividendes, ratios
+4. Si plusieurs rapports, montrer l'évolution temporelle des indicateurs
+5. NE JAMAIS écrire que les données sont absentes ou indisponibles — elles sont là
+6. Si les rapports datent d'avant 2025, précise-le mais analyse-les quand même"""
+        else:
+            logging.warning(f"    ⚠️ {symbol}: Aucune analyse fondamentale en base")
+            instruction_fondamentale = """
+ℹ️ ABSENCE DE DONNÉES FONDAMENTALES:
+Aucun rapport financier n'a été trouvé en base pour cette société.
+Indique clairement cette absence dans la Partie 3 et base ta conclusion uniquement
+sur les indicateurs techniques et les prédictions."""
+        
+        prompt = f"""Tu es un analyste financier professionnel spécialisé sur le marché de la BRVM (Bourse Régionale des Valeurs Mobilières, Afrique de l'Ouest). Analyse l'action {symbol} et génère un rapport structuré en 4 parties.
 
 📊 DONNÉES DISPONIBLES:
 
@@ -407,10 +445,12 @@ class BRVMReportGenerator:
 - RSI: Valeur={data_dict.get('rsi_value', 'N/A')}, Décision={data_dict.get('rsi_decision', 'N/A')}
 - Stochastique: %K={data_dict.get('stochastic_k', 'N/A')}, %D={data_dict.get('stochastic_d', 'N/A')}, Décision={data_dict.get('stochastic_decision', 'N/A')}
 
-**Analyses fondamentales (rapports financiers):**
-{data_dict.get('fundamental_analyses', 'Aucune analyse fondamentale disponible')}
+**ANALYSES FONDAMENTALES DISPONIBLES (RAPPORTS FINANCIERS OFFICIELS):**
+{fundamental_text if has_fundamental else "Aucun rapport financier enregistré en base pour cette société."}
 
-**Prédictions:**
+{instruction_fondamentale}
+
+**Prédictions IA (10 prochains jours ouvrables):**
 {data_dict.get('predictions_text', 'Aucune prédiction disponible')}
 
 ═══════════════════════════════════════════════════════════════
@@ -429,28 +469,27 @@ Rédige un paragraphe de 5-7 lignes analysant:
 **PARTIE 2 : ANALYSE TECHNIQUE DÉTAILLÉE**
 
 Pour CHAQUE indicateur, rédige un paragraphe de 2-3 lignes:
-- **Moyennes Mobiles**: Interprète les valeurs MM20 et MM50, leur position relative au cours actuel, et justifie la décision
-- **Bandes de Bollinger**: Explique la position du cours par rapport aux bornes, la volatilité, et justifie la décision
-- **MACD**: Analyse la divergence MACD-Signal, le momentum, et justifie la décision
-- **RSI**: Interprète la valeur (suracheté >70, survente <30, neutre 30-70) et justifie la décision
-- **Stochastique**: Analyse %K et %D, leur croisement éventuel, et justifie la décision
+- **Moyennes Mobiles**: Interprète MM20 et MM50, leur position relative au cours actuel, justifie la décision
+- **Bandes de Bollinger**: Explique la position du cours par rapport aux bornes, la volatilité, justifie la décision
+- **MACD**: Analyse la divergence MACD-Signal, le momentum, justifie la décision
+- **RSI**: Interprète la valeur (suracheté >70, survente <30, neutre 30-70), justifie la décision
+- **Stochastique**: Analyse %K et %D, leur croisement éventuel, justifie la décision
 
 Puis rédige une **conclusion technique** de 3-4 lignes synthétisant tous les indicateurs.
 
-**PARTIE 3 : ANALYSE FONDAMENTALE**
+**PARTIE 3 : ANALYSE FONDAMENTALE (SECTION CRITIQUE)**
 
-Rédige un paragraphe de 6-8 lignes analysant:
-- Les derniers résultats financiers (CA, résultat net, dividendes)
-- L'évolution par rapport aux périodes précédentes
-- Les perspectives et projets mentionnés
-- La solidité financière globale
-- La recommandation fondamentale (acheter/conserver/vendre) BASÉE UNIQUEMENT sur les fondamentaux
-- IMPORTANT: Utilise TOUTES les données fondamentales disponibles, même anciennes. Mentionne explicitement la date des rapports utilisés et précise si les données datent de plusieurs années
+Rédige un paragraphe détaillé de 8-10 lignes:
+- UTILISE OBLIGATOIREMENT les analyses fondamentales fournies ci-dessus si elles existent
+- Pour CHAQUE rapport disponible, mentionne sa date et résume ses points clés (CA, résultat net, dividendes)
+- Si plusieurs rapports, montre l'évolution temporelle des chiffres
+- Donne une recommandation fondamentale basée sur CES données
+- NE DIS PAS que les données sont absentes si elles sont fournies ci-dessus
 
 **PARTIE 4 : CONCLUSION D'INVESTISSEMENT**
 
 Rédige un paragraphe de 5-6 lignes:
-- Synthétise les 3 analyses précédentes
+- Synthétise les 3 analyses précédentes (cours, technique, fondamental)
 - Donne une recommandation finale claire: **ACHAT FORT**, **ACHAT**, **CONSERVER**, **VENTE**, ou **VENTE FORTE**
 - Justifie par la convergence ou divergence des signaux
 - Indique le niveau de confiance: Élevé, Moyen, ou Faible
@@ -459,33 +498,28 @@ Rédige un paragraphe de 5-6 lignes:
 
 ═══════════════════════════════════════════════════════════════
 
-IMPORTANT:
-- Rédige en français professionnel
-- Utilise des paragraphes fluides, pas de bullet points
-- Sois précis avec les chiffres
-- Reste factuel et objectif
-- Si une donnée manque, mentionne-le clairement
-- Commence chaque partie par son titre en gras"""
+RAPPELS IMPÉRATIFS:
+- Rédige en français professionnel avec des paragraphes fluides (pas de bullet points)
+- Sois précis avec les chiffres — cite les valeurs exactes des données fournies
+- Si des analyses fondamentales sont fournies, TU DOIS LES UTILISER — instruction OBLIGATOIRE
+- Mentionne TOUJOURS la date des rapports fondamentaux utilisés
+- Reste factuel et objectif"""
         
-        # ROTATION MULTI-AI: DeepSeek → Gemini → Mistral
+        # ── Rotation Multi-AI: DeepSeek → Gemini → Mistral ──────────────────────────
         analysis = None
         provider = None
         
-        # Tentative 1: DeepSeek
         logging.info(f"    🤖 {symbol}: Tentative DeepSeek...")
         analysis, provider = self._generate_analysis_with_deepseek(symbol, data_dict, prompt)
         
         if not analysis:
-            # Tentative 2: Gemini
             logging.info(f"    🤖 {symbol}: Tentative Gemini...")
             analysis, provider = self._generate_analysis_with_gemini(symbol, data_dict, prompt)
         
         if not analysis:
-            # Tentative 3: Mistral
             logging.info(f"    🤖 {symbol}: Tentative Mistral...")
             analysis, provider = self._generate_analysis_with_mistral(symbol, data_dict, prompt)
         
-        # Si toutes les API ont échoué
         if not analysis:
             if attempt < max_attempts:
                 logging.warning(f"    ⚠️  {symbol}: Toutes API échouées, retry {attempt+1}/{max_attempts}")
@@ -494,6 +528,10 @@ IMPORTANT:
             else:
                 logging.error(f"    ❌ {symbol}: Échec définitif après {max_attempts} tentatives")
                 return self._generate_fallback_analysis(symbol, data_dict)
+        
+        # ── Vérification post-génération: l'IA a-t-elle bien utilisé les fondamentaux ──
+        if has_fundamental and "aucune donnée" in analysis.lower() and "fondamental" in analysis.lower():
+            logging.warning(f"    ⚠️ {symbol}: L'IA a potentiellement ignoré les analyses fondamentales malgré les instructions")
         
         logging.info(f"    ✅ {symbol}: Analyse générée via {provider.upper()}")
         return analysis
@@ -1680,19 +1718,29 @@ IMPORTANT:
             
             fundamental_text = ""
             if row.get('fundamental_summaries') and pd.notna(row['fundamental_summaries']):
-                reports = row['fundamental_summaries'].split('###REPORT###')
+                reports = row['fundamental_summaries'].split('\n\n--- RAPPORT SUIVANT ---\n\n')
                 fundamental_parts = []
-                for report in reports:  # tous les rapports disponibles
+                for report in reports:
                     if report.strip():
                         parts = report.split('|||')
                         if len(parts) == 3:
-                            title, date, summary = parts
-                            fundamental_parts.append(f"- {title} ({date}):\n{summary}")
+                            title, report_date_str, summary = parts
+                            # Marquer les rapports post-2025 comme prioritaires
+                            try:
+                                report_year = int(str(report_date_str).strip()[:4])
+                                date_label = f"{report_date_str} ⭐ RÉCENT" if report_year >= 2025 else str(report_date_str)
+                            except Exception:
+                                date_label = str(report_date_str)
+                            fundamental_parts.append(f"--- RAPPORT: {title} ({date_label}) ---\n{summary}")
+                        else:
+                            # Fallback si le format n'est pas exact
+                            fundamental_parts.append(report.strip())
                 
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
                     logging.info(f"   📄 {symbol}: {len(fundamental_parts)} rapport(s) fondamental/aux disponible(s)")
-            
+                    logging.info(f"   📊 {symbol}: {len(fundamental_text)} caractères d'analyses fondamentales")
+
             data_dict = {
                 'price': row.get('price'),
                 'volume': row.get('volume'),
@@ -1711,7 +1759,7 @@ IMPORTANT:
                 'stochastic_k': row.get('stochastic_k'),
                 'stochastic_d': row.get('stochastic_d'),
                 'stochastic_decision': row.get('stochastic_decision'),
-                'fundamental_analyses': fundamental_text if fundamental_text else "Aucun rapport financier disponible dans la base de données pour cette société.",
+                'fundamental_analyses': fundamental_text if fundamental_text else "Aucun rapport financier enregistré en base pour cette société.",
                 'predictions': []
             }
             
