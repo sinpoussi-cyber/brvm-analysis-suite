@@ -155,13 +155,26 @@ class BRVMReportGenerator:
             return pd.DataFrame()
 
     def _get_all_data_from_db(self):
-        """Récupération optimisée des données avec NOMS des sociétés"""
-        logging.info("📂 Récupération des données (30 derniers jours)...")
+        """
+        ✅ V30.2: Récupération des données en 4 requêtes séparées + fusion Python
+        Garantit que TOUTES les analyses fondamentales remontent, indépendamment
+        de la présence de données de marché récentes.
+        """
+        logging.info("📂 Récupération des données...")
         
+        # 1. Récupérer toutes les sociétés
+        companies_query = """
+        SELECT id, symbol, name, sector
+        FROM companies
+        ORDER BY symbol;
+        """
+        companies_df = pd.read_sql(companies_query, self.db_conn)
+        logging.info(f"   ✅ {len(companies_df)} société(s) trouvée(s)")
+        
+        # 2. Récupérer les dernières données historiques (30 derniers jours)
         date_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        
-        query = f"""
-        WITH recent_data AS (
+        hist_query = f"""
+        WITH ranked_data AS (
             SELECT 
                 company_id,
                 id as historical_data_id,
@@ -171,69 +184,165 @@ class BRVMReportGenerator:
                 ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY trade_date DESC) as rn
             FROM historical_data
             WHERE trade_date >= '{date_limite}'
-        ),
-        latest_per_company AS (
-            SELECT * FROM recent_data WHERE rn = 1
         )
-        SELECT
-            c.id as company_id,
-            c.symbol, 
-            c.name as company_name,
-            c.sector,
-            lpc.trade_date, 
-            lpc.price,
-            lpc.volume,
-            ta.mm20,
-            ta.mm50,
-            ta.mm_decision,
-            ta.bollinger_superior,
-            ta.bollinger_inferior,
-            ta.bollinger_decision,
-            ta.macd_line,
-            ta.signal_line,
-            ta.macd_decision,
-            ta.rsi,
-            ta.rsi_decision,
-            ta.stochastic_k,
-            ta.stochastic_d,
-            ta.stochastic_decision,
-            (
-                SELECT STRING_AGG(
-                    fa.report_title || '|||' || 
-                    fa.report_date || '|||' || 
-                    fa.analysis_summary, 
-                    E'\n\n--- RAPPORT SUIVANT ---\n\n' 
-                    ORDER BY fa.report_date DESC
-                ) 
-                FROM (
-                    SELECT report_title, report_date, analysis_summary, company_id
-                    FROM fundamental_analysis
-                    WHERE company_id = c.id
-                    ORDER BY report_date DESC
-                    LIMIT 10
-                ) fa
-            ) as fundamental_summaries
-        FROM companies c
-        LEFT JOIN latest_per_company lpc ON c.id = lpc.company_id
-        LEFT JOIN technical_analysis ta ON lpc.historical_data_id = ta.historical_data_id
-        ORDER BY c.symbol;
+        SELECT 
+            company_id,
+            historical_data_id,
+            trade_date,
+            price,
+            volume
+        FROM ranked_data
+        WHERE rn = 1;
         """
+        hist_df = pd.read_sql(hist_query, self.db_conn)
+        logging.info(f"   ✅ {len(hist_df)} société(s) avec données historiques récentes")
         
-        try:
-            df = pd.read_sql(query, self.db_conn)
+        # 3. Récupérer les analyses techniques
+        tech_query = """
+        SELECT 
+            historical_data_id,
+            mm20, mm50, mm_decision,
+            bollinger_superior, bollinger_inferior, bollinger_decision,
+            macd_line, signal_line, macd_decision,
+            rsi, rsi_decision,
+            stochastic_k, stochastic_d, stochastic_decision
+        FROM technical_analysis;
+        """
+        tech_df = pd.read_sql(tech_query, self.db_conn)
+        logging.info(f"   ✅ {len(tech_df)} enregistrements techniques")
+        
+        # 4. ✅ Récupérer TOUTES les analyses fondamentales (sans filtre de date)
+        fund_query = """
+        SELECT 
+            company_id,
+            report_title,
+            report_date,
+            analysis_summary
+        FROM fundamental_analysis
+        WHERE analysis_summary IS NOT NULL
+          AND analysis_summary <> ''
+        ORDER BY company_id, report_date DESC NULLS LAST;
+        """
+        fund_df = pd.read_sql(fund_query, self.db_conn)
+        logging.info(f"   ✅ {len(fund_df)} analyses fondamentales trouvées au total")
+        
+        if not fund_df.empty:
+            fund_counts = fund_df.groupby('company_id').size().to_dict()
+            companies_with_fund = len(fund_counts)
+            logging.info(f"   📊 {companies_with_fund} société(s) ont des analyses fondamentales")
+            for cid, count in fund_counts.items():
+                sym = companies_df[companies_df['id'] == cid]['symbol'].values
+                if len(sym) > 0:
+                    logging.info(f"      - {sym[0]}: {count} analyse(s)")
+        
+        # ── Fusion Python ─────────────────────────────────────────────────────────
+        result_rows = []
+        
+        for _, company in companies_df.iterrows():
+            company_id   = company['id']
+            symbol       = company['symbol']
+            company_name = company['name']
+            sector       = company['sector']
             
-            if df.empty:
-                logging.warning("⚠️  Aucune donnée récente trouvée")
-                return pd.DataFrame()
+            # Données historiques
+            hist_data = hist_df[hist_df['company_id'] == company_id]
+            if not hist_data.empty:
+                hist_row          = hist_data.iloc[0]
+                historical_data_id = hist_row['historical_data_id']
+                trade_date        = hist_row['trade_date']
+                price             = hist_row['price']
+                volume            = hist_row['volume']
+                
+                # Données techniques
+                tech_data = tech_df[tech_df['historical_data_id'] == historical_data_id]
+                if not tech_data.empty:
+                    tech_row            = tech_data.iloc[0]
+                    mm20                = tech_row['mm20']
+                    mm50                = tech_row['mm50']
+                    mm_decision         = tech_row['mm_decision']
+                    bollinger_superior  = tech_row['bollinger_superior']
+                    bollinger_inferior  = tech_row['bollinger_inferior']
+                    bollinger_decision  = tech_row['bollinger_decision']
+                    macd_line           = tech_row['macd_line']
+                    signal_line         = tech_row['signal_line']
+                    macd_decision       = tech_row['macd_decision']
+                    rsi                 = tech_row['rsi']
+                    rsi_decision        = tech_row['rsi_decision']
+                    stochastic_k        = tech_row['stochastic_k']
+                    stochastic_d        = tech_row['stochastic_d']
+                    stochastic_decision = tech_row['stochastic_decision']
+                else:
+                    mm20 = mm50 = mm_decision = None
+                    bollinger_superior = bollinger_inferior = bollinger_decision = None
+                    macd_line = signal_line = macd_decision = None
+                    rsi = rsi_decision = None
+                    stochastic_k = stochastic_d = stochastic_decision = None
+            else:
+                historical_data_id = trade_date = price = volume = None
+                mm20 = mm50 = mm_decision = None
+                bollinger_superior = bollinger_inferior = bollinger_decision = None
+                macd_line = signal_line = macd_decision = None
+                rsi = rsi_decision = None
+                stochastic_k = stochastic_d = stochastic_decision = None
             
-            has_fundamental = df['fundamental_summaries'].notna().sum()
-            logging.info(f"   ✅ {len(df)} société(s) récupérée(s)")
-            logging.info(f"   📊 {has_fundamental}/{len(df)} ont des analyses fondamentales")
-            return df
+            # ✅ Construire fundamental_summaries avec séparateurs compatibles avec le parsing existant
+            company_fund_data = fund_df[fund_df['company_id'] == company_id]
+            fundamental_summaries     = None
+            nb_rapports_fondamentaux  = 0
             
-        except Exception as e:
-            logging.error(f"❌ Erreur requête SQL: {e}")
-            return pd.DataFrame()
+            if not company_fund_data.empty:
+                parts_list = []
+                for _, fund_row in company_fund_data.iterrows():
+                    title   = fund_row['report_title'] or 'Sans titre'
+                    date    = fund_row['report_date']
+                    date_s  = date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') and date else 'Date inconnue'
+                    summary = fund_row['analysis_summary'] or ''
+                    if summary:
+                        parts_list.append(f"{title}###SEP_FIELD###{date_s}###SEP_FIELD###{summary}")
+                
+                if parts_list:
+                    fundamental_summaries    = '###SEP_REPORT###'.join(parts_list)
+                    nb_rapports_fondamentaux = len(parts_list)
+                    logging.info(f"   📄 {symbol}: {nb_rapports_fondamentaux} rapport(s) fondamental/aux chargé(s)")
+            
+            result_rows.append({
+                'company_id':              company_id,
+                'symbol':                  symbol,
+                'company_name':            company_name,
+                'sector':                  sector,
+                'trade_date':              trade_date,
+                'price':                   price,
+                'volume':                  volume,
+                'mm20':                    mm20,
+                'mm50':                    mm50,
+                'mm_decision':             mm_decision,
+                'bollinger_superior':      bollinger_superior,
+                'bollinger_inferior':      bollinger_inferior,
+                'bollinger_decision':      bollinger_decision,
+                'macd_line':               macd_line,
+                'signal_line':             signal_line,
+                'macd_decision':           macd_decision,
+                'rsi':                     rsi,
+                'rsi_decision':            rsi_decision,
+                'stochastic_k':            stochastic_k,
+                'stochastic_d':            stochastic_d,
+                'stochastic_decision':     stochastic_decision,
+                'fundamental_summaries':   fundamental_summaries,
+                'nb_rapports_fondamentaux': nb_rapports_fondamentaux,
+            })
+        
+        result_df = pd.DataFrame(result_rows)
+        
+        # Statistiques finales
+        has_fundamental = result_df['fundamental_summaries'].notna().sum()
+        logging.info(f"   ✅ Fusion terminée: {len(result_df)} société(s)")
+        logging.info(f"   📊 {has_fundamental}/{len(result_df)} ont des analyses fondamentales dans le résultat final")
+        
+        if has_fundamental > 0:
+            syms_with_fund = result_df[result_df['fundamental_summaries'].notna()]['symbol'].tolist()
+            logging.info(f"   📋 Sociétés avec analyses: {', '.join(syms_with_fund)}")
+        
+        return result_df
 
     def _get_predictions_from_db(self):
         """Récupération des prédictions"""
@@ -407,7 +516,9 @@ class BRVMReportGenerator:
         )
         
         if has_fundamental:
-            nb_rapports = fundamental_text.count('--- RAPPORT SUIVANT ---') + 1
+            nb_rapports = fundamental_text.count('--- RAPPORT:')
+            if nb_rapports == 0 and fundamental_text.strip():
+                nb_rapports = 1
             preview = fundamental_text[:300].replace('\n', ' ') + "..."
             logging.info(f"    📊 {symbol}: {len(fundamental_text)} caractères d'analyses fondamentales ({nb_rapports} rapport(s))")
             logging.info(f"    📋 Extrait: {preview}")
@@ -580,10 +691,12 @@ RAPPELS IMPÉRATIFS:
             analysis += "**Conclusion technique**: Les indicateurs sont mixtes, suggérant une position de conservation.\n\n"
         
         analysis += "**PARTIE 3 : ANALYSE FONDAMENTALE**\n\n"
-        if data_dict.get('fundamental_analyses'):
-            analysis += f"{data_dict['fundamental_analyses'][:500]}...\n\n"
+        fundamental_text = data_dict.get('fundamental_analyses', '')
+        if fundamental_text and fundamental_text.strip() and "Aucun rapport" not in fundamental_text:
+            analysis += f"{fundamental_text}\n\n"
+            analysis += "Ces analyses fondamentales, bien que pouvant dater de périodes antérieures, fournissent des indications précieuses sur la santé financière historique de l'entreprise.\n\n"
         else:
-            analysis += "Aucune analyse fondamentale récente n'est disponible pour cette société.\n\n"
+            analysis += "Aucune analyse fondamentale n'est disponible dans la base de données pour cette société.\n\n"
         
         analysis += "**PARTIE 4 : CONCLUSION D'INVESTISSEMENT**\n\n"
         
@@ -1195,7 +1308,7 @@ RAPPELS IMPÉRATIFS:
         date_run.font.size = Pt(10)
         date_run.font.italic = True
         
-        version_p = doc.add_paragraph(f"Version 29.0 - Analyses Multi-AI (DeepSeek + Gemini + Mistral)")
+        version_p = doc.add_paragraph(f"Version 30.2 - Analyses Multi-AI (DeepSeek + Gemini + Mistral)")
         version_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         version_run = version_p.runs[0]
         version_run.font.size = Pt(9)
@@ -1606,7 +1719,7 @@ RAPPELS IMPÉRATIFS:
             "7. Les matrices de convergence et de divergence sont des outils d'aide à la décision complémentaires.\n"
             "8. Ce document est strictement confidentiel et destiné à l'usage professionnel uniquement.\n"
             "9. Consultez toujours un conseiller financier agréé avant toute décision d'investissement.\n"
-            f"10. Rapport généré automatiquement - Version 29.0 Ultimate - {len(all_analyses)} sociétés analysées."
+            f"10. Rapport généré automatiquement - Version 30.2 Ultimate - {len(all_analyses)} sociétés analysées."
         )
         
         # Signature IA
@@ -1653,7 +1766,7 @@ RAPPELS IMPÉRATIFS:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport ULTIMATE complet avec toutes les analyses"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V29.0 ULTIMATE)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V30.2 ULTIMATE)")
         logging.info("🤖 Multi-AI: DeepSeek → Gemini → Mistral")
         logging.info("📊 Analyses: Sectorielles + Convergence + Liquidité + Divergences + Risque/Horizon")
         logging.info("="*80)
@@ -1717,29 +1830,45 @@ RAPPELS IMPÉRATIFS:
                 )
             
             fundamental_text = ""
-            if row.get('fundamental_summaries') and pd.notna(row['fundamental_summaries']):
-                reports = row['fundamental_summaries'].split('\n\n--- RAPPORT SUIVANT ---\n\n')
+            raw_summaries = row.get('fundamental_summaries')
+            nb_rapports_db = int(row.get('nb_rapports_fondamentaux', 0)) if pd.notna(row.get('nb_rapports_fondamentaux', None)) else 0
+            
+            if raw_summaries and pd.notna(raw_summaries) and str(raw_summaries).strip():
+                reports = str(raw_summaries).split('###SEP_REPORT###')
                 fundamental_parts = []
                 for report in reports:
-                    if report.strip():
-                        parts = report.split('|||')
-                        if len(parts) == 3:
-                            title, report_date_str, summary = parts
-                            # Marquer les rapports post-2025 comme prioritaires
-                            try:
-                                report_year = int(str(report_date_str).strip()[:4])
-                                date_label = f"{report_date_str} ⭐ RÉCENT" if report_year >= 2025 else str(report_date_str)
-                            except Exception:
-                                date_label = str(report_date_str)
-                            fundamental_parts.append(f"--- RAPPORT: {title} ({date_label}) ---\n{summary}")
-                        else:
-                            # Fallback si le format n'est pas exact
-                            fundamental_parts.append(report.strip())
+                    report = report.strip()
+                    if not report:
+                        continue
+                    parts = report.split('###SEP_FIELD###')
+                    if len(parts) >= 3:
+                        title           = parts[0].strip()
+                        report_date_str = parts[1].strip()
+                        summary         = '###SEP_FIELD###'.join(parts[2:]).strip()
+                        if not summary:
+                            continue
+                        try:
+                            report_year = int(report_date_str[:4])
+                            date_label = f"{report_date_str} ⭐ RÉCENT" if report_year >= 2025 else report_date_str
+                        except Exception:
+                            date_label = report_date_str
+                        fundamental_parts.append(
+                            f"--- RAPPORT: {title} | Date: {date_label} ---\n{summary}"
+                        )
+                    elif len(parts) == 1 and parts[0]:
+                        fundamental_parts.append(parts[0])
                 
                 if fundamental_parts:
                     fundamental_text = "\n\n".join(fundamental_parts)
-                    logging.info(f"   📄 {symbol}: {len(fundamental_parts)} rapport(s) fondamental/aux disponible(s)")
-                    logging.info(f"   📊 {symbol}: {len(fundamental_text)} caractères d'analyses fondamentales")
+                    logging.info(f"   📄 {symbol}: {len(fundamental_parts)}/{nb_rapports_db} rapport(s) parsé(s) | {len(fundamental_text)} caractères")
+                else:
+                    logging.warning(f"   ⚠️ {symbol}: fundamental_summaries présent ({nb_rapports_db} en DB) mais parsing échoué")
+                    logging.warning(f"   🔍 {symbol}: début={str(raw_summaries)[:200]}")
+            else:
+                if nb_rapports_db > 0:
+                    logging.warning(f"   ⚠️ {symbol}: {nb_rapports_db} rapport(s) en DB mais fundamental_summaries vide — vérifier la requête SQL")
+                else:
+                    logging.info(f"   ℹ️ {symbol}: Aucune analyse fondamentale en base")
 
             data_dict = {
                 'price': row.get('price'),
