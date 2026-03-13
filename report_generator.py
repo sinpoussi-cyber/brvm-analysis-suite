@@ -83,7 +83,7 @@ class BRVMReportGenerator:
             return "Données indisponibles."
 
     def _get_market_indicators(self):
-        """Récupère les derniers indicateurs du marché"""
+        """Récupère les derniers indicateurs du marché + historique 100j pour commentaire"""
         query = """
         SELECT 
             brvm_composite, 
@@ -128,6 +128,24 @@ class BRVMReportGenerator:
                     except Exception as e:
                         logging.warning(f"⚠️ Calcul variation journalière échoué: {e}")
                         indicators['composite_var_day'] = None
+                    
+                    # ✅ Historique 100 derniers jours de cotation (BRVM Composite + Capitalisation)
+                    try:
+                        query_hist = """
+                        SELECT brvm_composite, capitalisation_globale, extraction_date
+                        FROM new_market_indicators
+                        ORDER BY extraction_date DESC
+                        LIMIT 100;
+                        """
+                        df_hist = pd.read_sql(query_hist, self.db_conn)
+                        if not df_hist.empty:
+                            df_hist = df_hist.sort_values('extraction_date')
+                            indicators['history_100d'] = df_hist
+                        else:
+                            indicators['history_100d'] = None
+                    except Exception as e:
+                        logging.warning(f"⚠️ Récupération historique 100j échouée: {e}")
+                        indicators['history_100d'] = None
                     
                     return indicators
             return None
@@ -1340,22 +1358,101 @@ RAPPELS IMPÉRATIFS:
                     run.font.color.rgb = RGBColor(192, 0, 0)
                 intro.add_run(f" sur la séance. ")
             
+            # ✅ Capitalisation corrigée: valeur brute / 1e9 = milliards FCFA (ex: 160634930687590 / 1e9 = 160634.93 Mds → /1e12 = 160.63 Mds)
+            # La capitalisation en DB est en FCFA, diviser par 1e12 pour obtenir des milliards propres
             if market_indicators.get('capitalisation'):
-                intro.add_run(f"La capitalisation globale du marché atteint {market_indicators['capitalisation']/1e9:.2f} milliards FCFA.")
+                cap_raw = market_indicators['capitalisation']
+                # Déterminer l'ordre de grandeur automatiquement
+                if cap_raw > 1e12:
+                    cap_milliards = cap_raw / 1e9  # en milliards
+                    intro.add_run(f"La capitalisation globale du marché atteint {cap_milliards:,.3f} milliards FCFA.")
+                else:
+                    intro.add_run(f"La capitalisation globale du marché atteint {cap_raw/1e9:.3f} milliards FCFA.")
         else:
             intro.add_run("Les indicateurs de marché seront mis à jour prochainement.")
         
         intro.paragraph_format.space_after = Pt(12)
         doc.add_paragraph()
         
+        # ✅ Commentaire évolution BRVM Composite sur 100 derniers jours
+        if market_indicators and market_indicators.get('history_100d') is not None:
+            df_hist = market_indicators['history_100d']
+            if len(df_hist) >= 2:
+                doc.add_heading('📊 Évolution de l\'indice BRVM Composite (100 derniers jours)', level=3)
+                
+                composite_first = float(df_hist.iloc[0]['brvm_composite'])
+                composite_last = float(df_hist.iloc[-1]['brvm_composite'])
+                composite_max = float(df_hist['brvm_composite'].max())
+                composite_min = float(df_hist['brvm_composite'].min())
+                composite_evol = ((composite_last - composite_first) / composite_first * 100) if composite_first > 0 else 0
+                
+                p_composite = doc.add_paragraph()
+                p_composite.add_run("BRVM Composite — ").bold = True
+                evol_run = p_composite.add_run(
+                    f"Sur les {len(df_hist)} derniers jours de cotation, l'indice BRVM Composite a évolué de "
+                )
+                perf_run = p_composite.add_run(f"{composite_evol:+.2f}%")
+                perf_run.bold = True
+                perf_run.font.color.rgb = RGBColor(0, 128, 0) if composite_evol >= 0 else RGBColor(192, 0, 0)
+                p_composite.add_run(
+                    f", passant de {composite_first:.2f} pts à {composite_last:.2f} pts. "
+                    f"Le plus haut atteint est {composite_max:.2f} pts et le plus bas {composite_min:.2f} pts. "
+                )
+                if composite_evol > 2:
+                    p_composite.add_run("L'indice affiche une tendance haussière sur la période, témoignant d'un regain de confiance des investisseurs.")
+                elif composite_evol < -2:
+                    p_composite.add_run("L'indice accuse une tendance baissière sur la période, reflétant une pression vendeuse sur le marché.")
+                else:
+                    p_composite.add_run("L'indice évolue dans une phase de consolidation, sans tendance directrice nette sur la période.")
+                
+                # ✅ Commentaire capitalisation 100j
+                cap_vals = df_hist['capitalisation_globale'].dropna()
+                if len(cap_vals) >= 2:
+                    doc.add_paragraph()
+                    p_cap = doc.add_paragraph()
+                    p_cap.add_run("Capitalisation globale — ").bold = True
+                    cap_first = float(cap_vals.iloc[0])
+                    cap_last = float(cap_vals.iloc[-1])
+                    cap_max = float(cap_vals.max())
+                    cap_min = float(cap_vals.min())
+                    cap_evol = ((cap_last - cap_first) / cap_first * 100) if cap_first > 0 else 0
+                    # Affichage en milliards
+                    div = 1e9
+                    p_cap.add_run(
+                        f"La capitalisation boursière totale a évolué de "
+                    )
+                    cap_run = p_cap.add_run(f"{cap_evol:+.2f}%")
+                    cap_run.bold = True
+                    cap_run.font.color.rgb = RGBColor(0, 128, 0) if cap_evol >= 0 else RGBColor(192, 0, 0)
+                    p_cap.add_run(
+                        f" sur la période, passant de {cap_first/div:,.2f} Mds FCFA à {cap_last/div:,.2f} Mds FCFA. "
+                        f"Le pic de capitalisation observé sur les 100 jours est de {cap_max/div:,.2f} Mds FCFA "
+                        f"et le plancher de {cap_min/div:,.2f} Mds FCFA."
+                    )
+                
+                doc.add_paragraph()
+        
         # ========== TOP 10 ACHATS ==========
         doc.add_heading('📈 TOP 10 DES OPPORTUNITÉS D\'ACHAT', level=2)
         
+        # ✅ TOP 10 achat = uniquement ACHAT FORT (score 5) et ACHAT (score 4), triés par score décroissant
         sorted_buy = sorted(
-            [(symbol, data) for symbol, data in all_company_data.items()],
+            [(symbol, data) for symbol, data in all_company_data.items()
+             if data.get('recommendation_score', 0) >= 4],  # ACHAT ou ACHAT FORT uniquement
             key=lambda x: x[1].get('recommendation_score', 0),
             reverse=True
         )[:10]
+        
+        # Si moins de 10 ACHAT/ACHAT FORT, compléter avec CONSERVER trié par score
+        if len(sorted_buy) < 10:
+            conserver_list = sorted(
+                [(symbol, data) for symbol, data in all_company_data.items()
+                 if data.get('recommendation_score', 0) == 3
+                 and symbol not in [s for s, _ in sorted_buy]],
+                key=lambda x: x[1].get('recommendation_score', 0),
+                reverse=True
+            )
+            sorted_buy = sorted_buy + conserver_list[:10 - len(sorted_buy)]
         
         top_10_list = []
         for idx, (symbol, data) in enumerate(sorted_buy, 1):
@@ -1383,12 +1480,28 @@ RAPPELS IMPÉRATIFS:
         
         # ========== FLOP 10 VENTES ==========
         doc.add_heading('📉 TOP 10 DES ACTIONS À ÉVITER', level=2)
+        doc.add_paragraph(
+            "Ces actions présentent des signaux de vente ou de dégradation fondamentale. "
+            "Il est conseillé de les céder immédiatement ou d'éviter d'y investir."
+        )
         
-        # Tri CROISSANT pour avoir les pires scores (VENTE FORTE = 1, VENTE = 2)
+        # ✅ TOP 10 à éviter = uniquement VENTE FORTE (score 1) et VENTE (score 2), pires en premier
         sorted_sell = sorted(
-            [(symbol, data) for symbol, data in all_company_data.items()],
-            key=lambda x: x[1].get('recommendation_score', 3)  # 3 = CONSERVER par défaut
+            [(symbol, data) for symbol, data in all_company_data.items()
+             if data.get('recommendation_score', 3) <= 2],  # VENTE ou VENTE FORTE uniquement
+            key=lambda x: x[1].get('recommendation_score', 3)
         )[:10]
+        
+        # Si moins de 10 VENTE/VENTE FORTE, compléter avec les CONSERVER les plus faibles (risk_score le plus élevé)
+        if len(sorted_sell) < 10:
+            conserver_risky = sorted(
+                [(symbol, data) for symbol, data in all_company_data.items()
+                 if data.get('recommendation_score', 3) == 3
+                 and symbol not in [s for s, _ in sorted_sell]],
+                key=lambda x: x[1].get('risk_score', 0),
+                reverse=True
+            )
+            sorted_sell = sorted_sell + conserver_risky[:10 - len(sorted_sell)]
         
         flop_10_list = []
         for idx, (symbol, data) in enumerate(sorted_sell, 1):
@@ -1460,57 +1573,126 @@ RAPPELS IMPÉRATIFS:
         # ========== 2. MATRICE DE CONVERGENCE ==========
         doc.add_heading('🔄 MATRICE DE CONVERGENCE DES SIGNAUX', level=1)
         
-        convergence_matrix = self._calculate_signal_convergence_matrix(all_company_data)
-        
         doc.add_paragraph(
-            "Cette matrice identifie les sociétés présentant une convergence ou une divergence "
-            "entre les signaux techniques et fondamentaux."
+            "Cette matrice segmente les sociétés cotées selon la combinaison de leur signal technique "
+            "(majorité des 5 indicateurs) et de leur signal fondamental (recommandation finale de l'IA). "
+            "Les cellules surlignées en vert indiquent une convergence favorable, en rouge une convergence défavorable."
         )
         doc.add_paragraph()
         
-        # Convergence forte
-        doc.add_heading('✅ Convergence Forte (Technique + Fondamental = ACHAT FORT)', level=3)
-        if convergence_matrix['convergence_forte']:
-            for company in convergence_matrix['convergence_forte']:
-                doc.add_paragraph(f"• {company}", style='List Bullet')
-        else:
-            doc.add_paragraph("Aucune société dans cette catégorie.")
+        # ✅ Construction de la matrice 3x3 à partir de technical_decision × fundamental_decision
+        matrix_3x3 = {
+            ('ACHAT',  'ACHAT'):  [],
+            ('ACHAT',  'NEUTRE'): [],
+            ('ACHAT',  'VENTE'):  [],
+            ('NEUTRE', 'ACHAT'):  [],
+            ('NEUTRE', 'NEUTRE'): [],
+            ('NEUTRE', 'VENTE'):  [],
+            ('VENTE',  'ACHAT'):  [],
+            ('VENTE',  'NEUTRE'): [],
+            ('VENTE',  'VENTE'):  [],
+        }
+        
+        for symbol, data in all_company_data.items():
+            td = (data.get('technical_decision') or 'NEUTRE').upper()
+            fd = (data.get('fundamental_decision') or 'NEUTRE').upper()
+            # Normaliser
+            if 'ACHAT' in td:
+                td = 'ACHAT'
+            elif 'VENTE' in td:
+                td = 'VENTE'
+            else:
+                td = 'NEUTRE'
+            if 'ACHAT' in fd:
+                fd = 'ACHAT'
+            elif 'VENTE' in fd:
+                fd = 'VENTE'
+            else:
+                fd = 'NEUTRE'
+            key = (td, fd)
+            if key in matrix_3x3:
+                matrix_3x3[key].append(symbol)
+        
+        # Construire le tableau Word 4×4 (en-têtes inclus)
+        tbl = doc.add_table(rows=4, cols=4)
+        tbl.style = 'Table Grid'
+        
+        # Couleurs
+        GREEN_STRONG = '00B050'   # convergence achat
+        GREEN_LIGHT  = 'C6EFCE'
+        RED_STRONG   = 'FF0000'   # convergence vente
+        RED_LIGHT    = 'FFC7CE'
+        ORANGE       = 'FFEB9C'   # divergence tech/fond
+        GREY_HDR     = 'D9D9D9'
+        WHITE        = 'FFFFFF'
+        
+        def _set_cell_bg(cell, hex_color):
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:fill'), hex_color)
+            shd.set(qn('w:val'), 'clear')
+            cell._element.get_or_add_tcPr().append(shd)
+        
+        def _cell_text(cell, text, bold=False, font_size=9, color=None):
+            cell.text = ''
+            p = cell.paragraphs[0]
+            run = p.add_run(text)
+            run.bold = bold
+            run.font.size = Pt(font_size)
+            if color:
+                run.font.color.rgb = RGBColor(*color)
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after = Pt(2)
+        
+        headers_col = ['', 'Fond. ACHAT', 'Fond. NEUTRE', 'Fond. VENTE']
+        headers_row = ['Tech. ACHAT', 'Tech. NEUTRE', 'Tech. VENTE']
+        
+        # Couleurs de fond par cellule (td, fd)
+        cell_colors = {
+            ('ACHAT',  'ACHAT'):  GREEN_STRONG,
+            ('ACHAT',  'NEUTRE'): GREEN_LIGHT,
+            ('ACHAT',  'VENTE'):  ORANGE,
+            ('NEUTRE', 'ACHAT'):  GREEN_LIGHT,
+            ('NEUTRE', 'NEUTRE'): WHITE,
+            ('NEUTRE', 'VENTE'):  RED_LIGHT,
+            ('VENTE',  'ACHAT'):  ORANGE,
+            ('VENTE',  'NEUTRE'): RED_LIGHT,
+            ('VENTE',  'VENTE'):  RED_STRONG,
+        }
+        
+        # Ligne d'en-tête (ligne 0)
+        for col_idx, hdr in enumerate(headers_col):
+            cell = tbl.rows[0].cells[col_idx]
+            _set_cell_bg(cell, GREY_HDR)
+            _cell_text(cell, hdr, bold=True, font_size=9)
+        
+        # Lignes 1-3
+        tech_order = ['ACHAT', 'NEUTRE', 'VENTE']
+        fund_order = ['ACHAT', 'NEUTRE', 'VENTE']
+        
+        for row_idx, td in enumerate(tech_order):
+            row = tbl.rows[row_idx + 1]
+            # Cellule d'en-tête de ligne
+            _set_cell_bg(row.cells[0], GREY_HDR)
+            _cell_text(row.cells[0], headers_row[row_idx], bold=True, font_size=9)
+            
+            for col_idx, fd in enumerate(fund_order):
+                cell = row.cells[col_idx + 1]
+                color = cell_colors.get((td, fd), WHITE)
+                _set_cell_bg(cell, color)
+                symbols_list = matrix_3x3.get((td, fd), [])
+                content = ', '.join(symbols_list) if symbols_list else '—'
+                _cell_text(cell, content, font_size=8)
+        
         doc.add_paragraph()
         
-        # Convergence achat
-        doc.add_heading('✅ Convergence Achat (Technique + Fondamental = ACHAT)', level=3)
-        if convergence_matrix['convergence_achat']:
-            for company in convergence_matrix['convergence_achat']:
-                doc.add_paragraph(f"• {company}", style='List Bullet')
-        else:
-            doc.add_paragraph("Aucune société dans cette catégorie.")
+        # Légende
+        legend_p = doc.add_paragraph()
+        legend_p.add_run("Légende : ").bold = True
+        legend_p.add_run("🟩 Vert foncé = Double achat (signal fort) | 🟩 Vert clair = Signal partiellement haussier | "
+                         "🟧 Orange = Divergence tech/fondamental | 🟥 Rouge clair = Signal partiellement baissier | "
+                         "🟥 Rouge foncé = Double vente (éviter) | ⬜ Blanc = Neutre")
+        legend_p.paragraph_format.space_after = Pt(6)
         doc.add_paragraph()
-        
-        # Convergence vente
-        doc.add_heading('⚠️ Convergence Vente (Technique + Fondamental = VENTE)', level=3)
-        if convergence_matrix['convergence_vente']:
-            for company in convergence_matrix['convergence_vente']:
-                doc.add_paragraph(f"• {company}", style='List Bullet')
-        else:
-            doc.add_paragraph("Aucune société dans cette catégorie.")
-        doc.add_paragraph()
-        
-        # Divergence forte
-        doc.add_heading('❌ Divergence Forte (Signaux opposés)', level=3)
-        if convergence_matrix['divergence_forte']:
-            for company in convergence_matrix['divergence_forte']:
-                doc.add_paragraph(f"• {company}", style='List Bullet')
-        else:
-            doc.add_paragraph("Aucune société dans cette catégorie.")
-        doc.add_paragraph()
-        
-        # Divergence modérée
-        doc.add_heading('⚡ Divergence Modérée', level=3)
-        if convergence_matrix['divergence_moderee']:
-            for company in convergence_matrix['divergence_moderee']:
-                doc.add_paragraph(f"• {company}", style='List Bullet')
-        else:
-            doc.add_paragraph("Aucune société dans cette catégorie.")
         
         doc.add_page_break()
         
@@ -1686,6 +1868,42 @@ RAPPELS IMPÉRATIFS:
             company_heading_run.font.color.rgb = RGBColor(0, 102, 204)
             
             doc.add_paragraph("─" * 80)
+            
+            # ✅ Tableau des métriques de risque (risk_details)
+            risk_details_raw = company_data.get('risk_details', '{}')
+            try:
+                risk_details = json.loads(risk_details_raw) if isinstance(risk_details_raw, str) else risk_details_raw
+            except Exception:
+                risk_details = {}
+            
+            if risk_details:
+                risk_label_map = {
+                    'volatilite': 'Volatilité',
+                    'beta': 'Bêta',
+                    'liquidite': 'Liquidité',
+                    'divergence': 'Divergence signaux',
+                    'stabilite': 'Stabilité des rendements'
+                }
+                risk_tbl = doc.add_table(rows=1, cols=len(risk_details))
+                risk_tbl.style = 'Light Grid Accent 1'
+                hdr_row = risk_tbl.rows[0].cells
+                metrics_order = ['volatilite', 'beta', 'liquidite', 'divergence', 'stabilite']
+                ordered_keys = [k for k in metrics_order if k in risk_details] + \
+                               [k for k in risk_details if k not in metrics_order]
+                for col_i, key in enumerate(ordered_keys[:len(hdr_row)]):
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:fill'), 'BDD7EE')
+                    hdr_row[col_i]._element.get_or_add_tcPr().append(shd)
+                    hdr_row[col_i].text = risk_label_map.get(key, key.capitalize())
+                    hdr_row[col_i].paragraphs[0].runs[0].font.bold = True
+                    hdr_row[col_i].paragraphs[0].runs[0].font.size = Pt(8)
+                
+                val_row = risk_tbl.add_row().cells
+                for col_i, key in enumerate(ordered_keys[:len(val_row)]):
+                    val_row[col_i].text = str(risk_details.get(key, '—'))
+                    val_row[col_i].paragraphs[0].runs[0].font.size = Pt(8)
+                
+                doc.add_paragraph()
             
             paragraphs = analysis.split('\n\n')
             for para_text in paragraphs:
