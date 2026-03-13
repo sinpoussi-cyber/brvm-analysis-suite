@@ -14,7 +14,7 @@ import unicodedata
 import urllib3
 from collections import defaultdict
 import psycopg2
-import PyPDF2
+import pypdf
 import io
 import json
 
@@ -110,6 +110,7 @@ class BRVMAnalyzer:
         })
         
         self.analysis_memory = set()
+        self.failed_analysis_urls = set()   # ✅ URLs à ré-analyser (fallback/vide)
         self.company_ids = {}
         self.newly_analyzed_reports = []
         self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0}
@@ -127,7 +128,9 @@ class BRVMAnalyzer:
             return None
 
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL"""
+        """Charge la mémoire depuis PostgreSQL
+        ✅ Fix: distingue les analyses réussies des analyses fallback/vides
+        """
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
         if not conn: 
@@ -135,15 +138,32 @@ class BRVMAnalyzer:
         
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT report_url FROM fundamental_analysis;")
-                urls = cur.fetchall()
-                self.analysis_memory = {row[0] for row in urls}
-            
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) chargée(s)")
+                # Charger TOUTES les URLs déjà en base
+                cur.execute("SELECT report_url, analysis_summary FROM fundamental_analysis;")
+                rows = cur.fetchall()
+                
+                self.analysis_memory = set()           # URLs vraiment analysées (succès)
+                self.failed_analysis_urls = set()      # URLs avec fallback/vide → à ré-analyser
+                
+                for url, summary in rows:
+                    if not summary or len(summary.strip()) < 50:
+                        # Analyse vide ou trop courte → à ré-analyser
+                        self.failed_analysis_urls.add(url)
+                        logging.debug(f"   🔄 À ré-analyser: {url[:60]}")
+                    elif '[FALLBACK]' in summary.upper() or '[analysé par fallback]' in summary.lower():
+                        # Analyse de secours → à ré-analyser si possible
+                        self.failed_analysis_urls.add(url)
+                    else:
+                        # Analyse valide → ne pas retoucher
+                        self.analysis_memory.add(url)
+                
+            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) valide(s) en base")
+            logging.info(f"   🔄 {len(self.failed_analysis_urls)} analyse(s) à ré-essayer (fallback/vide)")
                     
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire: {e}")
             self.analysis_memory = set()
+            self.failed_analysis_urls = set()
         finally:
             if conn: 
                 conn.close()
@@ -306,22 +326,56 @@ class BRVMAnalyzer:
         return all_reports
 
     def _extract_text_from_pdf(self, pdf_url):
-        """Extrait le texte d'un PDF"""
+        """Extrait le texte d'un PDF — utilise pypdf (successeur de PyPDF2)"""
         try:
-            logging.info(f"      📥 Téléchargement PDF...")
+            logging.info(f"      📥 Téléchargement PDF: {pdf_url[:80]}...")
             response = self.session.get(pdf_url, timeout=30, verify=False)
+            
+            if response.status_code != 200:
+                logging.warning(f"      ⚠️ HTTP {response.status_code} pour le PDF")
+                return None
+            
+            content_type = response.headers.get('Content-Type', '')
+            if 'html' in content_type.lower():
+                logging.warning(f"      ⚠️ Le serveur a renvoyé du HTML au lieu d'un PDF (redirection login?)")
+                return None
+            
             pdf_file = io.BytesIO(response.content)
+            logging.info(f"      📦 PDF téléchargé: {len(response.content)/1024:.0f} Ko")
             
             text = ""
+            # ✅ Fix: utiliser pypdf (pas PyPDF2), sans context manager (API de base)
             try:
-                with PyPDF2.PdfReader(pdf_file) as pdf:
-                    for page_num, page in enumerate(pdf.pages, 1):
+                reader = pypdf.PdfReader(pdf_file)
+                nb_pages = len(reader.pages)
+                logging.info(f"      📄 {nb_pages} page(s) détectée(s)")
+                
+                for page_num, page in enumerate(reader.pages, 1):
+                    try:
                         page_text = page.extract_text() or ""
                         text += page_text + "\n"
-                        if page_num % 5 == 0:
-                            logging.info(f"      📄 Page {page_num}/{len(pdf.pages)} traitée...")
+                        if page_num % 10 == 0:
+                            logging.info(f"      📄 Page {page_num}/{nb_pages} traitée...")
+                    except Exception as e:
+                        logging.warning(f"      ⚠️ Page {page_num} illisible: {e}")
+                        continue
+                        
             except Exception as e:
-                logging.warning(f"      ⚠️ Erreur lecture PDF: {e}")
+                logging.warning(f"      ⚠️ Erreur lecture PDF avec pypdf: {e}")
+                # Tentative de fallback avec pdfplumber
+                try:
+                    import pdfplumber
+                    pdf_file.seek(0)
+                    with pdfplumber.open(pdf_file) as pdf:
+                        for page in pdf.pages:
+                            text += (page.extract_text() or "") + "\n"
+                    logging.info(f"      ✅ Fallback pdfplumber réussi")
+                except Exception as e2:
+                    logging.error(f"      ❌ Fallback pdfplumber aussi échoué: {e2}")
+                    return None
+            
+            if not text.strip():
+                logging.warning(f"      ⚠️ PDF extrait mais vide (PDF scanné/image?)")
                 return None
             
             # Nettoyage
@@ -546,19 +600,27 @@ IMPORTANT:
     def _analyze_pdf_with_multi_ai(self, company_id, symbol, report):
         """Analyse un rapport avec rotation automatique des API"""
         
-        # Vérifier si déjà analysé
-        if report['url'] in self.analysis_memory:
-            logging.info(f"    ⏭️  Déjà analysé: {report['titre'][:60]}...")
+        url = report['url']
+        
+        # ✅ Fix: sauter seulement si vraiment analysé avec succès
+        if url in self.analysis_memory:
+            logging.info(f"    ✅ Déjà analysé avec succès: {report['titre'][:60]}...")
             return None
         
-        logging.info(f"    📄 Analyse: {report['titre'][:80]}...")
+        # Si c'est un fallback, on le signale mais on ré-essaie
+        if url in self.failed_analysis_urls:
+            logging.info(f"    🔄 Ré-analyse (précédent fallback/vide): {report['titre'][:60]}...")
+        else:
+            logging.info(f"    📄 Nouvelle analyse: {report['titre'][:80]}...")
         
         # Extraire le texte du PDF
-        text_content = self._extract_text_from_pdf(report['url'])
+        text_content = self._extract_text_from_pdf(url)
         
         if not text_content or len(text_content) < 100:
-            logging.warning(f"    ⚠️  PDF vide ou illisible")
+            logging.warning(f"    ⚠️  PDF vide ou illisible pour {symbol} — {report['titre'][:60]}")
             return False
+        
+        logging.info(f"    📝 {len(text_content)} caractères extraits, envoi à l'IA...")
         
         # ROTATION DES API: DeepSeek → Gemini → Mistral
         analysis = None
@@ -590,7 +652,7 @@ IMPORTANT:
         
         # Si aucune API n'a fonctionné
         if not analysis:
-            logging.error(f"    ❌ Échec des 3 API pour {symbol}")
+            logging.error(f"    ❌ Échec des 3 API pour {symbol} — {report['titre'][:60]}")
             fallback_text = f"Analyse automatique indisponible. Rapport: {report['titre']}"
             self._save_to_db(company_id, report, fallback_text, "fallback")
             return False
@@ -664,32 +726,40 @@ IMPORTANT:
                     logging.info(f"   ⏭️  Aucun rapport disponible")
                     continue
                 
-                # Filtrer les rapports récents (2023-2024)
-                date_limite = datetime(2023, 1, 1).date()
+                # ✅ Fix bug 4: Filtre élargi à 2020 (au lieu de 2023)
+                # Inclut les rapports 2020-2024 pour une meilleure couverture fondamentale
+                date_limite = datetime(2020, 1, 1).date()
                 recent_reports = [r for r in company_reports if r['date'] >= date_limite]
                 recent_reports.sort(key=lambda x: x['date'], reverse=True)
                 
                 if not recent_reports:
-                    logging.info(f"   ⏭️  Aucun rapport récent (2023-2024)")
+                    logging.info(f"   ⏭️  Aucun rapport depuis 2020")
                     continue
                 
-                logging.info(f"   📂 {len(recent_reports)} rapport(s) récent(s)")
+                logging.info(f"   📂 {len(recent_reports)} rapport(s) depuis 2020")
                 
-                # Séparer les déjà analysés des nouveaux
+                # Séparer les déjà analysés des nouveaux/à ré-analyser
                 already_analyzed = []
                 new_reports = []
+                retry_reports = []
                 
                 for report in recent_reports:
                     if report['url'] in self.analysis_memory:
                         already_analyzed.append(report)
+                    elif report['url'] in self.failed_analysis_urls:
+                        retry_reports.append(report)
                     else:
                         new_reports.append(report)
                 
-                logging.info(f"   ✅ Déjà analysés: {len(already_analyzed)}")
+                logging.info(f"   ✅ Déjà analysés (succès): {len(already_analyzed)}")
+                logging.info(f"   🔄 À ré-essayer (fallback/vide): {len(retry_reports)}")
                 logging.info(f"   🆕 Nouveaux: {len(new_reports)}")
                 
-                # Analyser les nouveaux rapports (max 2 par société)
-                for report in new_reports[:2]:
+                # ✅ Fix bug 5: max 3 rapports / société (au lieu de 2)
+                # Priorité: nouveaux en premier, puis retries
+                reports_to_process = (new_reports + retry_reports)[:3]
+                
+                for report in reports_to_process:
                     try:
                         result = self._analyze_pdf_with_multi_ai(company_id, symbol, report)
                         if result is True:
@@ -706,13 +776,15 @@ IMPORTANT:
             # Statistiques finales
             logging.info("\n" + "="*80)
             logging.info("✅ ANALYSE FONDAMENTALE TERMINÉE")
-            logging.info(f"📊 Nouvelles analyses: {total_analyzed}")
-            logging.info(f"📊 Rapports ignorés: {total_skipped}")
-            logging.info(f"❌ Erreurs: {total_errors}")
+            logging.info(f"📊 Nouvelles analyses réussies: {total_analyzed}")
+            logging.info(f"📊 Rapports sautés (déjà OK en base): {total_skipped}")
+            logging.info(f"📊 Ré-analyses fallback tentées: {len(self.failed_analysis_urls)}")
+            logging.info(f"❌ Erreurs (PDF illisible ou API échouée): {total_errors}")
             logging.info(f"📊 Statistiques requêtes API:")
             logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
             logging.info(f"   - Gemini: {self.request_count['gemini']}")
             logging.info(f"   - Mistral: {self.request_count['mistral']}")
+            logging.info(f"   - TOTAL: {sum(self.request_count.values())}")
             logging.info("="*80)
             
             # Récupérer toutes les analyses pour le rapport
