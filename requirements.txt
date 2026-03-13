@@ -35,7 +35,7 @@ blinker==1.6.3
 webdriver-manager==4.0.1
 
 # --- PDF Processing ---
-PyPDF2==3.0.1
+pypdf==5.9.0
 pdfplumber==0.10.4
 tabula-py==2.9.3
 pillow==10.2.0
