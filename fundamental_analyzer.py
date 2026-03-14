@@ -110,7 +110,6 @@ class BRVMAnalyzer:
         })
         
         self.analysis_memory = set()
-        self.failed_analysis_urls = set()   # ✅ URLs à ré-analyser (fallback/vide)
         self.company_ids = {}
         self.newly_analyzed_reports = []
         self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0}
@@ -128,79 +127,79 @@ class BRVMAnalyzer:
             return None
 
     def _load_analysis_memory_from_db(self):
-        """Charge la mémoire depuis PostgreSQL
-        ✅ Fix: distingue les analyses réussies des analyses fallback/vides
+        """
+        Charge toutes les URLs déjà analysées en base.
+        La contrainte UNIQUE(report_url) garantit qu'un PDF n'est analysé qu'une seule fois.
+        Si l'URL est en base → skip définitif, peu importe la date.
         """
         logging.info("📂 Chargement mémoire depuis PostgreSQL...")
         conn = self.connect_to_db()
-        if not conn: 
+        if not conn:
             return
-        
+
         try:
             with conn.cursor() as cur:
-                # Charger TOUTES les URLs déjà en base
-                cur.execute("SELECT report_url, analysis_summary FROM fundamental_analysis;")
+                cur.execute("SELECT report_url FROM fundamental_analysis;")
                 rows = cur.fetchall()
-                
-                self.analysis_memory = set()           # URLs vraiment analysées (succès)
-                self.failed_analysis_urls = set()      # URLs avec fallback/vide → à ré-analyser
-                
-                for url, summary in rows:
-                    if not summary or len(summary.strip()) < 50:
-                        # Analyse vide ou trop courte → à ré-analyser
-                        self.failed_analysis_urls.add(url)
-                        logging.debug(f"   🔄 À ré-analyser: {url[:60]}")
-                    elif '[FALLBACK]' in summary.upper() or '[analysé par fallback]' in summary.lower():
-                        # Analyse de secours → à ré-analyser si possible
-                        self.failed_analysis_urls.add(url)
-                    else:
-                        # Analyse valide → ne pas retoucher
-                        self.analysis_memory.add(url)
-                
-            logging.info(f"   ✅ {len(self.analysis_memory)} analyse(s) valide(s) en base")
-            logging.info(f"   🔄 {len(self.failed_analysis_urls)} analyse(s) à ré-essayer (fallback/vide)")
-                    
+                self.analysis_memory = {row[0] for row in rows}
+
+            logging.info(f"   ✅ {len(self.analysis_memory)} PDF(s) déjà analysé(s) en base (skip définitif)")
+
         except Exception as e:
             logging.error(f"❌ Erreur chargement mémoire: {e}")
             self.analysis_memory = set()
-            self.failed_analysis_urls = set()
         finally:
-            if conn: 
+            if conn:
                 conn.close()
 
     def _save_to_db(self, company_id, report, summary, ai_provider="unknown"):
-        """Sauvegarde dans PostgreSQL avec indication du provider IA"""
+        """
+        Sauvegarde une analyse fondamentale.
+        La contrainte UNIQUE(report_url) garantit qu'un PDF n'est enregistré qu'une seule fois.
+        ON CONFLICT DO NOTHING : si l'URL existe déjà, on ne touche à rien.
+        analysis_timestamp enregistre la date/heure de l'analyse.
+        """
         conn = self.connect_to_db()
-        if not conn: 
+        if not conn:
             return False
-        
+
         try:
             with conn.cursor() as cur:
-                # Ajouter l'info du provider dans le summary
-                enhanced_summary = f"[Analysé par {ai_provider.upper()}]\n\n{summary}"
-                
+                enhanced_summary = f"[Analysé par {ai_provider.upper()} — {datetime.now().strftime('%Y-%m-%d')}]\n\n{summary}"
+
                 cur.execute("""
-                    INSERT INTO fundamental_analysis (company_id, report_url, report_title, report_date, analysis_summary)
-                    VALUES (%s, %s, %s, %s, %s) 
-                    ON CONFLICT (report_url) DO UPDATE SET
-                        analysis_summary = EXCLUDED.analysis_summary,
-                        updated_at = CURRENT_TIMESTAMP
+                    INSERT INTO fundamental_analysis
+                        (company_id, report_url, report_title, report_date,
+                         analysis_summary, analysis_timestamp)
+                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (report_url) DO NOTHING
                     RETURNING id;
-                """, (company_id, report['url'], report['titre'], report['date'], enhanced_summary))
-                
-                inserted_id = cur.fetchone()[0]
+                """, (
+                    company_id,
+                    report['url'],
+                    report['titre'],
+                    report['date'],
+                    enhanced_summary
+                ))
+
+                result = cur.fetchone()
                 conn.commit()
-            
-            self.analysis_memory.add(report['url'])
-            logging.info(f"    ✅ Sauvegardé (ID: {inserted_id}, Provider: {ai_provider})")
-            return True
-            
+
+            if result:
+                self.analysis_memory.add(report['url'])
+                logging.info(f"    ✅ Sauvegardé (ID: {result[0]}, Provider: {ai_provider.upper()})")
+                return True
+            else:
+                # L'URL existait déjà — la contrainte unique a joué son rôle
+                logging.info(f"    ⏭️  URL déjà en base, skip (contrainte unique)")
+                return False
+
         except Exception as e:
             logging.error(f"❌ Erreur sauvegarde: {e}")
             conn.rollback()
             return False
         finally:
-            if conn: 
+            if conn:
                 conn.close()
 
     def _find_all_reports(self):
@@ -602,16 +601,12 @@ IMPORTANT:
         
         url = report['url']
         
-        # ✅ Fix: sauter seulement si vraiment analysé avec succès
+        # Si l'URL est déjà en base → skip définitif (contrainte UNIQUE garantit un seul enregistrement)
         if url in self.analysis_memory:
-            logging.info(f"    ✅ Déjà analysé avec succès: {report['titre'][:60]}...")
+            logging.info(f"    ⏭️  Déjà en base: {report['titre'][:60]}...")
             return None
         
-        # Si c'est un fallback, on le signale mais on ré-essaie
-        if url in self.failed_analysis_urls:
-            logging.info(f"    🔄 Ré-analyse (précédent fallback/vide): {report['titre'][:60]}...")
-        else:
-            logging.info(f"    📄 Nouvelle analyse: {report['titre'][:80]}...")
+        logging.info(f"    📄 Nouvelle analyse: {report['titre'][:80]}...")
         
         # Extraire le texte du PDF
         text_content = self._extract_text_from_pdf(url)
@@ -672,26 +667,36 @@ IMPORTANT:
     def run_and_get_results(self):
         """Fonction principale"""
         logging.info("="*80)
-        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V29.0 - Multi-AI)")
-        logging.info("🤖 Providers: DeepSeek → Gemini → Mistral (rotation automatique)")
+        logging.info("📄 ÉTAPE 4: ANALYSE FONDAMENTALE (V30.0 - Multi-AI historisée)")
+        logging.info("🤖 Rotation: DeepSeek → Gemini → Mistral")
+        logging.info("📦 Mode: INSERT pur — historisation complète, aucune mise à jour")
         logging.info("="*80)
         
         conn = None
         try:
-            # Vérifier les API disponibles
+            # Vérifier les API disponibles avec log détaillé
             available_apis = []
+            missing_apis = []
             if DEEPSEEK_API_KEY:
                 available_apis.append("DeepSeek")
+            else:
+                missing_apis.append("DeepSeek (DEEPSEEK_API_KEY absent)")
             if GEMINI_API_KEY:
                 available_apis.append("Gemini")
+            else:
+                missing_apis.append("Gemini (GEMINI_API_KEY absent)")
             if MISTRAL_API_KEY:
                 available_apis.append("Mistral")
+            else:
+                missing_apis.append("Mistral (MISTRAL_API_KEY absent)")
             
             if not available_apis:
                 logging.error("❌ Aucune clé API configurée!")
                 return {}, []
             
             logging.info(f"✅ API disponibles: {', '.join(available_apis)}")
+            if missing_apis:
+                logging.warning(f"⚠️  API non configurées (ajouter dans GitHub Secrets): {', '.join(missing_apis)}")
             
             # Charger la mémoire des analyses existantes
             self._load_analysis_memory_from_db()
@@ -738,35 +743,28 @@ IMPORTANT:
                 
                 logging.info(f"   📂 {len(recent_reports)} rapport(s) depuis 2020")
                 
-                # Séparer les déjà analysés des nouveaux/à ré-analyser
+                # Séparer les déjà en base des nouveaux
                 already_analyzed = []
                 new_reports = []
-                retry_reports = []
                 
                 for report in recent_reports:
                     if report['url'] in self.analysis_memory:
                         already_analyzed.append(report)
-                    elif report['url'] in self.failed_analysis_urls:
-                        retry_reports.append(report)
                     else:
                         new_reports.append(report)
                 
-                logging.info(f"   ✅ Déjà analysés (succès): {len(already_analyzed)}")
-                logging.info(f"   🔄 À ré-essayer (fallback/vide): {len(retry_reports)}")
-                logging.info(f"   🆕 Nouveaux: {len(new_reports)}")
+                logging.info(f"   ✅ Déjà en base (skip): {len(already_analyzed)}")
+                logging.info(f"   🆕 Nouveaux à analyser: {len(new_reports)}")
                 
-                # ✅ Fix bug 5: max 3 rapports / société (au lieu de 2)
-                # Priorité: nouveaux en premier, puis retries
-                reports_to_process = (new_reports + retry_reports)[:3]
-                
-                for report in reports_to_process:
+                # Max 3 nouveaux rapports par société par run
+                for report in new_reports[:3]:
                     try:
                         result = self._analyze_pdf_with_multi_ai(company_id, symbol, report)
                         if result is True:
                             total_analyzed += 1
                         elif result is False:
                             total_errors += 1
-                        time.sleep(2)  # Pause entre les analyses
+                        time.sleep(2)
                     except Exception as e:
                         logging.error(f"    ❌ Erreur analyse: {e}")
                         total_errors += 1
@@ -777,8 +775,7 @@ IMPORTANT:
             logging.info("\n" + "="*80)
             logging.info("✅ ANALYSE FONDAMENTALE TERMINÉE")
             logging.info(f"📊 Nouvelles analyses réussies: {total_analyzed}")
-            logging.info(f"📊 Rapports sautés (déjà OK en base): {total_skipped}")
-            logging.info(f"📊 Ré-analyses fallback tentées: {len(self.failed_analysis_urls)}")
+            logging.info(f"📊 Rapports déjà en base (skippés): {total_skipped}")
             logging.info(f"❌ Erreurs (PDF illisible ou API échouée): {total_errors}")
             logging.info(f"📊 Statistiques requêtes API:")
             logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
