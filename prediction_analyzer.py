@@ -635,19 +635,34 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 # ==============================================================================
 
 def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bool:
+    """
+    ✅ Historisation complète — AUCUN DELETE, AUCUNE mise à jour.
+    Chaque run quotidien crée 10 nouvelles lignes par société.
+    run_date = date du jour identifie le lot de prédictions.
+    ON CONFLICT DO NOTHING protège contre une double exécution le même jour.
+
+    Pour retrouver les prédictions d'un run passé :
+        SELECT * FROM predictions WHERE run_date = '2026-02-21' AND company_id = X;
+    Pour comparer l'évolution des prédictions dans le temps :
+        SELECT run_date, prediction_date, predicted_price
+        FROM predictions WHERE company_id = X ORDER BY run_date, prediction_date;
+    """
+    run_timestamp = datetime.now()
+    run_date = run_timestamp.date()
+
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM predictions WHERE company_id = %s;",
-                (company_id,)
-            )
+            inserted = 0
+            skipped = 0
             for i, pred_date in enumerate(data["dates"]):
                 cur.execute(
                     """
                     INSERT INTO predictions (
                         company_id, prediction_date, predicted_price,
-                        lower_bound, upper_bound, confidence_level, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                        lower_bound, upper_bound, confidence_level,
+                        created_at, run_date
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (company_id, prediction_date, run_date) DO NOTHING;
                     """,
                     (
                         company_id,
@@ -656,11 +671,22 @@ def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bo
                         round(data["lower_bound"][i], 2),
                         round(data["upper_bound"][i], 2),
                         data["confidence_per_day"][i],
+                        run_timestamp,
+                        run_date,
                     ),
                 )
+                if cur.rowcount > 0:
+                    inserted += 1
+                else:
+                    skipped += 1
+
         conn.commit()
-        logging.info(f"✅ {symbol} : {len(data['dates'])} prédictions sauvegardées")
+        if skipped > 0:
+            logging.info(f"✅ {symbol} : {inserted} prédiction(s) insérée(s), {skipped} déjà présente(s) pour run_date={run_date}")
+        else:
+            logging.info(f"✅ {symbol} : {inserted} prédictions sauvegardées (run_date={run_date})")
         return True
+
     except Exception as e:
         logging.error(f"❌ {symbol} : erreur sauvegarde — {e}")
         conn.rollback()
