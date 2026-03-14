@@ -84,15 +84,19 @@ class BRVMReportGenerator:
 
     def _get_market_indicators(self):
         """Récupère les derniers indicateurs du marché + historique 100j pour commentaire"""
+        # Dernière ligne valide (brvm_composite non null), ordonnée par id décroissant
         query = """
         SELECT 
+            id,
             brvm_composite, 
             brvm_30, 
             brvm_prestige, 
             capitalisation_globale,
             extraction_date
         FROM new_market_indicators
-        ORDER BY extraction_date DESC
+        WHERE brvm_composite IS NOT NULL
+          AND brvm_composite > 0
+        ORDER BY id DESC
         LIMIT 1;
         """
         
@@ -107,16 +111,19 @@ class BRVMReportGenerator:
                         'capitalisation': float(row.get('capitalisation_globale')) if pd.notna(row.get('capitalisation_globale')) else None
                     }
                     
-                    # Calcul dynamique de la variation journalière
+                    # Variation journalière — comparaison avec la veille valide (id précédent)
                     try:
+                        current_id = int(row.get('id'))
                         query_prev = """
                         SELECT brvm_composite
                         FROM new_market_indicators 
-                        WHERE extraction_date < (SELECT MAX(extraction_date) FROM new_market_indicators)
-                        ORDER BY extraction_date DESC 
+                        WHERE brvm_composite IS NOT NULL
+                          AND brvm_composite > 0
+                          AND id < %s
+                        ORDER BY id DESC 
                         LIMIT 1;
                         """
-                        df_prev = pd.read_sql(query_prev, self.db_conn)
+                        df_prev = pd.read_sql(query_prev, self.db_conn, params=(current_id,))
                         
                         if not df_prev.empty and pd.notna(df_prev.iloc[0]['brvm_composite']):
                             prev_composite = float(df_prev.iloc[0]['brvm_composite'])
@@ -129,18 +136,23 @@ class BRVMReportGenerator:
                         logging.warning(f"⚠️ Calcul variation journalière échoué: {e}")
                         indicators['composite_var_day'] = None
                     
-                    # ✅ Historique 100 derniers jours de cotation (BRVM Composite + Capitalisation)
+                    # Historique 100 derniers jours valides, ordonné par id
                     try:
                         query_hist = """
-                        SELECT brvm_composite, capitalisation_globale, extraction_date
+                        SELECT id, brvm_composite, capitalisation_globale, extraction_date
                         FROM new_market_indicators
-                        ORDER BY extraction_date DESC
+                        WHERE brvm_composite IS NOT NULL
+                          AND brvm_composite > 0
+                        ORDER BY id DESC
                         LIMIT 100;
                         """
                         df_hist = pd.read_sql(query_hist, self.db_conn)
                         if not df_hist.empty:
-                            df_hist = df_hist.sort_values('extraction_date')
+                            # Remettre dans l'ordre chronologique (id croissant = du plus ancien au plus récent)
+                            df_hist = df_hist.sort_values('id').reset_index(drop=True)
                             indicators['history_100d'] = df_hist
+                            logging.info(f"   📊 Historique BRVM: {len(df_hist)} jours valides chargés "
+                                        f"({df_hist.iloc[0]['extraction_date']} → {df_hist.iloc[-1]['extraction_date']})")
                         else:
                             indicators['history_100d'] = None
                     except Exception as e:
@@ -1377,19 +1389,25 @@ RAPPELS IMPÉRATIFS:
         # ✅ Commentaire évolution BRVM Composite sur 100 derniers jours
         if market_indicators and market_indicators.get('history_100d') is not None:
             df_hist = market_indicators['history_100d']
+            # Les données sont déjà filtrées (brvm_composite NOT NULL > 0) et triées par id croissant
+            
             if len(df_hist) >= 2:
                 doc.add_heading('📊 Évolution de l\'indice BRVM Composite (100 derniers jours)', level=3)
                 
                 composite_first = float(df_hist.iloc[0]['brvm_composite'])
-                composite_last = float(df_hist.iloc[-1]['brvm_composite'])
-                composite_max = float(df_hist['brvm_composite'].max())
-                composite_min = float(df_hist['brvm_composite'].min())
-                composite_evol = ((composite_last - composite_first) / composite_first * 100) if composite_first > 0 else 0
+                composite_last  = float(df_hist.iloc[-1]['brvm_composite'])
+                composite_max   = float(df_hist['brvm_composite'].max())
+                composite_min   = float(df_hist['brvm_composite'].min())
+                composite_evol  = ((composite_last - composite_first) / composite_first * 100)
+                nb_jours        = len(df_hist)
+                date_debut      = df_hist.iloc[0]['extraction_date']
+                date_fin        = df_hist.iloc[-1]['extraction_date']
                 
                 p_composite = doc.add_paragraph()
                 p_composite.add_run("BRVM Composite — ").bold = True
-                evol_run = p_composite.add_run(
-                    f"Sur les {len(df_hist)} derniers jours de cotation, l'indice BRVM Composite a évolué de "
+                p_composite.add_run(
+                    f"Sur les {nb_jours} derniers jours de cotation "
+                    f"({date_debut} au {date_fin}), l'indice BRVM Composite a évolué de "
                 )
                 perf_run = p_composite.add_run(f"{composite_evol:+.2f}%")
                 perf_run.bold = True
@@ -1405,22 +1423,20 @@ RAPPELS IMPÉRATIFS:
                 else:
                     p_composite.add_run("L'indice évolue dans une phase de consolidation, sans tendance directrice nette sur la période.")
                 
-                # ✅ Commentaire capitalisation 100j
+                # Commentaire capitalisation 100j
                 cap_vals = df_hist['capitalisation_globale'].dropna()
+                cap_vals = cap_vals[cap_vals > 0]
                 if len(cap_vals) >= 2:
                     doc.add_paragraph()
                     p_cap = doc.add_paragraph()
                     p_cap.add_run("Capitalisation globale — ").bold = True
                     cap_first = float(cap_vals.iloc[0])
-                    cap_last = float(cap_vals.iloc[-1])
-                    cap_max = float(cap_vals.max())
-                    cap_min = float(cap_vals.min())
-                    cap_evol = ((cap_last - cap_first) / cap_first * 100) if cap_first > 0 else 0
-                    # Affichage en milliards
+                    cap_last  = float(cap_vals.iloc[-1])
+                    cap_max   = float(cap_vals.max())
+                    cap_min   = float(cap_vals.min())
+                    cap_evol  = ((cap_last - cap_first) / cap_first * 100)
                     div = 1e9
-                    p_cap.add_run(
-                        f"La capitalisation boursière totale a évolué de "
-                    )
+                    p_cap.add_run("La capitalisation boursière totale a évolué de ")
                     cap_run = p_cap.add_run(f"{cap_evol:+.2f}%")
                     cap_run.bold = True
                     cap_run.font.color.rgb = RGBColor(0, 128, 0) if cap_evol >= 0 else RGBColor(192, 0, 0)
@@ -1504,26 +1520,34 @@ RAPPELS IMPÉRATIFS:
             sorted_sell = sorted_sell + conserver_risky[:10 - len(sorted_sell)]
         
         flop_10_list = []
-        for idx, (symbol, data) in enumerate(sorted_sell, 1):
-            p = doc.add_paragraph(style='List Number')
-            company_name = data.get('company_name', 'N/A')
-            p.add_run(f"{symbol} - {company_name}").bold = True
-            p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
-            
-            rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
-            rec_run.font.color.rgb = RGBColor(192, 0, 0)
-            rec_run.bold = True
-            
-            p.add_run(f" | Confiance: {data.get('confidence_level', 'N/A')} | Risque: {data.get('risk_level', 'N/A')}")
-            
-            flop_10_list.append({
-                'symbol': symbol,
-                'name': company_name,
-                'price': float(data.get('current_price', 0)),
-                'recommendation': data.get('recommendation'),
-                'confidence': data.get('confidence_level'),
-                'risk': data.get('risk_level')
-            })
+        if sorted_sell:
+            for idx, (symbol, data) in enumerate(sorted_sell, 1):
+                p = doc.add_paragraph(style='List Number')
+                company_name = data.get('company_name', 'N/A')
+                p.add_run(f"{symbol} - {company_name}").bold = True
+                p.add_run(f" | Prix: {data.get('current_price', 0):.0f} FCFA | ")
+                
+                rec_run = p.add_run(f"{data.get('recommendation', 'N/A')}")
+                rec_run.font.color.rgb = RGBColor(192, 0, 0)
+                rec_run.bold = True
+                
+                p.add_run(f" | Confiance: {data.get('confidence_level', 'N/A')} | Risque: {data.get('risk_level', 'N/A')}")
+                
+                flop_10_list.append({
+                    'symbol': symbol,
+                    'name': company_name,
+                    'price': float(data.get('current_price', 0)),
+                    'recommendation': data.get('recommendation'),
+                    'confidence': data.get('confidence_level'),
+                    'risk': data.get('risk_level')
+                })
+        else:
+            p_empty = doc.add_paragraph()
+            p_empty.add_run("✅ Aucune action à éviter ce jour.").italic = True
+            p_empty.add_run(
+                " L'ensemble des 47 sociétés analysées présentent des signaux neutres ou positifs. "
+                "Aucun signal de vente fort n'a été détecté par l'analyse Multi-AI."
+            )
         
         doc.add_paragraph()
         doc.add_page_break()
@@ -1995,14 +2019,23 @@ RAPPELS IMPÉRATIFS:
             return
         
         available_apis = []
+        missing_apis = []
         if DEEPSEEK_API_KEY:
             available_apis.append("DeepSeek")
+        else:
+            missing_apis.append("DeepSeek")
         if GEMINI_API_KEY:
             available_apis.append("Gemini")
+        else:
+            missing_apis.append("Gemini")
         if MISTRAL_API_KEY:
             available_apis.append("Mistral")
+        else:
+            missing_apis.append("Mistral")
         
         logging.info(f"✅ API disponibles: {', '.join(available_apis)}")
+        if missing_apis:
+            logging.warning(f"⚠️  API non configurées (ajouter DEEPSEEK_API_KEY dans GitHub Secrets): {', '.join(missing_apis)}")
         
         df = self._get_all_data_from_db()
         
