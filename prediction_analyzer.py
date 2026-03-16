@@ -1,11 +1,29 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V16.0 — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V17.0 — BRVM 47 ACTIONS
 # ------------------------------------------------------------------------------
-# CORRECTION CRITIQUE V16.0 :
-#   Les fichiers .keras sont au format KERAS 3 (ZIP contenant config.json +
-#   model.weights.h5). TF 2.x ne sait pas les lire nativement.
-#   Solution : load_keras3_model() ouvre le ZIP, reconstruit l'architecture
-#   en TF2 depuis le config.json, puis charge les poids depuis model.weights.h5.
+# NOUVEAUTÉS V17.0 :
+#
+#   1. LIMITE BRVM ±7.5%/jour (réglementaire)
+#      Seule la borne JOURNALIÈRE est appliquée : chaque prédiction J+n ne peut
+#      dépasser ±7.5% de la prédiction J+(n-1). La borne cumulée a été retirée
+#      car elle empêcherait les tendances légitimes sur plusieurs jours.
+#
+#   2. INTERVALLES DE CONFIANCE — diffusion brownienne (IC 90%)
+#      Formule : σ_rel × √n × 1.65 × pred
+#        - σ_rel   : volatilité journalière relative (écart-type des rendements
+#                    sur les 30 derniers jours disponibles)
+#        - √n      : diffusion brownienne — l'incertitude croît comme la racine
+#                    du temps, pas linéairement. À J+4 l'incertitude est ×2,
+#                    pas ×4.
+#        - 1.65    : quantile 95% de la loi normale → IC à 90%
+#                    (5% de chance que le vrai cours soit en dehors de l'intervalle
+#                    de chaque côté)
+#        L'intervalle est plafonné par la limite BRVM journalière cumulée
+#        (7.5% × n) pour rester cohérent avec la réglementation.
+#
+#   3. CONFIANCE DYNAMIQUE
+#      Combine 4 critères : mape_ok, r2_ok, vol_ok (< 2%/j), flat_ok.
+#      Les modèles avec prédictions plates reçoivent automatiquement "Faible".
 #
 # Types de modèles gérés :
 #   - GRU    : Input → GRU(64,rs=True) → Dropout → GRU(32,rs=False) → Dropout → Dense(1)
@@ -31,7 +49,7 @@ import pandas as pd
 import psycopg2
 
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import (
     GRU, LSTM, Dense, Dropout, Bidirectional, Input
 )
@@ -54,6 +72,9 @@ DB_PORT     = os.environ.get("DB_PORT")
 MODELS_DIR          = os.environ.get("MODELS_DIR", "./modeles")
 HISTORIQUE_JOURS    = 100
 NB_JOURS_PREDICTION = 10
+
+# Limite réglementaire BRVM : variation max ±7.5% par jour
+BRVM_DAILY_LIMIT = 0.075
 
 _models_cache: dict = {}
 
@@ -301,8 +322,8 @@ def _resolve_paths(symbol: str):
         logging.warning(f"⚠️  {symbol} : dossier absent ({action_dir})")
         return None, None
 
-    source    = MODELS_PARAMS.get(symbol, {}).get("source", "base")
-    all_files = os.listdir(action_dir)
+    source      = MODELS_PARAMS.get(symbol, {}).get("source", "base")
+    all_files   = os.listdir(action_dir)
     keras_files = [f for f in all_files if f.endswith(".keras")]
 
     if not keras_files:
@@ -327,7 +348,7 @@ def _resolve_paths(symbol: str):
 
 
 # ==============================================================================
-# CHARGEMENT KERAS 3 → TF2 : CŒUR DE LA CORRECTION V16.0
+# CHARGEMENT KERAS 3 → TF2
 # ==============================================================================
 
 def _build_model_from_config(config: dict) -> tf.keras.Model:
@@ -335,63 +356,51 @@ def _build_model_from_config(config: dict) -> tf.keras.Model:
     Reconstruit un modèle TF2/Keras 2 depuis un config.json Keras 3.
     Gère : Sequential GRU, Sequential LSTM, Sequential BiGRU.
     """
-    layers_cfg = config["config"]["layers"]
-
-    # Détecter le type global
+    layers_cfg  = config["config"]["layers"]
     layer_names = [l["class_name"] for l in layers_cfg]
     has_bidir   = "Bidirectional" in layer_names
     has_lstm    = "LSTM" in layer_names
 
-    # Extraire input_shape depuis la première couche (InputLayer)
     input_cfg   = layers_cfg[0]["config"]
-    batch_shape = input_cfg["batch_shape"]   # [None, look_back, 1]
+    batch_shape = input_cfg["batch_shape"]
     look_back   = batch_shape[1]
 
     model = Sequential()
     model.add(Input(shape=(look_back, 1)))
 
     if has_bidir:
-        # BiGRU — lire les vraies configs depuis le JSON
         for l in layers_cfg[1:]:
             cls = l["class_name"]
             cfg = l["config"]
             if cls == "Bidirectional":
-                inner_cfg = cfg["layer"]["config"]
+                inner_cfg  = cfg["layer"]["config"]
                 inner_units = inner_cfg["units"]
-                return_seq   = inner_cfg["return_sequences"]
-                model.add(Bidirectional(GRU(inner_units,
-                                            return_sequences=return_seq)))
+                return_seq  = inner_cfg["return_sequences"]
+                model.add(Bidirectional(GRU(inner_units, return_sequences=return_seq)))
             elif cls == "Dropout":
                 model.add(Dropout(cfg["rate"]))
             elif cls == "Dense":
-                model.add(Dense(cfg["units"],
-                                activation=cfg.get("activation", "linear")))
+                model.add(Dense(cfg["units"], activation=cfg.get("activation", "linear")))
     elif has_lstm:
-        # LSTM
         for l in layers_cfg[1:]:
             cls = l["class_name"]
             cfg = l["config"]
             if cls == "LSTM":
-                model.add(LSTM(cfg["units"],
-                               return_sequences=cfg["return_sequences"]))
+                model.add(LSTM(cfg["units"], return_sequences=cfg["return_sequences"]))
             elif cls == "Dropout":
                 model.add(Dropout(cfg["rate"]))
             elif cls == "Dense":
-                model.add(Dense(cfg["units"],
-                                activation=cfg.get("activation", "linear")))
+                model.add(Dense(cfg["units"], activation=cfg.get("activation", "linear")))
     else:
-        # GRU standard ou advanced
         for l in layers_cfg[1:]:
             cls = l["class_name"]
             cfg = l["config"]
             if cls == "GRU":
-                model.add(GRU(cfg["units"],
-                              return_sequences=cfg["return_sequences"]))
+                model.add(GRU(cfg["units"], return_sequences=cfg["return_sequences"]))
             elif cls == "Dropout":
                 model.add(Dropout(cfg["rate"]))
             elif cls == "Dense":
-                model.add(Dense(cfg["units"],
-                                activation=cfg.get("activation", "linear")))
+                model.add(Dense(cfg["units"], activation=cfg.get("activation", "linear")))
 
     model.compile(optimizer=Adam(learning_rate=1e-3), loss="mse")
     return model
@@ -400,13 +409,7 @@ def _build_model_from_config(config: dict) -> tf.keras.Model:
 def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
     """
     Charge un fichier .keras (format Keras 3 ZIP) dans TF2.
-
-    Étapes :
-      1. Ouvre le ZIP
-      2. Lit config.json → reconstruit l'architecture avec _build_model_from_config
-      3. Extrait model.weights.h5 dans un dossier temporaire
-      4. Charge les poids via model.load_weights (format H5 Keras 3)
-         Si ça échoue, tente by_name=True puis un chargement manuel couche par couche.
+    Tente 3 méthodes de chargement des poids successivement.
     """
     try:
         if not zipfile.is_zipfile(keras_path):
@@ -414,10 +417,9 @@ def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
             return None
 
         with zipfile.ZipFile(keras_path, "r") as zf:
-            config  = json.loads(zf.read("config.json"))
-            names   = zf.namelist()
+            config = json.loads(zf.read("config.json"))
+            names  = zf.namelist()
 
-            # Extraire model.weights.h5 dans un dossier temp
             with tempfile.TemporaryDirectory() as tmp:
                 if "model.weights.h5" not in names:
                     logging.error(f"❌ {symbol} : model.weights.h5 absent dans le ZIP")
@@ -428,7 +430,6 @@ def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
                 model = _build_model_from_config(config)
                 logging.info(f"   ✓ {symbol} : architecture reconstruite ({model.count_params()} params)")
 
-                # Tentative 1 : load_weights standard
                 try:
                     model.load_weights(weights_path)
                     logging.info(f"   ✓ {symbol} : poids chargés (standard)")
@@ -436,7 +437,6 @@ def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
                 except Exception as e1:
                     logging.warning(f"   ↳ load_weights standard échoué : {str(e1)[:100]}")
 
-                # Tentative 2 : by_name=True
                 try:
                     model.load_weights(weights_path, by_name=True)
                     logging.info(f"   ✓ {symbol} : poids chargés (by_name=True)")
@@ -444,13 +444,12 @@ def load_keras3_model(keras_path: str, symbol: str) -> tf.keras.Model | None:
                 except Exception as e2:
                     logging.warning(f"   ↳ load_weights by_name échoué : {str(e2)[:100]}")
 
-                # Tentative 3 : lecture directe H5 couche par couche
                 try:
                     import h5py
                     with h5py.File(weights_path, "r") as hf:
                         for layer in model.layers:
                             if layer.name in hf:
-                                grp = hf[layer.name]
+                                grp   = hf[layer.name]
                                 w_list = [grp[k][()] for k in grp.keys()]
                                 if w_list:
                                     layer.set_weights(w_list)
@@ -521,10 +520,21 @@ def load_action_model(symbol: str):
 
 
 # ==============================================================================
-# PRÉDICTION DES NB_JOURS_PREDICTION JOURS OUVRABLES SUIVANTS
+# PRÉDICTION — CŒUR DU MODULE
 # ==============================================================================
 
 def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
+    """
+    Prédit les NB_JOURS_PREDICTION prochains jours ouvrables pour un symbole.
+
+    Pipeline :
+      1. Prédiction itérative auto-régressive via le modèle GRU/LSTM/BiGRU
+      2. Application de la limite BRVM ±7.5%/jour (borne journalière uniquement)
+      3. Calcul des intervalles de confiance par diffusion brownienne (IC 90%)
+      4. Évaluation dynamique du niveau de confiance
+
+    Retourne un dict avec dates, prédictions, bornes IC, confiance.
+    """
     params = MODELS_PARAMS.get(symbol)
     if not params:
         logging.error(f"❌ {symbol} : introuvable dans MODELS_PARAMS")
@@ -547,6 +557,7 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
     last_date  = raw_date.date() if isinstance(raw_date, datetime) else raw_date
     future_dates = prochains_jours_ouvrables(last_date, NB_JOURS_PREDICTION)
 
+    # --- Normalisation ---
     sequence = arr[-look_back:].copy()
     if log_transform:
         sequence = np.log1p(sequence)
@@ -557,7 +568,7 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
         logging.error(f"❌ {symbol} : normalisation échouée — {e}")
         return None
 
-    # Prédiction itérative auto-régressive
+    # --- Prédiction itérative auto-régressive ---
     current_seq  = seq_scaled.copy()
     preds_scaled = []
 
@@ -581,38 +592,123 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 
     predictions = np.expm1(pred_raw) if log_transform else pred_raw
 
-    # Intervalles de confiance basés sur la volatilité réelle
-    n_recent   = min(30, len(arr) - 1)
-    volatilite = (
-        float(np.std(np.diff(arr[-n_recent - 1:])))
-        if n_recent > 0 else float(np.std(arr))
-    )
+    # ==========================================================================
+    # ÉTAPE 1 — LIMITE BRVM : ±7.5% de variation maximale par jour (journalière)
+    #
+    # Règle réglementaire BRVM : une action ne peut varier de plus de ±7.5%
+    # par rapport à son cours de la veille.
+    #
+    # Application : à chaque pas n, la prédiction est clippée par rapport à la
+    # prédiction du pas précédent (ou last_price pour J+1).
+    #   J+1 : clip(pred, last_price × 0.925, last_price × 1.075)
+    #   J+2 : clip(pred, pred(J+1)  × 0.925, pred(J+1)  × 1.075)
+    #   J+n : clip(pred, pred(J+n-1)× 0.925, pred(J+n-1)× 1.075)
+    #
+    # NOTE : seule la borne journalière est utilisée. Aucune borne cumulée
+    # n'est appliquée, afin de permettre les tendances légitimes sur plusieurs jours.
+    # ==========================================================================
+    predictions_brvm = []
+    prev_price = last_price
+
+    for i, pred in enumerate(predictions):
+        lower = prev_price * (1.0 - BRVM_DAILY_LIMIT)
+        upper = prev_price * (1.0 + BRVM_DAILY_LIMIT)
+        pred_clipped = float(np.clip(pred, lower, upper))
+
+        if pred_clipped != pred:
+            logging.debug(
+                f"   BRVM clip {symbol} J+{i+1} : {pred:.2f} → {pred_clipped:.2f} "
+                f"(bornes [{lower:.2f} ; {upper:.2f}])"
+            )
+
+        predictions_brvm.append(pred_clipped)
+        prev_price = pred_clipped  # J+2 repart de la prédiction clippée de J+1
+
+    predictions = np.array(predictions_brvm)
+
+    # ==========================================================================
+    # ÉTAPE 2 — INTERVALLES DE CONFIANCE (IC 90%) — diffusion brownienne
+    #
+    # Principe : un cours boursier suit un mouvement brownien. L'incertitude
+    # sur la position future croît non pas linéairement mais comme √n.
+    # Si la volatilité journalière est σ, à l'horizon n jours l'écart-type
+    # de la distribution des cours futurs est σ × √n.
+    #
+    # Formule :
+    #   sigma_n = pred(J+n) × σ_rel × √n × 1.65
+    #
+    #   - pred(J+n)  : prédiction centrale après clipping BRVM
+    #   - σ_rel      : volatilité journalière relative (std des rendements
+    #                  journaliers sur les 30 derniers jours), ex: 0.012 = 1.2%/j
+    #   - √n         : diffusion brownienne (à J+4 l'incertitude est ×2, pas ×4)
+    #   - 1.65       : quantile z à 95% de la loi normale standard
+    #                  → intervalle à 90% bilatéral (5% de chaque côté)
+    #
+    # Plafond : l'intervalle est plafonné à BRVM_DAILY_LIMIT × n × pred
+    # pour rester cohérent avec la réglementation (l'IC ne peut pas suggérer
+    # une fourchette plus large que ce que la règle autorise physiquement).
+    # ==========================================================================
+    n_recent = min(30, len(arr) - 1)
+    if n_recent > 0:
+        daily_returns = np.diff(arr[-n_recent - 1:]) / arr[-n_recent - 1:-1]
+        daily_returns = daily_returns[np.isfinite(daily_returns)]
+        volatilite_rel = float(np.std(daily_returns)) if len(daily_returns) > 1 else 0.02
+    else:
+        volatilite_rel = 0.02  # fallback : 2%/j
 
     lower_bounds, upper_bounds = [], []
     for i, pred in enumerate(predictions):
-        marge = volatilite * (1 + i * 0.05)
-        lower_bounds.append(float(max(0.0, pred - marge)))
-        upper_bounds.append(float(pred + marge))
+        n = i + 1
+        # Écart-type de l'IC à l'horizon n (diffusion brownienne)
+        sigma_n = pred * volatilite_rel * (n ** 0.5) * 1.65
+        # Plafond réglementaire : l'intervalle ne peut dépasser 7.5% × n
+        brvm_max = pred * BRVM_DAILY_LIMIT * n
+        sigma_n  = min(sigma_n, brvm_max)
+        lower_bounds.append(float(max(0.0, pred - sigma_n)))
+        upper_bounds.append(float(pred + sigma_n))
 
-    both_ok = params["mape_ok"] and params["r2_ok"]
+    # ==========================================================================
+    # ÉTAPE 3 — CONFIANCE DYNAMIQUE
+    #
+    # 4 critères combinés (le plus pessimiste l'emporte) :
+    #   mape_ok  : MAPE test < 5%  (précision du modèle sur données test)
+    #   r2_ok    : R² test  > 0.7  (capacité du modèle à expliquer la variance)
+    #   vol_ok   : σ_rel    < 2%/j (action stable, peu volatile)
+    #   flat_ok  : range prédictions > 0.5% du cours (le modèle prédit une
+    #              vraie dynamique, pas une valeur constante)
+    # ==========================================================================
+    both_ok    = params["mape_ok"] and params["r2_ok"]
+    vol_ok     = volatilite_rel < 0.02
+    pred_range = float(np.max(predictions)) - float(np.min(predictions))
+    flat_ok    = (pred_range / last_price) > 0.005 if last_price > 0 else False
 
     def _niveau(j_idx: int) -> str:
         j = j_idx + 1
-        if both_ok:
-            return "Élevée" if j <= 3 else "Moyenne"
-        if params["mape_ok"]:
+        if both_ok and vol_ok and flat_ok:
+            return "Élevée"  if j <= 3 else "Moyenne"
+        if both_ok and (vol_ok or flat_ok):
             return "Moyenne" if j <= 3 else "Faible"
+        if params["mape_ok"] and vol_ok:
+            return "Moyenne" if j <= 2 else "Faible"
         return "Faible"
 
     confidence_par_jour = [_niveau(i) for i in range(NB_JOURS_PREDICTION)]
+
     variation_pct = (
         ((float(predictions[-1]) - last_price) / last_price) * 100
         if last_price else 0.0
     )
-    confiance_globale = (
-        "Élevée"  if both_ok and abs(variation_pct) < 5 else
-        "Moyenne" if params["mape_ok"] else
-        "Faible"
+
+    if both_ok and vol_ok and flat_ok and abs(variation_pct) < 5:
+        confiance_globale = "Élevée"
+    elif both_ok or (params["mape_ok"] and vol_ok):
+        confiance_globale = "Moyenne"
+    else:
+        confiance_globale = "Faible"
+
+    logging.info(
+        f"   📐 {symbol} | σ_rel={volatilite_rel*100:.2f}%/j | "
+        f"flat={'OUI' if not flat_ok else 'NON'} | confiance={confiance_globale}"
     )
 
     return {
@@ -627,6 +723,8 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
         "overall_confidence" : confiance_globale,
         "model_type"         : params["best_model"],
         "mape_test"          : params["mape_test"],
+        "volatilite_rel_pct" : round(volatilite_rel * 100, 4),
+        "pred_flat"          : not flat_ok,
     }
 
 
@@ -636,24 +734,17 @@ def predire_10_jours(prices: pd.Series, dates: pd.Series, symbol: str):
 
 def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bool:
     """
-    ✅ Historisation complète — AUCUN DELETE, AUCUNE mise à jour.
-    Chaque run quotidien crée 10 nouvelles lignes par société.
-    run_date = date du jour identifie le lot de prédictions.
-    ON CONFLICT DO NOTHING protège contre une double exécution le même jour.
-
-    Pour retrouver les prédictions d'un run passé :
-        SELECT * FROM predictions WHERE run_date = '2026-02-21' AND company_id = X;
-    Pour comparer l'évolution des prédictions dans le temps :
-        SELECT run_date, prediction_date, predicted_price
-        FROM predictions WHERE company_id = X ORDER BY run_date, prediction_date;
+    Historisation complète — AUCUN DELETE, AUCUNE mise à jour.
+    Chaque run quotidien crée NB_JOURS_PREDICTION nouvelles lignes par société.
+    run_date identifie le lot. ON CONFLICT DO NOTHING protège la double exécution.
     """
     run_timestamp = datetime.now()
-    run_date = run_timestamp.date()
+    run_date      = run_timestamp.date()
 
     try:
         with conn.cursor() as cur:
             inserted = 0
-            skipped = 0
+            skipped  = 0
             for i, pred_date in enumerate(data["dates"]):
                 cur.execute(
                     """
@@ -682,7 +773,7 @@ def save_predictions_to_db(conn, company_id: int, symbol: str, data: dict) -> bo
 
         conn.commit()
         if skipped > 0:
-            logging.info(f"✅ {symbol} : {inserted} prédiction(s) insérée(s), {skipped} déjà présente(s) pour run_date={run_date}")
+            logging.info(f"✅ {symbol} : {inserted} insérée(s), {skipped} déjà présente(s) (run_date={run_date})")
         else:
             logging.info(f"✅ {symbol} : {inserted} prédictions sauvegardées (run_date={run_date})")
         return True
@@ -723,13 +814,10 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
         logging.info(f"📊 {symbol} : {len(df)} jours disponibles")
 
         if len(df) < look_back:
-            logging.warning(
-                f"⚠️  {symbol} : IGNORÉ — {len(df)} jours < look_back={look_back}"
-            )
+            logging.warning(f"⚠️  {symbol} : IGNORÉ — {len(df)} jours < look_back={look_back}")
             return False
 
-        df = df.iloc[::-1].reset_index(drop=True)
-
+        df     = df.iloc[::-1].reset_index(drop=True)
         result = predire_10_jours(df["price"], df["trade_date"], symbol)
         if result is None:
             return False
@@ -742,12 +830,8 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
         for i, (d, p, c) in enumerate(
             zip(result["dates"], result["predictions"], result["confidence_per_day"])
         ):
-            logging.info(
-                f"   J+{i + 1:2d} | {d.strftime('%d/%m/%Y')} | {p:10.2f} FCFA | {c}"
-            )
-        logging.info(
-            f"📊 Variation J+{NB_JOURS_PREDICTION} : {result['avg_change_percent']:+.2f}%"
-        )
+            logging.info(f"   J+{i+1:2d} | {d.strftime('%d/%m/%Y')} | {p:10.2f} FCFA | {c}")
+        logging.info(f"📊 Variation J+{NB_JOURS_PREDICTION} : {result['avg_change_percent']:+.2f}%")
 
         return save_predictions_to_db(conn, company_id, symbol, result)
 
@@ -762,11 +846,12 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("🔮 PREDICTIONS V16.0 — BRVM 47 ACTIONS (Keras 3 → TF2)")
+    logging.info("🔮 PREDICTIONS V17.0 — BRVM 47 ACTIONS")
     logging.info("=" * 70)
     logging.info(f"📁 Modèles      : {MODELS_DIR}")
     logging.info(f"📊 Historique   : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"📈 Prédictions  : {NB_JOURS_PREDICTION} jours ouvrables")
+    logging.info(f"📐 Limite BRVM  : ±{BRVM_DAILY_LIMIT*100:.1f}%/jour (borne journalière)")
     logging.info(f"🗓️  Jours fériés : {len(JOURS_FERIES)} dates exclues (2026)")
     logging.info("=" * 70)
 
@@ -782,7 +867,6 @@ def run_prediction_analysis():
 
         logging.info(f"\n📋 {len(companies)} société(s) à traiter\n")
 
-        # Pré-audit
         ok, no_keras, no_scaler = [], [], []
         for _, sym in companies:
             kp, sp = _resolve_paths(sym)
