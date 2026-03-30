@@ -1370,16 +1370,16 @@ RAPPELS IMPÉRATIFS:
                     run.font.color.rgb = RGBColor(192, 0, 0)
                 intro.add_run(f" sur la séance. ")
             
-            # ✅ Capitalisation corrigée: valeur brute / 1e9 = milliards FCFA (ex: 160634930687590 / 1e9 = 160634.93 Mds → /1e12 = 160.63 Mds)
-            # La capitalisation en DB est en FCFA, diviser par 1e12 pour obtenir des milliards propres
+            # ✅ Capitalisation corrigée: valeur brute en FCFA → diviser par 1e9 pour obtenir des milliards
+            # Exemple: 15 660 629 773 994 FCFA / 1e9 = 15 660,630 milliards FCFA
             if market_indicators.get('capitalisation'):
                 cap_raw = market_indicators['capitalisation']
-                # Déterminer l'ordre de grandeur automatiquement
-                if cap_raw > 1e12:
-                    cap_milliards = cap_raw / 1e9  # en milliards
-                    intro.add_run(f"La capitalisation globale du marché atteint {cap_milliards:,.3f} milliards FCFA.")
-                else:
-                    intro.add_run(f"La capitalisation globale du marché atteint {cap_raw/1e9:.3f} milliards FCFA.")
+                cap_milliards = cap_raw / 1e9  # toujours en milliards FCFA
+                # Formatage français: séparateur de milliers = espace, décimale = virgule
+                cap_entier = int(cap_milliards)
+                cap_decimale = round((cap_milliards - cap_entier) * 1000)
+                cap_display = f"{cap_entier:,}".replace(",", " ") + f",{cap_decimale:03d}"
+                intro.add_run(f"La capitalisation globale du marché atteint {cap_display} milliards FCFA.")
         else:
             intro.add_run("Les indicateurs de marché seront mis à jour prochainement.")
         
@@ -1436,14 +1436,22 @@ RAPPELS IMPÉRATIFS:
                     cap_min   = float(cap_vals.min())
                     cap_evol  = ((cap_last - cap_first) / cap_first * 100)
                     div = 1e9
+
+                    def fmt_mds(val):
+                        """Formate une valeur en milliards avec séparateur français"""
+                        mds = val / div
+                        entier = int(mds)
+                        dec = round((mds - entier) * 100)
+                        return f"{entier:,}".replace(",", " ") + f",{dec:02d}"
+
                     p_cap.add_run("La capitalisation boursière totale a évolué de ")
                     cap_run = p_cap.add_run(f"{cap_evol:+.2f}%")
                     cap_run.bold = True
                     cap_run.font.color.rgb = RGBColor(0, 128, 0) if cap_evol >= 0 else RGBColor(192, 0, 0)
                     p_cap.add_run(
-                        f" sur la période, passant de {cap_first/div:,.2f} Mds FCFA à {cap_last/div:,.2f} Mds FCFA. "
-                        f"Le pic de capitalisation observé sur les 100 jours est de {cap_max/div:,.2f} Mds FCFA "
-                        f"et le plancher de {cap_min/div:,.2f} Mds FCFA."
+                        f" sur la période, passant de {fmt_mds(cap_first)} Mds FCFA à {fmt_mds(cap_last)} Mds FCFA. "
+                        f"Le pic de capitalisation observé sur les 100 jours est de {fmt_mds(cap_max)} Mds FCFA "
+                        f"et le plancher de {fmt_mds(cap_min)} Mds FCFA."
                     )
                 
                 doc.add_paragraph()
@@ -1983,10 +1991,15 @@ RAPPELS IMPÉRATIFS:
         
         # Préparer la synthèse pour la DB
         if market_indicators and market_indicators.get('composite'):
+            cap_val = market_indicators.get('capitalisation', 0)
+            cap_mds = cap_val / 1e9
+            cap_mds_entier = int(cap_mds)
+            cap_mds_dec = round((cap_mds - cap_mds_entier) * 100)
+            cap_mds_display = f"{cap_mds_entier:,}".replace(",", " ") + f",{cap_mds_dec:02d}"
             synthesis_text = (
                 f"Analyse ULTIMATE de {len(all_analyses)} sociétés. "
                 f"Indices: BRVM Composite {market_indicators['composite']:.2f} pts. "
-                f"Capitalisation: {market_indicators.get('capitalisation', 0)/1e9:.2f} Mds FCFA. "
+                f"Capitalisation: {cap_mds_display} Mds FCFA. "
                 f"Multi-AI: DeepSeek ({self.request_count['deepseek']}), "
                 f"Gemini ({self.request_count['gemini']}), Mistral ({self.request_count['mistral']})."
             )
