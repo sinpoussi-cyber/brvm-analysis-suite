@@ -110,6 +110,45 @@ def clean_and_convert_numeric(value):
         return None
 
 
+def clean_capitalisation(raw_value):
+    """
+    Nettoie et valide la capitalisation boursière BRVM.
+
+    Le PDF BRVM affiche parfois des espaces mal placés qui, une fois
+    supprimés, donnent un nombre 10x trop grand (ex: '153 849...' au
+    lieu de '15 384...').
+
+    Règle de validation : la capitalisation BRVM Actions est comprise
+    entre 10 000 et 20 000 milliards FCFA (1e13 à 2e13 FCFA).
+    Si la valeur dépasse 2e13 → on divise par 10 jusqu'à rentrer dans la plage.
+    """
+    val = clean_and_convert_numeric(raw_value)
+    if val is None:
+        return None
+
+    CAP_MAX_FCFA = 2e13   # 20 000 milliards FCFA — plafond réaliste BRVM
+    CAP_MIN_FCFA = 5e12   # 5 000 milliards FCFA  — plancher réaliste BRVM
+
+    original = val
+    iterations = 0
+    while val > CAP_MAX_FCFA and iterations < 3:
+        val = val / 10
+        iterations += 1
+
+    if iterations > 0:
+        logging.warning(
+            f"⚠️  Capitalisation corrigée : {original:.3e} → {val:.3e} FCFA "
+            f"(÷10 appliqué {iterations} fois)"
+        )
+
+    if val < CAP_MIN_FCFA:
+        logging.warning(
+            f"⚠️  Capitalisation suspecte (trop faible) : {val:.3e} FCFA — vérifier le PDF"
+        )
+
+    return val
+
+
 def extract_data_from_pdf(pdf_url):
     """Extraction données depuis PDF"""
     logging.info(f"   📄 Analyse du PDF...")
@@ -271,7 +310,7 @@ def insert_market_indicators_to_db(conn, indicators, trade_date):
             brvm_composite = clean_and_convert_numeric(indicators.get("brvm_composite"))
             brvm_30 = clean_and_convert_numeric(indicators.get("brvm_30"))
             brvm_prestige = clean_and_convert_numeric(indicators.get("brvm_prestige"))
-            capitalisation_globale = clean_and_convert_numeric(indicators.get("capitalisation_globale"))
+            capitalisation_globale = clean_capitalisation(indicators.get("capitalisation_globale"))
             volume_moyen_annuel = clean_and_convert_numeric(indicators.get("volume_moyen_annuel"))
             valeur_moyenne_annuelle = clean_and_convert_numeric(indicators.get("valeur_moyenne_annuelle"))
             
