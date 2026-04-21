@@ -17,6 +17,18 @@ import requests
 import time
 import json
 from collections import defaultdict, Counter
+import io
+import base64
+try:
+    import matplotlib
+    matplotlib.use('Agg')          # backend non-interactif, safe en CI/GitHub Actions
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib.gridspec import GridSpec
+    MATPLOTLIB_OK = True
+except ImportError:
+    MATPLOTLIB_OK = False
+    logging.warning("⚠️  matplotlib non disponible — graphiques désactivés")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
@@ -375,52 +387,729 @@ class BRVMReportGenerator:
         return result_df
 
     def _get_predictions_from_db(self):
-        """Récupération des prédictions"""
-        logging.info("🔮 Récupération des prédictions...")
-        
+        """Récupération des prédictions avec bornes IC et niveau de confiance"""
+        logging.info("🔮 Récupération des prédictions (avec IC)...")
+
         query = """
-        WITH latest_predictions AS (
-            SELECT 
-                company_id,
-                prediction_date,
-                predicted_price,
-                ROW_NUMBER() OVER(PARTITION BY company_id ORDER BY prediction_date DESC) as rn
+        WITH latest_run AS (
+            SELECT company_id, MAX(run_date) AS last_run
             FROM predictions
-            WHERE prediction_date >= CURRENT_DATE
+            GROUP BY company_id
+        ),
+        latest_predictions AS (
+            SELECT
+                p.company_id,
+                p.prediction_date,
+                p.predicted_price,
+                p.lower_bound,
+                p.upper_bound,
+                p.confidence_level
+            FROM predictions p
+            JOIN latest_run lr
+              ON p.company_id = lr.company_id
+             AND p.run_date   = lr.last_run
+            WHERE p.prediction_date >= CURRENT_DATE
         )
-        SELECT 
+        SELECT
             c.symbol,
             lp.prediction_date,
-            lp.predicted_price
+            lp.predicted_price,
+            lp.lower_bound,
+            lp.upper_bound,
+            lp.confidence_level
         FROM companies c
-        LEFT JOIN latest_predictions lp ON c.id = lp.company_id AND lp.rn <= 20
+        LEFT JOIN latest_predictions lp ON c.id = lp.company_id
         ORDER BY c.symbol, lp.prediction_date;
         """
-        
+
         try:
             df = pd.read_sql(query, self.db_conn)
-            logging.info(f"   ✅ {len(df)} prédiction(s)")
+            logging.info(f"   ✅ {len(df)} prédiction(s) chargées (avec IC)")
             return df
         except Exception as e:
             logging.error(f"❌ Erreur prédictions: {e}")
             return pd.DataFrame()
 
-    def _extract_recommendation_from_analysis(self, analysis_text):
-        """Extrait la recommandation du texte d'analyse"""
-        analysis_lower = analysis_text.lower()
-        
-        if 'achat fort' in analysis_lower:
-            return 'ACHAT FORT', 5
-        elif 'achat' in analysis_lower:
-            return 'ACHAT', 4
-        elif 'conserver' in analysis_lower:
-            return 'CONSERVER', 3
-        elif 'vente forte' in analysis_lower:
-            return 'VENTE FORTE', 1
-        elif 'vente' in analysis_lower:
-            return 'VENTE', 2
+
+    # =========================================================================
+    # PHASE 1 — A : Graphique cours 100j + volumes
+    # =========================================================================
+
+    def _generate_price_chart(self, symbol, hist_df):
+        """
+        Génère un graphique matplotlib : courbe de cours (haut) + volumes (bas).
+        Retourne un objet BytesIO prêt pour doc.add_picture(), ou None si erreur.
+        """
+        if not MATPLOTLIB_OK or hist_df is None or hist_df.empty or len(hist_df) < 5:
+            return None
+        try:
+            fig = plt.figure(figsize=(9, 4))
+            gs  = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
+
+            ax1 = fig.add_subplot(gs[0])
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+
+            dates  = pd.to_datetime(hist_df['trade_date'])
+            prices = hist_df['price'].astype(float)
+            vols   = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
+
+            # — Courbe de prix —
+            ax1.plot(dates, prices, color='#1a5276', linewidth=1.6, zorder=3)
+            ax1.fill_between(dates, prices, prices.min()*0.98,
+                             alpha=0.08, color='#1a5276')
+
+            # Annotations min / max
+            idx_max = prices.idxmax()
+            idx_min = prices.idxmin()
+            ax1.annotate(f"{prices[idx_max]:,.0f}",
+                         xy=(dates[idx_max], prices[idx_max]),
+                         fontsize=7, color='#27ae60', fontweight='bold',
+                         xytext=(0, 6), textcoords='offset points', ha='center')
+            ax1.annotate(f"{prices[idx_min]:,.0f}",
+                         xy=(dates[idx_min], prices[idx_min]),
+                         fontsize=7, color='#c0392b', fontweight='bold',
+                         xytext=(0, -12), textcoords='offset points', ha='center')
+
+            evol = ((prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0] * 100) if prices.iloc[0] else 0
+            color_title = '#27ae60' if evol >= 0 else '#c0392b'
+            sign = '+' if evol >= 0 else ''
+            ax1.set_title(f"{symbol} — Cours 100 derniers jours  ({sign}{evol:.1f}%)",
+                          fontsize=10, fontweight='bold', color=color_title, pad=6)
+            ax1.set_ylabel("Prix (FCFA)", fontsize=8)
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            ax1.grid(True, linestyle='--', alpha=0.4, color='#aaaaaa')
+            ax1.tick_params(axis='both', labelsize=7)
+            plt.setp(ax1.get_xticklabels(), visible=False)
+            ax1.spines[['top','right']].set_visible(False)
+
+            # — Barres de volumes —
+            bar_colors = ['#27ae60' if p >= prices.iloc[max(0,i-1)] else '#c0392b'
+                          for i, p in enumerate(prices)]
+            ax2.bar(dates, vols, color=bar_colors, alpha=0.65, width=0.8)
+            ax2.set_ylabel("Volume", fontsize=7)
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x/1000:.0f}k" if x >= 1000 else f"{x:.0f}"))
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
+            plt.setp(ax2.get_xticklabels(), rotation=30, fontsize=7)
+            ax2.grid(True, linestyle='--', alpha=0.3, color='#aaaaaa', axis='y')
+            ax2.spines[['top','right']].set_visible(False)
+            ax2.set_xlabel("Date", fontsize=8)
+
+            fig.patch.set_facecolor('white')
+            plt.tight_layout(pad=0.5)
+
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                        facecolor='white')
+            buf.seek(0)
+            plt.close(fig)
+            return buf
+        except Exception as e:
+            logging.warning(f"⚠️  Graphique {symbol}: {e}")
+            try:
+                plt.close('all')
+            except Exception:
+                pass
+            return None
+
+    # =========================================================================
+    # PHASE 1 — C : Score composite d'investissement 0–100
+    # =========================================================================
+
+
+    # =========================================================================
+    # PHASE 3 — I : Portefeuilles modèles
+    # =========================================================================
+
+    def _build_model_portfolios(self, all_company_data):
+        """
+        Construit 3 portefeuilles modèles à partir des scores, risques et liquidités.
+
+        Défensif  : score ≥ 45 + risque Faible + liquidité Bonne/Excellente
+        Équilibré : score ≥ 50 + risque Faible ou Moyen
+        Offensif  : score ≥ 60 (tous risques) — les meilleures opportunités
+        """
+        defensif   = []
+        equilibre  = []
+        offensif   = []
+
+        for sym, d in all_company_data.items():
+            sc  = d.get('investment_score', 0)
+            rl  = str(d.get('risk_level','')).lower()
+            rec = str(d.get('recommendation','')).upper()
+            if 'VENTE' in rec:
+                continue     # aucun portefeuille ne prend un signal vente
+
+            try:
+                rd = json.loads(d.get('risk_details','{}')) if isinstance(d.get('risk_details'), str) else (d.get('risk_details') or {})
+            except Exception:
+                rd = {}
+            liq_str = str(rd.get('liquidite','')).lower()
+            liq_ok  = any(k in liq_str for k in ['excellente','bonne'])
+
+            name  = d.get('company_name','')
+            price = d.get('current_price') or 0
+            entry = {'sym': sym, 'name': name, 'price': price, 'score': sc,
+                     'risk': d.get('risk_level','—'), 'rec': rec}
+
+            if sc >= 45 and 'faible' in rl and liq_ok:
+                defensif.append(entry)
+            if sc >= 50 and rl in ('faible','moyen'):
+                equilibre.append(entry)
+            if sc >= 60:
+                offensif.append(entry)
+
+        # Trier par score décroissant, limiter à 8 titres par portefeuille
+        for lst in (defensif, equilibre, offensif):
+            lst.sort(key=lambda x: x['score'], reverse=True)
+
+        # Pondérations équipondérées (sauf cash 15 % dans défensif)
+        def _weights(lst, cash_pct=0):
+            n = min(len(lst), 8)
+            if n == 0: return []
+            w = round((100 - cash_pct) / n, 1)
+            return [(e, w) for e in lst[:n]]
+
+        return {
+            'defensif':  (_weights(defensif, cash_pct=15),  15),
+            'equilibre': (_weights(equilibre, cash_pct=10), 10),
+            'offensif':  (_weights(offensif,  cash_pct=5),   5),
+        }
+
+    def _compute_investment_score(self, company_data):
+        """
+        Score composite 0–100 :
+          Technique    30 %  (signaux achat/vente)
+          Fondamental  40 %  (présence et qualité des données fondamentales)
+          Risque       20 %  (risk_score inversé)
+          Liquidité    10 %  (volume moyen)
+
+        Retourne un entier 0–100 et un label (Excellent/Bon/Moyen/Faible).
+        """
+        score = 0.0
+
+        # — Technique (30 %) —
+        tech_keys = ['mm_decision','bollinger_decision','macd_decision',
+                     'rsi_decision','stochastic_decision']
+        signals = [str(company_data.get(k,'')).upper() for k in tech_keys
+                   if company_data.get(k)]
+        n = len(signals) or 1
+        buy  = sum(1 for s in signals if 'ACHAT' in s)
+        sell = sum(1 for s in signals if 'VENTE' in s)
+        tech_pct = buy / n                  # 0 → 1
+        score += tech_pct * 30
+
+        # — Fondamental (40 %) —
+        fund_text = company_data.get('fundamental_analysis','')
+        if fund_text and len(fund_text) > 200:
+            rec = str(company_data.get('recommendation','')).upper()
+            if   'ACHAT FORT' in rec: fund_pts = 40
+            elif 'ACHAT'      in rec: fund_pts = 32
+            elif 'CONSERVER'  in rec: fund_pts = 20
+            elif 'VENTE'      in rec: fund_pts = 8
+            else:                     fund_pts = 16
+            # Bonus si brvm_rapports disponibles
+            if company_data.get('brvm_rapports_raw'):
+                fund_pts = min(40, fund_pts + 5)
         else:
-            return 'CONSERVER', 3
+            fund_pts = 10   # pénalité données absentes
+        score += fund_pts
+
+        # — Risque (20 %) — risk_score est déjà 0–100 (haut = risqué)
+        risk_raw = float(company_data.get('risk_score', 50))
+        score += (1 - risk_raw / 100) * 20
+
+        # — Liquidité (10 %) —
+        risk_details_raw = company_data.get('risk_details','{}')
+        try:
+            rd = json.loads(risk_details_raw) if isinstance(risk_details_raw, str) else risk_details_raw
+            liq_str = str(rd.get('liquidite','')).lower()
+            if   'excellente' in liq_str: liq_pts = 10
+            elif 'bonne'      in liq_str: liq_pts = 7
+            elif 'faible'     in liq_str: liq_pts = 2
+            else:                         liq_pts = 5
+        except Exception:
+            liq_pts = 5
+        score += liq_pts
+
+        score = max(0, min(100, round(score)))
+
+        if   score >= 70: label = 'Excellent'
+        elif score >= 55: label = 'Bon'
+        elif score >= 40: label = 'Moyen'
+        else:             label = 'Faible'
+
+        return score, label
+
+    # =========================================================================
+    # PHASE 1 — D : Résumé Exécutif automatique
+    # =========================================================================
+
+    def _build_executive_summary(self, all_company_data, market_indicators):
+        """
+        Génère les données du résumé exécutif depuis les données agrégées.
+        Retourne un dict avec toutes les stats nécessaires.
+        """
+        total   = len(all_company_data)
+        achats  = sum(1 for d in all_company_data.values() if 'ACHAT' in str(d.get('recommendation','')).upper())
+        ventes  = sum(1 for d in all_company_data.values() if 'VENTE' in str(d.get('recommendation','')).upper())
+        neutres = total - achats - ventes
+
+        # Meilleure société par score composite
+        scored = [(sym, d.get('investment_score', 0)) for sym, d in all_company_data.items()]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top_sym    = scored[0][0]  if scored else '—'
+        top_score  = scored[0][1]  if scored else 0
+
+        # Secteur le plus performant
+        sec_perf = {}
+        for d in all_company_data.values():
+            sec = d.get('sector','Autre') or 'Autre'
+            p   = d.get('price_evolution_100d') or 0
+            sec_perf.setdefault(sec, []).append(p)
+        sec_avg = {s: sum(v)/len(v) for s,v in sec_perf.items() if v}
+        best_sector  = max(sec_avg, key=sec_avg.get) if sec_avg else '—'
+        best_sec_pct = sec_avg.get(best_sector, 0)
+        worst_sector = min(sec_avg, key=sec_avg.get) if sec_avg else '—'
+
+        # Titres faible liquidité
+        low_liq = sum(
+            1 for d in all_company_data.values()
+            if 'faible' in str(d.get('risk_details','{}')).lower()
+            and 'liquidite' in str(d.get('risk_details','{}')).lower()
+        )
+
+        # Marché haussier / neutre / baissier
+        composite = market_indicators.get('composite') if market_indicators else None
+        var_day    = market_indicators.get('composite_var_day') if market_indicators else None
+        if   var_day and var_day >  1.0:  marche = 'HAUSSIER 📈'
+        elif var_day and var_day < -1.0:  marche = 'BAISSIER 📉'
+        else:                              marche = 'NEUTRE / STABLE ➡️'
+
+        # Divergences majeures (tech≠fond)
+        divergences = sum(
+            1 for d in all_company_data.values()
+            if d.get('technical_decision','') != d.get('fundamental_decision','')
+            and d.get('technical_decision','') not in ('','NEUTRE')
+        )
+
+        return {
+            'total': total, 'achats': achats, 'ventes': ventes, 'neutres': neutres,
+            'top_sym': top_sym, 'top_score': top_score,
+            'best_sector': best_sector, 'best_sec_pct': best_sec_pct,
+            'worst_sector': worst_sector,
+            'low_liq': low_liq, 'marche': marche,
+            'divergences': divergences,
+            'composite': composite, 'var_day': var_day,
+        }
+
+    # =========================================================================
+    # PHASE 1 — E : Faits marquants depuis google_alerts_rapports
+    # =========================================================================
+
+    def _get_google_alerts_events(self):
+        """
+        Récupère les 10 alertes les plus récentes depuis google_alerts_rapports.
+        Fallback sur new_market_events si la table est vide ou absente.
+        """
+        logging.info("📰 Récupération google_alerts_rapports...")
+        query = """
+        SELECT
+            mail_date,
+            titre,
+            resume,
+            sentiment,
+            pertinence,
+            categorie,
+            source_url
+        FROM google_alerts_rapports
+        WHERE resume IS NOT NULL AND resume <> ''
+        ORDER BY mail_date DESC NULLS LAST
+        LIMIT 12;
+        """
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            if not df.empty:
+                logging.info(f"   ✅ {len(df)} alerte(s) google chargée(s)")
+                return df
+        except Exception as e:
+            logging.warning(f"⚠️  google_alerts_rapports non disponible: {e}")
+
+        # Fallback : new_market_events
+        logging.info("   ↩️  Fallback → new_market_events")
+        try:
+            df2 = pd.read_sql(
+                "SELECT event_date AS mail_date, event_summary AS resume "
+                "FROM new_market_events ORDER BY event_date DESC LIMIT 10;",
+                self.db_conn
+            )
+            return df2
+        except Exception:
+            return pd.DataFrame()
+
+    def _get_brvm_documents(self):
+        """
+        Charge tous les documents de brvm_documents groupés par société confirmée.
+        Retourne un dict: { symbol -> [doc, doc, ...] }
+        Chaque doc = { titre, date_doc, resume, points_cles, impact, categorie, doc_url }
+        """
+        logging.info("📂 Chargement brvm_documents...")
+
+        query = """
+        SELECT
+            societe_confirmee,
+            titre,
+            date_doc,
+            resume,
+            points_cles,
+            impact,
+            categorie,
+            doc_url
+        FROM brvm_documents
+        WHERE societe_confirmee IS NOT NULL
+          AND societe_confirmee <> ''
+          AND resume IS NOT NULL
+          AND resume <> ''
+        ORDER BY societe_confirmee, date_doc DESC NULLS LAST;
+        """
+
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            logging.info(f"   ✅ {len(df)} document(s) chargé(s) depuis brvm_documents")
+        except Exception as e:
+            logging.error(f"❌ Erreur brvm_documents: {e}")
+            return {}
+
+        docs_by_symbol = {}
+        for _, row in df.iterrows():
+            sym = str(row['societe_confirmee']).strip().upper()
+            if not sym:
+                continue
+            doc = {
+                'titre':      row.get('titre') or 'Sans titre',
+                'date_doc':   str(row.get('date_doc') or 'Date inconnue'),
+                'resume':     row.get('resume') or '',
+                'points_cles': row.get('points_cles'),   # jsonb → peut être list ou None
+                'impact':     row.get('impact') or 'neutre',
+                'categorie':  row.get('categorie') or '',
+                'doc_url':    row.get('doc_url') or '',
+            }
+            docs_by_symbol.setdefault(sym, []).append(doc)
+
+        logging.info(f"   📊 {len(docs_by_symbol)} société(s) avec documents brvm_documents")
+        return docs_by_symbol
+
+
+    # =========================================================================
+    # brvm_rapports_societes — annonces & communiqués officiels par société
+    # =========================================================================
+
+    def _get_brvm_rapports_societes(self):
+        """
+        Charge tous les rapports/communiqués depuis brvm_rapports_societes,
+        groupés par société.
+        Retourne un dict: { symbol_upper -> [rapport, ...] }
+        Chaque rapport = {
+            annee, type_rapport, doc_titre, doc_url,
+            resume, points_cles, indicateurs,
+            recommandation, risques, perspectives,
+            date_rapport, created_at
+        }
+        """
+        logging.info("📋 Chargement brvm_rapports_societes...")
+
+        query = """
+        SELECT
+            societe,
+            annee,
+            type_rapport,
+            doc_titre,
+            doc_url,
+            resume,
+            points_cles,
+            indicateurs,
+            recommandation,
+            risques,
+            perspectives,
+            date_rapport,
+            created_at
+        FROM brvm_rapports_societes
+        WHERE societe IS NOT NULL
+          AND societe <> ''
+          AND resume IS NOT NULL
+          AND resume <> ''
+        ORDER BY societe, annee DESC NULLS LAST, created_at DESC NULLS LAST;
+        """
+
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            logging.info(f"   ✅ {len(df)} entrée(s) dans brvm_rapports_societes")
+        except Exception as e:
+            logging.error(f"❌ Erreur brvm_rapports_societes: {e}")
+            return {}
+
+        rapports_by_symbol = {}
+        for _, row in df.iterrows():
+            sym = str(row['societe']).strip().upper()
+            if not sym:
+                continue
+            rapport = {
+                'annee':          row.get('annee'),
+                'type_rapport':   row.get('type_rapport') or '',
+                'doc_titre':      row.get('doc_titre') or 'Sans titre',
+                'doc_url':        row.get('doc_url') or '',
+                'resume':         row.get('resume') or '',
+                'points_cles':    row.get('points_cles'),    # jsonb
+                'indicateurs':    row.get('indicateurs'),    # jsonb
+                'recommandation': row.get('recommandation') or '',
+                'risques':        row.get('risques') or '',
+                'perspectives':   row.get('perspectives') or '',
+                'date_rapport':   str(row.get('date_rapport') or ''),
+                'created_at':     str(row.get('created_at') or ''),
+            }
+            rapports_by_symbol.setdefault(sym, []).append(rapport)
+
+        logging.info(
+            f"   📊 {len(rapports_by_symbol)} société(s) avec rapports brvm_rapports_societes"
+        )
+        return rapports_by_symbol
+
+    def _format_rapports_societes_for_ai(self, rapports):
+        """
+        Formate les entrées brvm_rapports_societes pour le prompt IA.
+        Max 5 entrées, résumé tronqué à 500 chars.
+        """
+        if not rapports:
+            return ""
+
+        parts = []
+        for i, r in enumerate(rapports[:5]):
+            # Points clés
+            pk = r.get('points_cles')
+            if isinstance(pk, list):
+                pk_text = " | ".join(str(p) for p in pk[:4])
+            elif isinstance(pk, str) and pk.strip():
+                pk_text = pk[:250]
+            else:
+                pk_text = ""
+
+            # Indicateurs financiers (jsonb)
+            ind = r.get('indicateurs')
+            ind_text = ""
+            if isinstance(ind, dict) and ind:
+                pairs = [f"{k}: {v}" for k, v in list(ind.items())[:6]]
+                ind_text = " | ".join(pairs)
+            elif isinstance(ind, str) and ind.strip():
+                ind_text = ind[:200]
+
+            label = f"[RAPPORT {i+1}] {r['doc_titre']}"
+            if r.get('annee'):
+                label += f" ({r['annee']})"
+            if r.get('type_rapport'):
+                label += f" — {r['type_rapport']}"
+
+            block = label + "\n"
+            block += f"Résumé: {r['resume'][:500]}\n"
+            if pk_text:
+                block += f"Points clés: {pk_text}\n"
+            if ind_text:
+                block += f"Indicateurs: {ind_text}\n"
+            if r.get('recommandation'):
+                block += f"Recommandation source: {r['recommandation']}\n"
+            if r.get('risques'):
+                block += f"Risques identifiés: {r['risques'][:200]}\n"
+            if r.get('perspectives'):
+                block += f"Perspectives: {r['perspectives'][:200]}\n"
+            parts.append(block)
+
+        return "\n\n".join(parts)
+
+    def _format_rapports_societes_for_word(self, rapport, idx):
+        """Prépare un rapport brvm_rapports_societes pour l'insertion Word."""
+        pk = rapport.get('points_cles')
+        if isinstance(pk, list):
+            points = [str(p) for p in pk[:6]]
+        elif isinstance(pk, str) and pk.strip():
+            try:
+                import json as _j
+                parsed = _j.loads(pk)
+                points = [str(p) for p in parsed[:6]] if isinstance(parsed, list) else [pk[:200]]
+            except Exception:
+                points = [pk[:200]]
+        else:
+            points = []
+
+        ind = rapport.get('indicateurs')
+        indicateurs_kv = {}
+        if isinstance(ind, dict):
+            indicateurs_kv = {k: v for k, v in list(ind.items())[:8]}
+        elif isinstance(ind, str) and ind.strip():
+            try:
+                import json as _j
+                parsed = _j.loads(ind)
+                if isinstance(parsed, dict):
+                    indicateurs_kv = {k: v for k, v in list(parsed.items())[:8]}
+            except Exception:
+                pass
+
+        rec = str(rapport.get('recommandation', '')).upper()
+        if 'ACHAT' in rec:
+            rec_color = RGBColor(0, 128, 0)
+        elif 'VENTE' in rec:
+            rec_color = RGBColor(192, 0, 0)
+        else:
+            rec_color = RGBColor(100, 100, 100)
+
+        return {
+            'idx':            idx,
+            'annee':          rapport.get('annee') or '—',
+            'type_rapport':   rapport.get('type_rapport') or '',
+            'doc_titre':      rapport.get('doc_titre') or 'Sans titre',
+            'doc_url':        rapport.get('doc_url') or '',
+            'resume':         rapport.get('resume') or '',
+            'points':         points,
+            'indicateurs':    indicateurs_kv,
+            'recommandation': rapport.get('recommandation') or '',
+            'rec_color':      rec_color,
+            'risques':        rapport.get('risques') or '',
+            'perspectives':   rapport.get('perspectives') or '',
+            'date_rapport':   rapport.get('date_rapport') or '',
+        }
+
+    def _format_brvm_documents_for_ai(self, docs):
+        """
+        Formate les documents brvm_documents en texte structuré pour l'IA.
+        Limite à 5 documents max pour ne pas dépasser le contexte.
+        """
+        if not docs:
+            return ""
+
+        parts = []
+        for i, doc in enumerate(docs[:5]):
+            # Points clés : peut être une list Python (jsonb décodé par psycopg2)
+            pk = doc.get('points_cles')
+            if isinstance(pk, list):
+                pk_text = " | ".join(str(p) for p in pk[:5]) if pk else ""
+            elif isinstance(pk, str):
+                pk_text = pk[:300]
+            else:
+                pk_text = ""
+
+            impact_icon = {"positif": "🟢", "negatif": "🔴", "neutre": "⚪"}.get(
+                str(doc.get('impact', 'neutre')).lower(), "⚪"
+            )
+
+            parts.append(
+                f"[DOC {i+1}] {doc['titre']} | {doc['date_doc']} | "
+                f"Catégorie: {doc['categorie']} | Impact: {impact_icon} {doc['impact']}\n"
+                f"Résumé: {doc['resume'][:600]}\n"
+                + (f"Points clés: {pk_text}\n" if pk_text else "")
+            )
+
+        return "\n\n".join(parts)
+
+    def _format_brvm_documents_for_word(self, doc, doc_index):
+        """
+        Retourne un dict structuré prêt pour l'insertion Word.
+        """
+        pk = doc.get('points_cles')
+        if isinstance(pk, list):
+            points = [str(p) for p in pk[:6]]
+        elif isinstance(pk, str) and pk.strip():
+            # Essai de parse JSON si c'est une chaîne
+            try:
+                import json as _json
+                parsed = _json.loads(pk)
+                points = [str(p) for p in parsed[:6]] if isinstance(parsed, list) else [pk[:200]]
+            except Exception:
+                points = [pk[:200]]
+        else:
+            points = []
+
+        impact = str(doc.get('impact', 'neutre')).lower()
+        impact_icon = {"positif": "🟢 POSITIF", "negatif": "🔴 NÉGATIF", "neutre": "⚪ NEUTRE"}.get(impact, "⚪ NEUTRE")
+        impact_color = {"positif": RGBColor(0, 128, 0), "negatif": RGBColor(192, 0, 0), "neutre": RGBColor(100, 100, 100)}.get(impact, RGBColor(100, 100, 100))
+
+        # Badge fraîcheur pour brvm_documents
+        date_doc_raw = str(doc.get('date_doc','') or '')
+        try:
+            from datetime import date as _d2
+            import re as _re2
+            m = _re2.search(r'(\d{4})[-/](\d{1,2})', date_doc_raw)
+            if m:
+                dy, dm = int(m.group(1)), int(m.group(2))
+                td2    = _d2.today()
+                mago2  = (td2.year - dy)*12 + (td2.month - dm)
+                fresh2 = "⭐ RÉCENT" if mago2 <= 3 else ("📅 À JOUR" if mago2 <= 12 else "⚠️ ANCIEN")
+                date_doc_display = f"{date_doc_raw} {fresh2}"
+            else:
+                date_doc_display = date_doc_raw
+        except Exception:
+            date_doc_display = date_doc_raw
+
+        return {
+            'num':          doc_index,
+            'titre':        doc.get('titre', 'Sans titre'),
+            'date_doc':     date_doc_display,
+            'categorie':    doc.get('categorie', ''),
+            'resume':       doc.get('resume', ''),
+            'points':       points,
+            'impact':       impact_icon,
+            'impact_color': impact_color,
+            'doc_url':      doc.get('doc_url', ''),
+        }
+
+    def _extract_recommendation_from_analysis(self, analysis_text,
+                                                tech_decision=None,
+                                                fund_decision=None):
+        """
+        Extrait et CORRIGE la recommandation du texte d'analyse IA.
+
+        Règle de cohérence :
+          • Si tech=VENTE et fond=ACHAT (ou inverse) → ajuste à NEUTRE/CONSERVER
+            avec note de divergence, sauf si l'IA a explicitement justifié
+            le choix final avec les mots 'malgré' ou 'divergence'.
+          • Si tech et fond convergent → confirme la recommandation IA.
+          • Sinon → recommandation IA brute.
+        """
+        al = analysis_text.lower()
+
+        # 1. Lire la recommandation brute de l'IA
+        if 'achat fort' in al:
+            raw_rec, raw_score = 'ACHAT FORT', 5
+        elif 'achat' in al:
+            raw_rec, raw_score = 'ACHAT', 4
+        elif 'conserver' in al:
+            raw_rec, raw_score = 'CONSERVER', 3
+        elif 'vente forte' in al:
+            raw_rec, raw_score = 'VENTE FORTE', 1
+        elif 'vente' in al:
+            raw_rec, raw_score = 'VENTE', 2
+        else:
+            raw_rec, raw_score = 'CONSERVER', 3
+
+        # 2. Correction de cohérence tech / fondamental
+        if tech_decision and fund_decision:
+            td = str(tech_decision).upper()
+            fd = str(fund_decision).upper()
+            divergence_forte = (
+                ('ACHAT' in td and 'VENTE' in fd) or
+                ('VENTE' in td and 'ACHAT' in fd)
+            )
+            # L'IA a-t-elle elle-même reconnu la divergence ?
+            ia_acknowledged = any(kw in al for kw in
+                                  ['malgré', 'divergence', 'contradiction',
+                                   'incohérence', 'signal mixte'])
+
+            if divergence_forte and not ia_acknowledged:
+                # Recommandation ajustée
+                if raw_rec in ('ACHAT FORT', 'ACHAT'):
+                    return 'CONSERVER ⚠️', 3   # score 3 = neutre
+                elif raw_rec in ('VENTE FORTE', 'VENTE'):
+                    return 'CONSERVER ⚠️', 3
+                # else: déjà CONSERVER, on laisse
+
+        return raw_rec, raw_score
 
     # ============================================================================
     # NOUVELLES FONCTIONS MULTI-AI (DeepSeek → Gemini → Mistral)
@@ -1346,8 +2035,86 @@ RAPPELS IMPÉRATIFS:
         version_run.font.color.rgb = RGBColor(128, 128, 128)
         
         doc.add_paragraph()
+
+        # ========== RÉSUMÉ EXÉCUTIF (Page 1) ==========
+        market_indicators_pre = self._get_market_indicators()
+        exec_data = self._build_executive_summary(all_company_data, market_indicators_pre)
+
+        doc.add_paragraph()
+        exec_box = doc.add_paragraph()
+        exec_box.paragraph_format.space_before = Pt(6)
+        exec_box.paragraph_format.space_after  = Pt(6)
+
+        def _add_exec_line(para, label, value, val_color=None):
+            r_lbl = para.add_run(f"  {label}  ")
+            r_lbl.bold = True
+            r_lbl.font.size = Pt(10)
+            r_val = para.add_run(str(value) + "\n")
+            r_val.font.size = Pt(10)
+            if val_color:
+                r_val.font.color.rgb = val_color
+
+        # Encadré bleu foncé
+        from docx.oxml.ns import qn as _qn
+        from docx.oxml import OxmlElement as _OxmlElement
+
+        def _shade_para(para, hex_color):
+            pPr = para._p.get_or_add_pPr()
+            shd = _OxmlElement('w:shd')
+            shd.set(_qn('w:val'),  'clear')
+            shd.set(_qn('w:color'),'auto')
+            shd.set(_qn('w:fill'), hex_color)
+            pPr.append(shd)
+
+        lines = [
+            ("📊 RÉSUMÉ EXÉCUTIF", "", None),
+            ("─" * 55, "", None),
+            ("Marché :", exec_data['marche'],
+             RGBColor(0,128,0) if 'HAUSSE' in exec_data['marche'].upper()
+             else RGBColor(192,0,0) if 'BAIS' in exec_data['marche'].upper()
+             else RGBColor(80,80,80)),
+            ("Signaux :",
+             f"{exec_data['achats']} ACHAT  |  {exec_data['neutres']} NEUTRE  |  {exec_data['ventes']} VENTE  (sur {exec_data['total']} sociétés)",
+             RGBColor(0,80,160)),
+            ("Top opportunité :",
+             f"{exec_data['top_sym']}  (score {exec_data['top_score']}/100)",
+             RGBColor(0,128,0)),
+            ("Secteur surperformant :",
+             f"{exec_data['best_sector']}  ({exec_data['best_sec_pct']:+.1f}%)",
+             RGBColor(0,128,0)),
+            ("Secteur sous-performant :", exec_data['worst_sector'], RGBColor(160,60,0)),
+            ("Divergences tech/fond :",
+             f"{exec_data['divergences']} sociétés — vérifier avant d'investir",
+             RGBColor(160,100,0)),
+            ("⚠️ Liquidité réduite :",
+             f"{exec_data['low_liq']} titres à faible liquidité — risque de sortie",
+             RGBColor(192,0,0)),
+        ]
+
+        for label, value, color in lines:
+            ep = doc.add_paragraph()
+            ep.paragraph_format.left_indent  = Pt(18)
+            ep.paragraph_format.right_indent = Pt(18)
+            ep.paragraph_format.space_before = Pt(1)
+            ep.paragraph_format.space_after  = Pt(1)
+            _shade_para(ep, 'EBF5FB')
+            if label.startswith('─') or label.startswith('📊'):
+                r = ep.add_run(label if label.startswith('📊') else '')
+                r.bold = True
+                r.font.size = Pt(11)
+                r.font.color.rgb = RGBColor(0,51,102)
+            else:
+                r_l = ep.add_run(f"{label}  ")
+                r_l.bold = True
+                r_l.font.size = Pt(9.5)
+                r_v = ep.add_run(value)
+                r_v.font.size = Pt(9.5)
+                if color:
+                    r_v.font.color.rgb = color
+
+        doc.add_paragraph()
         doc.add_page_break()
-        
+
         # ========== SYNTHÈSE GÉNÉRALE ==========
         doc.add_heading('SYNTHÈSE GÉNÉRALE', level=1)
         
@@ -1571,33 +2338,50 @@ RAPPELS IMPÉRATIFS:
         )
         doc.add_paragraph()
         
+        # Récupérer la perf BRVM Composite pour comparaison relative
+        _brvm_perf = 0.0
+        try:
+            _mi = market_indicators_pre if 'market_indicators_pre' in dir() else self._get_market_indicators()
+            if _mi and _mi.get('history_100d') is not None:
+                _h = _mi['history_100d']
+                if len(_h) >= 2:
+                    _first = float(_h.iloc[0]['brvm_composite'])
+                    _last  = float(_h.iloc[-1]['brvm_composite'])
+                    _brvm_perf = ((_last - _first) / _first * 100) if _first else 0
+        except Exception:
+            _brvm_perf = 0.0
+
         for sector, stats in sorted(sector_analysis.items(), key=lambda x: x[1]['performance_moyenne'], reverse=True):
             doc.add_heading(f"Secteur: {sector}", level=3)
-            
+
             p = doc.add_paragraph()
-            p.add_run(f"Nombre de sociétés: ").bold = True
-            p.add_run(f"{stats['nb_societes']}\n")
-            
-            p.add_run(f"Performance moyenne (100j): ").bold = True
-            perf_run = p.add_run(f"{stats['performance_moyenne']:.2f}%\n")
-            if stats['performance_moyenne'] > 0:
-                perf_run.font.color.rgb = RGBColor(0, 128, 0)
-            else:
-                perf_run.font.color.rgb = RGBColor(192, 0, 0)
-            
-            p.add_run(f"Sentiment général: ").bold = True
-            p.add_run(f"{stats['sentiment_general']}\n")
-            
-            p.add_run(f"Risque moyen: ").bold = True
-            p.add_run(f"{stats['risque_moyen']}\n")
-            
-            p.add_run(f"Prix moyen: ").bold = True
+            p.add_run("Nombre de sociétés: ").bold = True
+            p.add_run(f"{stats['nb_societes']}  |  ")
+
+            # Performance vs BRVM Composite
+            perf = stats['performance_moyenne']
+            vs   = perf - _brvm_perf
+            p.add_run("Performance moyenne (100j): ").bold = True
+            perf_run = p.add_run(f"{perf:.2f}%")
+            perf_run.font.color.rgb = RGBColor(0,128,0) if perf >= 0 else RGBColor(192,0,0)
+            p.add_run("  |  ")
+            p.add_run("vs BRVM Composite: ").bold = True
+            vs_run = p.add_run(f"{'+'if vs>=0 else ''}{vs:.2f}%  "
+                               + ("🟢 Surperformance" if vs > 0 else "🔴 Sous-performance"))
+            vs_run.font.color.rgb = RGBColor(0,128,0) if vs >= 0 else RGBColor(192,0,0)
+            vs_run.bold = True
+            p.add_run("\n")
+
+            p.add_run("Sentiment général: ").bold = True
+            p.add_run(f"{stats['sentiment_general']}  |  ")
+            p.add_run("Risque moyen: ").bold = True
+            p.add_run(f"{stats['risque_moyen']}  |  ")
+            p.add_run("Prix moyen: ").bold = True
             p.add_run(f"{stats['prix_moyen']:.0f} FCFA\n")
-            
-            # Liste des sociétés du secteur
-            p.add_run(f"\nSociétés: ").bold = True
+
+            p.add_run("\nSociétés: ").bold = True
             p.add_run(", ".join(stats['societes']))
-            
+
             doc.add_paragraph()
         
         doc.add_page_break()
@@ -1872,12 +2656,285 @@ RAPPELS IMPÉRATIFS:
         
         # ========== ÉVÉNEMENTS MARQUANTS ==========
         doc.add_heading('📰 FAITS MARQUANTS RÉCENTS', level=2)
-        market_events = self._get_market_events()
-        events_p = doc.add_paragraph(market_events)
-        events_p.paragraph_format.space_after = Pt(12)
-        
+        # ── Faits marquants depuis google_alerts_rapports ──────────────────────
+        alerts_df = self._get_google_alerts_events()
+        if not alerts_df.empty:
+            for _, alert_row in alerts_df.head(10).iterrows():
+                ap = doc.add_paragraph()
+                ap.paragraph_format.space_before = Pt(3)
+                ap.paragraph_format.space_after  = Pt(3)
+
+                # Date
+                mail_date = alert_row.get('mail_date')
+                date_str  = mail_date.strftime('%d/%m/%Y') if hasattr(mail_date,'strftime') else str(mail_date)[:10]
+
+                # Sentiment → couleur
+                sent = str(alert_row.get('sentiment','')).lower()
+                if   'positif' in sent or 'positive' in sent: s_color = RGBColor(0,128,0)
+                elif 'negatif' in sent or 'negative' in sent: s_color = RGBColor(192,0,0)
+                else:                                          s_color = RGBColor(80,80,80)
+
+                sent_icon = {'positif':'🟢','positive':'🟢','negatif':'🔴','negative':'🔴'}.get(sent,'⚪')
+
+                titre_alerte = str(alert_row.get('titre') or alert_row.get('resume','')[:80])
+                resume_alerte= str(alert_row.get('resume',''))[:300]
+                categorie_a  = str(alert_row.get('categorie',''))
+                pertinence_a = alert_row.get('pertinence')
+
+                r_date = ap.add_run(f"[{date_str}] ")
+                r_date.bold = True
+                r_date.font.size = Pt(9)
+                r_date.font.color.rgb = RGBColor(60,60,60)
+
+                r_sent = ap.add_run(f"{sent_icon} ")
+                r_sent.font.size = Pt(9)
+
+                r_titre = ap.add_run(f"{titre_alerte[:100]}  ")
+                r_titre.bold = True
+                r_titre.font.size = Pt(9)
+                r_titre.font.color.rgb = s_color
+
+                if categorie_a:
+                    r_cat = ap.add_run(f"[{categorie_a}]  ")
+                    r_cat.font.size = Pt(8)
+                    r_cat.font.color.rgb = RGBColor(100,100,100)
+
+                if pertinence_a and pd.notna(pertinence_a):
+                    r_pert = ap.add_run(f"Pertinence: {int(pertinence_a)}/10")
+                    r_pert.font.size = Pt(8)
+                    r_pert.font.color.rgb = RGBColor(120,120,120)
+
+                if resume_alerte and resume_alerte != titre_alerte[:80]:
+                    ap2 = doc.add_paragraph()
+                    ap2.paragraph_format.left_indent = Pt(20)
+                    ap2.paragraph_format.space_before = Pt(0)
+                    ap2.paragraph_format.space_after  = Pt(4)
+                    r_res = ap2.add_run(resume_alerte)
+                    r_res.font.size = Pt(8.5)
+                    r_res.font.color.rgb = RGBColor(50,50,50)
+        else:
+            doc.add_paragraph("Aucun événement récent enregistré.")
+
         doc.add_page_break()
-        
+
+        # ========== CLASSEMENT 47 SOCIÉTÉS PAR SCORE COMPOSITE ==========
+        doc.add_heading('🏆 CLASSEMENT DES SOCIÉTÉS — SCORE COMPOSITE /100', level=1)
+        doc.add_paragraph(
+            "Les 47 sociétés sont classées par score composite (Technique 30% + Fondamental 40% "
+            "+ Risque 20% + Liquidité 10%). Ce tableau est l'outil de référence pour une décision rapide."
+        )
+        doc.add_paragraph()
+
+        # Trier par score décroissant
+        ranked = sorted(
+            [(sym, d) for sym, d in all_company_data.items()],
+            key=lambda x: x[1].get('investment_score', 0),
+            reverse=True
+        )
+
+        score_tbl = doc.add_table(rows=1, cols=8)
+        score_tbl.style = 'Light Grid Accent 1'
+        hdrs = ['#', 'Symbole', 'Secteur', 'Prix (FCFA)', 'Score /100', 'Signal Tech', 'Signal Fond', 'Recommandation']
+        hcells = score_tbl.rows[0].cells
+        for ci, h in enumerate(hdrs):
+            hcells[ci].text = h
+            hcells[ci].paragraphs[0].runs[0].bold = True
+            hcells[ci].paragraphs[0].runs[0].font.size = Pt(8.5)
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:fill'), '1F4E79')
+            shd.set(qn('w:val'), 'clear')
+            hcells[ci]._element.get_or_add_tcPr().append(shd)
+            hcells[ci].paragraphs[0].runs[0].font.color.rgb = RGBColor(255,255,255)
+
+        for rank, (sym, d) in enumerate(ranked, 1):
+            row_cells = score_tbl.add_row().cells
+            sc = d.get('investment_score', 0)
+            lbl = d.get('investment_label','—')
+            rec = d.get('recommendation','—')
+            td  = d.get('technical_decision','—')
+            fd  = d.get('fundamental_decision','—')
+
+            # Couleur ligne selon score
+            if   sc >= 70: row_bg = 'C6EFCE'
+            elif sc >= 55: row_bg = 'EBF5FB'
+            elif sc >= 40: row_bg = 'FEFEFE'
+            else:          row_bg = 'FCE4D6'
+
+            vals = [
+                str(rank),
+                sym,
+                str(d.get('sector','—') or '—')[:18],
+                f"{d.get('current_price',0):,.0f}" if d.get('current_price') else '—',
+                f"{sc}/100  ({lbl})",
+                td,
+                fd,
+                rec,
+            ]
+            for ci, val in enumerate(vals):
+                row_cells[ci].text = val
+                run = row_cells[ci].paragraphs[0].runs[0] if row_cells[ci].paragraphs[0].runs else row_cells[ci].paragraphs[0].add_run(val)
+                run.font.size = Pt(8)
+                shd2 = OxmlElement('w:shd')
+                shd2.set(qn('w:fill'), row_bg)
+                shd2.set(qn('w:val'), 'clear')
+                row_cells[ci]._element.get_or_add_tcPr().append(shd2)
+                # Coloration recommandation
+                if ci == 7:
+                    if   'ACHAT' in rec.upper(): run.font.color.rgb = RGBColor(0,128,0)
+                    elif 'VENTE' in rec.upper(): run.font.color.rgb = RGBColor(192,0,0)
+                # Score en gras
+                if ci == 4:
+                    run.bold = True
+
+        doc.add_paragraph()
+        doc.add_page_break()
+
+        # ========== PORTEFEUILLES MODÈLES ==========
+        doc.add_heading('💼 PORTEFEUILLES MODÈLES', level=1)
+        doc.add_paragraph(
+            "Trois portefeuilles construits automatiquement selon le score composite, "
+            "le niveau de risque et la liquidité. Les pondérations sont indicatives et "
+            "équipondérées. Position cash recommandée incluse."
+        )
+        doc.add_paragraph()
+
+        portfolios = self._build_model_portfolios(all_company_data)
+        port_configs = [
+            ('defensif',  '🔵 Portefeuille DÉFENSIF',
+             'Faible risque, haute liquidité, score ≥ 45. Adapté aux investisseurs prudents.'),
+            ('equilibre', '🟢 Portefeuille ÉQUILIBRÉ',
+             'Risque faible à moyen, score ≥ 50. Le meilleur rapport rendement/risque.'),
+            ('offensif',  '🔴 Portefeuille OFFENSIF',
+             'Meilleurs scores (≥ 60), tous niveaux de risque. Pour investisseurs avertis.'),
+        ]
+        PORT_COLORS = {'defensif':'DEEAF1','equilibre':'E2EFDA','offensif':'FCE4D6'}
+
+        for port_key, port_title, port_desc in port_configs:
+            entries_w, cash_pct = portfolios[port_key]
+            doc.add_heading(port_title, level=3)
+            dp = doc.add_paragraph(port_desc)
+            dp.runs[0].font.size = Pt(9)
+            dp.runs[0].font.italic = True
+
+            if not entries_w:
+                doc.add_paragraph("ℹ️ Aucun titre ne satisfait les critères ce jour.")
+                doc.add_paragraph()
+                continue
+
+            # Tableau du portefeuille
+            ptbl = doc.add_table(rows=1, cols=5)
+            ptbl.style = 'Light Grid Accent 1'
+            phdrs = ['Symbole', 'Société', 'Prix (FCFA)', 'Score /100', 'Poids %']
+            phcells = ptbl.rows[0].cells
+            for ci, ph in enumerate(phdrs):
+                phcells[ci].text = ph
+                phcells[ci].paragraphs[0].runs[0].bold = True
+                phcells[ci].paragraphs[0].runs[0].font.size = Pt(8.5)
+                pshd = OxmlElement('w:shd')
+                pshd.set(qn('w:fill'), '2E74B5')
+                pshd.set(qn('w:val'), 'clear')
+                phcells[ci]._element.get_or_add_tcPr().append(pshd)
+                phcells[ci].paragraphs[0].runs[0].font.color.rgb = RGBColor(255,255,255)
+
+            for entry, weight in entries_w:
+                pr = ptbl.add_row().cells
+                vals = [
+                    entry['sym'],
+                    (entry['name'] or '')[:28],
+                    f"{entry['price']:,.0f}" if entry['price'] else '—',
+                    f"{entry['score']}/100",
+                    f"{weight}%",
+                ]
+                for ci, vp in enumerate(vals):
+                    pr[ci].text = vp
+                    run = pr[ci].paragraphs[0].runs[0] if pr[ci].paragraphs[0].runs else pr[ci].paragraphs[0].add_run(vp)
+                    run.font.size = Pt(8.5)
+                    pshd2 = OxmlElement('w:shd')
+                    pshd2.set(qn('w:fill'), PORT_COLORS.get(port_key,'FFFFFF'))
+                    pshd2.set(qn('w:val'), 'clear')
+                    pr[ci]._element.get_or_add_tcPr().append(pshd2)
+
+            # Ligne cash
+            cash_row = ptbl.add_row().cells
+            cash_vals = ['CASH', 'Liquidités', '—', '—', f"{cash_pct}%"]
+            for ci, vp in enumerate(cash_vals):
+                cash_row[ci].text = vp
+                run = cash_row[ci].paragraphs[0].runs[0] if cash_row[ci].paragraphs[0].runs else cash_row[ci].paragraphs[0].add_run(vp)
+                run.font.size = Pt(8.5)
+                run.font.italic = True
+                run.font.color.rgb = RGBColor(80,80,80)
+
+            doc.add_paragraph()
+
+        doc.add_page_break()
+
+        # ========== ALERTES DU JOUR ==========
+        doc.add_heading('⚡ ALERTES DU JOUR', level=1)
+        doc.add_paragraph(
+            "Sociétés présentant des signaux extrêmes ou des incohérences majeures "
+            "nécessitant une attention particulière avant toute décision."
+        )
+        doc.add_paragraph()
+
+        alerts_list = []
+        for sym, d in all_company_data.items():
+            rsi_val  = d.get('rsi_value')
+            price    = d.get('current_price') or 0
+            high100  = d.get('highest_price_100d') or 0
+            low100   = d.get('lowest_price_100d') or 0
+            td       = str(d.get('technical_decision','')).upper()
+            fd       = str(d.get('fundamental_decision','')).upper()
+            rec      = str(d.get('recommendation','')).upper()
+
+            alert_msgs = []
+
+            # RSI extrêmes
+            if rsi_val and pd.notna(rsi_val):
+                rsi_f = float(rsi_val)
+                if rsi_f > 70:
+                    alert_msgs.append(f"🔴 RSI surachat ({rsi_f:.1f} > 70) — risque de correction")
+                elif rsi_f < 30:
+                    alert_msgs.append(f"🟢 RSI survente ({rsi_f:.1f} < 30) — opportunité potentielle")
+
+            # Cours proche des bornes 100j
+            if price and high100 and high100 > 0:
+                dist_high = (high100 - price) / high100 * 100
+                if dist_high < 3:
+                    alert_msgs.append(f"⚠️ Cours à {dist_high:.1f}% du plus haut 100j ({high100:,.0f} FCFA)")
+            if price and low100 and low100 > 0:
+                dist_low = (price - low100) / low100 * 100
+                if dist_low < 3:
+                    alert_msgs.append(f"⚠️ Cours à {dist_low:.1f}% du plus bas 100j ({low100:,.0f} FCFA)")
+
+            # Incohérence tech ↔ fond + recommandation ⚠️
+            if '⚠️' in rec or (
+                ('ACHAT' in td and 'VENTE' in fd) or
+                ('VENTE' in td and 'ACHAT' in fd)
+            ):
+                alert_msgs.append(
+                    f"🟠 Divergence tech({td}) / fond({fd}) — recommandation ajustée à {rec}"
+                )
+
+            if alert_msgs:
+                alerts_list.append((sym, d.get('company_name',''), alert_msgs))
+
+        if alerts_list:
+            for sym, cname, msgs in sorted(alerts_list, key=lambda x: len(x[2]), reverse=True):
+                ahdr = doc.add_paragraph()
+                ahdr.paragraph_format.space_before = Pt(6)
+                ahdr.add_run(f"{sym} — {cname}").bold = True
+                ahdr.runs[-1].font.size = Pt(10)
+                ahdr.runs[-1].font.color.rgb = RGBColor(0,80,160)
+                for msg in msgs:
+                    am = doc.add_paragraph(style='List Bullet')
+                    am.paragraph_format.left_indent = Pt(20)
+                    am.paragraph_format.space_before = Pt(1)
+                    am.add_run(msg).font.size = Pt(9)
+        else:
+            doc.add_paragraph("✅ Aucune alerte majeure ce jour.")
+
+        doc.add_page_break()
+
         # ========== TABLE DES MATIÈRES ==========
         doc.add_heading('TABLE DES MATIÈRES - ANALYSES DÉTAILLÉES', level=1)
         for idx, (symbol, data) in enumerate(sorted(all_company_data.items()), 1):
@@ -1936,7 +2993,124 @@ RAPPELS IMPÉRATIFS:
                     val_row[col_i].paragraphs[0].runs[0].font.size = Pt(8)
                 
                 doc.add_paragraph()
-            
+
+            # ── Feux tricolores indicateurs techniques ──────────────────────────
+            tech_indicators = [
+                ('MM',          company_data.get('mm_decision')),
+                ('Bollinger',   company_data.get('bollinger_decision')),
+                ('MACD',        company_data.get('macd_decision')),
+                ('RSI',         company_data.get('rsi_decision')),
+                ('Stochastique',company_data.get('stochastic_decision')),
+            ]
+            feux_p = doc.add_paragraph()
+            feux_p.paragraph_format.space_before = Pt(4)
+            feux_p.paragraph_format.space_after  = Pt(2)
+            feux_p.add_run("Signaux techniques : ").bold = True
+            for ind_name, ind_val in tech_indicators:
+                iv = str(ind_val or '').upper()
+                if   'ACHAT' in iv: icon, col = '🟢', RGBColor(0,128,0)
+                elif 'VENTE' in iv: icon, col = '🔴', RGBColor(192,0,0)
+                else:               icon, col = '🟡', RGBColor(160,120,0)
+                r_icon = feux_p.add_run(f"{icon} {ind_name}  ")
+                r_icon.font.size = Pt(9)
+                r_icon.font.color.rgb = col
+
+            # ── Score composite bandeau ──────────────────────────────────────────
+            inv_score = company_data.get('investment_score', 0)
+            inv_label = company_data.get('investment_label', '—')
+            score_p = doc.add_paragraph()
+            score_p.paragraph_format.space_before = Pt(4)
+            score_p.paragraph_format.space_after  = Pt(4)
+            sr1 = score_p.add_run("Score composite : ")
+            sr1.bold = True
+            sr1.font.size = Pt(11)
+            sr2 = score_p.add_run(f"{inv_score}/100  ({inv_label})")
+            sr2.bold = True
+            sr2.font.size = Pt(13)
+            if   inv_score >= 70: sr2.font.color.rgb = RGBColor(0,128,0)
+            elif inv_score >= 55: sr2.font.color.rgb = RGBColor(0,100,160)
+            elif inv_score >= 40: sr2.font.color.rgb = RGBColor(160,100,0)
+            else:                 sr2.font.color.rgb = RGBColor(192,0,0)
+            doc.add_paragraph()
+
+            # ── Graphique cours + volumes ────────────────────────────────────────
+            hist_df_chart = self._get_historical_data_100days(company_data.get('company_id'))
+            chart_buf = self._generate_price_chart(symbol, hist_df_chart)
+            if chart_buf:
+                try:
+                    doc.add_picture(chart_buf, width=Inches(6.2))
+                    last_pic = doc.paragraphs[-1]
+                    last_pic.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    doc.add_paragraph()
+                except Exception as ce:
+                    logging.warning(f"⚠️  Insertion image {symbol}: {ce}")
+
+            # ── Tableau prédictions J+1 → J+10 avec IC ──────────────────────────
+            preds_full = company_data.get('predictions_full', [])
+            current_price = company_data.get('current_price') or 0
+            if preds_full:
+                doc.add_heading('🔮 Prédictions J+1 à J+10 (Intervalle de Confiance 90%)', level=3)
+                pred_tbl = doc.add_table(rows=1, cols=6)
+                pred_tbl.style = 'Light Grid Accent 1'
+                pred_hdrs = ['Jour', 'Date', 'Borne basse', 'Prix prédit', 'Borne haute', 'Var. % / actuel']
+                ph_cells = pred_tbl.rows[0].cells
+                for ci, ph in enumerate(pred_hdrs):
+                    ph_cells[ci].text = ph
+                    r = ph_cells[ci].paragraphs[0].runs[0]
+                    r.bold = True
+                    r.font.size = Pt(8.5)
+                    shd_ph = OxmlElement('w:shd')
+                    shd_ph.set(qn('w:fill'), '1F4E79')
+                    shd_ph.set(qn('w:val'), 'clear')
+                    ph_cells[ci]._element.get_or_add_tcPr().append(shd_ph)
+                    r.font.color.rgb = RGBColor(255,255,255)
+
+                for ji, pred in enumerate(preds_full[:10], 1):
+                    pr = pred_tbl.add_row().cells
+                    pprice = pred.get('price') or 0
+                    plower = pred.get('lower')
+                    pupper = pred.get('upper')
+                    pconf  = pred.get('confidence','')
+                    pdate  = str(pred.get('date',''))[:10]
+                    var_pct= ((pprice - current_price) / current_price * 100) if current_price else 0
+
+                    # Couleur ligne
+                    if   var_pct >  2: row_cl = 'C6EFCE'
+                    elif var_pct < -2: row_cl = 'FFDCE0'
+                    else:              row_cl = 'FAFAFA'
+
+                    conf_stars = {'Élevée':'⭐⭐⭐','Moyen':'⭐⭐','Faible':'⭐'}.get(pconf, pconf)
+
+                    vals_p = [
+                        f"J+{ji}  {conf_stars}",
+                        pdate,
+                        f"{plower:,.0f}" if plower else '—',
+                        f"{pprice:,.0f}",
+                        f"{pupper:,.0f}" if pupper else '—',
+                        f"{'+'if var_pct>=0 else ''}{var_pct:.1f}%",
+                    ]
+                    for ci, vp in enumerate(vals_p):
+                        pr[ci].text = vp
+                        run_p = pr[ci].paragraphs[0].runs[0] if pr[ci].paragraphs[0].runs else pr[ci].paragraphs[0].add_run(vp)
+                        run_p.font.size = Pt(8.5)
+                        shd_pr = OxmlElement('w:shd')
+                        shd_pr.set(qn('w:fill'), row_cl)
+                        shd_pr.set(qn('w:val'), 'clear')
+                        pr[ci]._element.get_or_add_tcPr().append(shd_pr)
+                        if ci == 3:   # Prix prédit en gras
+                            run_p.bold = True
+                        if ci == 5:   # Variation colorée
+                            run_p.font.color.rgb = RGBColor(0,128,0) if var_pct >= 0 else RGBColor(192,0,0)
+                            run_p.bold = True
+
+                doc.add_paragraph()
+                doc.add_paragraph(
+                    "⚠️ Les prédictions sont des estimations statistiques (modèles GRU/LSTM). "
+                    "L'intervalle de confiance à 90% indique que 9 fois sur 10, le cours devrait "
+                    "se situer entre la borne basse et la borne haute. ⭐⭐⭐ = confiance élevée."
+                ).runs[0].font.size = Pt(8)
+                doc.add_paragraph()
+
             paragraphs = analysis.split('\n\n')
             for para_text in paragraphs:
                 if para_text.strip():
@@ -1951,8 +3125,239 @@ RAPPELS IMPÉRATIFS:
                         p.paragraph_format.space_before = Pt(12)
             
             doc.add_paragraph()
+
+            # ═══════ SECTION brvm_documents ═══════════════════════════════════════
+            brvm_docs_raw = company_data.get('brvm_docs_raw', [])
+            if not brvm_docs_raw:
+                # Fallback: chercher dans all_analyses via data_dict (cas où non propagé)
+                pass
+            if brvm_docs_raw:
+                doc.add_paragraph()
+                hdg = doc.add_heading('📎 DOCUMENTS & COMMUNICATIONS OFFICIELS BRVM', level=3)
+                hdg.runs[0].font.color.rgb = RGBColor(0, 70, 127)
+
+                nb_docs_display = min(len(brvm_docs_raw), 5)
+                intro_p = doc.add_paragraph()
+                intro_run = intro_p.add_run(
+                    f"{len(brvm_docs_raw)} document(s) disponible(s) pour cette société "
+                    f"(affichage des {nb_docs_display} plus récents)."
+                )
+                intro_run.font.size = Pt(9)
+                intro_run.font.italic = True
+                intro_run.font.color.rgb = RGBColor(100, 100, 100)
+
+                for doc_i, raw_doc in enumerate(brvm_docs_raw[:5], 1):
+                    d = self._format_brvm_documents_for_word(raw_doc, doc_i)
+
+                    # En-tête du document
+                    doc_hdr = doc.add_paragraph()
+                    doc_hdr.paragraph_format.space_before = Pt(8)
+                    run_num = doc_hdr.add_run(f"[{d['num']}] ")
+                    run_num.bold = True
+                    run_num.font.size = Pt(10)
+                    run_num.font.color.rgb = RGBColor(0, 102, 204)
+                    run_titre = doc_hdr.add_run(d['titre'])
+                    run_titre.bold = True
+                    run_titre.font.size = Pt(10)
+
+                    # Méta-ligne : date + catégorie + impact
+                    meta_p = doc.add_paragraph()
+                    meta_p.paragraph_format.left_indent = Pt(20)
+                    meta_p.paragraph_format.space_before = Pt(1)
+                    meta_run = meta_p.add_run(
+                        f"Date : {d['date_doc']}  |  Catégorie : {d['categorie']}  |  Impact : "
+                    )
+                    meta_run.font.size = Pt(8.5)
+                    meta_run.font.color.rgb = RGBColor(80, 80, 80)
+                    impact_run = meta_p.add_run(d['impact'])
+                    impact_run.font.size = Pt(8.5)
+                    impact_run.bold = True
+                    impact_run.font.color.rgb = d['impact_color']
+
+                    # Résumé
+                    if d['resume']:
+                        resume_p = doc.add_paragraph()
+                        resume_p.paragraph_format.left_indent = Pt(20)
+                        resume_p.paragraph_format.space_before = Pt(2)
+                        resume_run = resume_p.add_run(d['resume'][:700])
+                        resume_run.font.size = Pt(9)
+                        if len(d['resume']) > 700:
+                            resume_p.add_run("…").font.size = Pt(9)
+
+                    # Points clés (si disponibles)
+                    if d['points']:
+                        pk_hdr = doc.add_paragraph()
+                        pk_hdr.paragraph_format.left_indent = Pt(20)
+                        pk_hdr.paragraph_format.space_before = Pt(3)
+                        pk_hdr.add_run("Points clés :").bold = True
+                        pk_hdr.runs[-1].font.size = Pt(9)
+                        for pt in d['points']:
+                            pk_p = doc.add_paragraph(style='List Bullet')
+                            pk_p.paragraph_format.left_indent = Pt(35)
+                            pk_p.paragraph_format.space_before = Pt(1)
+                            pk_p.paragraph_format.space_after = Pt(1)
+                            pk_run = pk_p.add_run(str(pt)[:200])
+                            pk_run.font.size = Pt(9)
+
+                    # Séparateur léger entre documents
+                    if doc_i < nb_docs_display:
+                        sep_p = doc.add_paragraph()
+                        sep_p.paragraph_format.left_indent = Pt(20)
+                        sep_run = sep_p.add_run("· " * 30)
+                        sep_run.font.size = Pt(7)
+                        sep_run.font.color.rgb = RGBColor(180, 180, 180)
+
+
+            # ═══════ SECTION brvm_rapports_societes ═══════════════════════════════
+            brvm_rapports_raw = company_data.get('brvm_rapports_raw', [])
+            if brvm_rapports_raw:
+                doc.add_paragraph()
+                hdg2 = doc.add_heading('📋 RAPPORTS & COMMUNIQUÉS OFFICIELS', level=3)
+                hdg2.runs[0].font.color.rgb = RGBColor(0, 90, 50)
+
+                nb_rap_display = min(len(brvm_rapports_raw), 5)
+                intro2 = doc.add_paragraph()
+                ir = intro2.add_run(
+                    f"{len(brvm_rapports_raw)} rapport(s)/communiqué(s) disponible(s) "
+                    f"(affichage des {nb_rap_display} plus récents)."
+                )
+                ir.font.size = Pt(9)
+                ir.font.italic = True
+                ir.font.color.rgb = RGBColor(100, 100, 100)
+
+                for ri, raw_rap in enumerate(brvm_rapports_raw[:5], 1):
+                    r = self._format_rapports_societes_for_word(raw_rap, ri)
+
+                    # ── En-tête ──────────────────────────────────────────────────
+                    rhdr = doc.add_paragraph()
+                    rhdr.paragraph_format.space_before = Pt(8)
+                    run_ri = rhdr.add_run(f"[{r['idx']}] ")
+                    run_ri.bold = True
+                    run_ri.font.size = Pt(10)
+                    run_ri.font.color.rgb = RGBColor(0, 120, 60)
+                    run_rt = rhdr.add_run(r['doc_titre'])
+                    run_rt.bold = True
+                    run_rt.font.size = Pt(10)
+
+                    # ── Méta ─────────────────────────────────────────────────────
+                    rmeta = doc.add_paragraph()
+                    rmeta.paragraph_format.left_indent = Pt(20)
+                    rmeta.paragraph_format.space_before = Pt(1)
+                    meta_txt = f"Année : {r['annee']}"
+                    if r['type_rapport']:
+                        meta_txt += f"  |  Type : {r['type_rapport']}"
+                    if r['date_rapport']:
+                        meta_txt += f"  |  Date : {r['date_rapport']}"
+                    rmr = rmeta.add_run(meta_txt)
+                    rmr.font.size = Pt(8.5)
+                    rmr.font.color.rgb = RGBColor(80, 80, 80)
+
+                    # ── Recommandation source ────────────────────────────────────
+                    if r['recommandation']:
+                        rrec = doc.add_paragraph()
+                        rrec.paragraph_format.left_indent = Pt(20)
+                        rrec.paragraph_format.space_before = Pt(1)
+                        rrec.add_run("Recommandation source : ").font.size = Pt(9)
+                        rrec.runs[-1].bold = True
+                        rec_run = rrec.add_run(r['recommandation'])
+                        rec_run.font.size = Pt(9)
+                        rec_run.bold = True
+                        rec_run.font.color.rgb = r['rec_color']
+
+                    # ── Résumé ───────────────────────────────────────────────────
+                    if r['resume']:
+                        rres = doc.add_paragraph()
+                        rres.paragraph_format.left_indent = Pt(20)
+                        rres.paragraph_format.space_before = Pt(2)
+                        rres_run = rres.add_run(r['resume'][:700])
+                        rres_run.font.size = Pt(9)
+                        if len(r['resume']) > 700:
+                            rres.add_run("…").font.size = Pt(9)
+
+                    # ── Indicateurs financiers ───────────────────────────────────
+                    if r['indicateurs']:
+                        rind_hdr = doc.add_paragraph()
+                        rind_hdr.paragraph_format.left_indent = Pt(20)
+                        rind_hdr.paragraph_format.space_before = Pt(3)
+                        rind_hdr_run = rind_hdr.add_run("Indicateurs financiers :")
+                        rind_hdr_run.bold = True
+                        rind_hdr_run.font.size = Pt(9)
+
+                        # Tableau compact indicateurs
+                        ind_items = list(r['indicateurs'].items())
+                        if ind_items:
+                            ind_tbl = doc.add_table(rows=1, cols=min(len(ind_items), 4))
+                            ind_tbl.style = 'Light Grid Accent 1'
+                            ind_tbl.paragraph_format = None
+                            hcells = ind_tbl.rows[0].cells
+                            for ci, (k, v) in enumerate(ind_items[:4]):
+                                hcells[ci].text = ''
+                                ph = hcells[ci].paragraphs[0]
+                                ph.paragraph_format.left_indent = Pt(5)
+                                rk = ph.add_run(f"{k}\n")
+                                rk.bold = True
+                                rk.font.size = Pt(8)
+                                rv = ph.add_run(str(v))
+                                rv.font.size = Pt(9)
+                            # Deuxième ligne si > 4 indicateurs
+                            if len(ind_items) > 4:
+                                row2 = ind_tbl.add_row().cells
+                                for ci, (k, v) in enumerate(ind_items[4:8]):
+                                    row2[ci].text = ''
+                                    ph2 = row2[ci].paragraphs[0]
+                                    rk2 = ph2.add_run(f"{k}\n")
+                                    rk2.bold = True
+                                    rk2.font.size = Pt(8)
+                                    rv2 = ph2.add_run(str(v))
+                                    rv2.font.size = Pt(9)
+                            doc.add_paragraph()
+
+                    # ── Points clés ──────────────────────────────────────────────
+                    if r['points']:
+                        rpk_hdr = doc.add_paragraph()
+                        rpk_hdr.paragraph_format.left_indent = Pt(20)
+                        rpk_hdr.paragraph_format.space_before = Pt(3)
+                        rpk_hdr.add_run("Points clés :").bold = True
+                        rpk_hdr.runs[-1].font.size = Pt(9)
+                        for pt in r['points']:
+                            rpk_p = doc.add_paragraph(style='List Bullet')
+                            rpk_p.paragraph_format.left_indent = Pt(35)
+                            rpk_p.paragraph_format.space_before = Pt(1)
+                            rpk_p.paragraph_format.space_after = Pt(1)
+                            rpk_p.add_run(str(pt)[:200]).font.size = Pt(9)
+
+                    # ── Risques ──────────────────────────────────────────────────
+                    if r['risques']:
+                        rrisk = doc.add_paragraph()
+                        rrisk.paragraph_format.left_indent = Pt(20)
+                        rrisk.paragraph_format.space_before = Pt(2)
+                        rrisk.add_run("⚠️ Risques : ").bold = True
+                        rrisk.runs[-1].font.size = Pt(9)
+                        rrisk.runs[-1].font.color.rgb = RGBColor(192, 80, 0)
+                        rrisk.add_run(r['risques'][:300]).font.size = Pt(9)
+
+                    # ── Perspectives ─────────────────────────────────────────────
+                    if r['perspectives']:
+                        rpersp = doc.add_paragraph()
+                        rpersp.paragraph_format.left_indent = Pt(20)
+                        rpersp.paragraph_format.space_before = Pt(2)
+                        rpersp.add_run("🔮 Perspectives : ").bold = True
+                        rpersp.runs[-1].font.size = Pt(9)
+                        rpersp.runs[-1].font.color.rgb = RGBColor(0, 100, 160)
+                        rpersp.add_run(r['perspectives'][:300]).font.size = Pt(9)
+
+                    # ── Séparateur ───────────────────────────────────────────────
+                    if ri < nb_rap_display:
+                        sep_rp = doc.add_paragraph()
+                        sep_rp.paragraph_format.left_indent = Pt(20)
+                        sep_rp.add_run("· " * 30).font.size = Pt(7)
+                        sep_rp.runs[-1].font.color.rgb = RGBColor(180, 180, 180)
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # ═══════════════════════════════════════════════════════════════════════
+            doc.add_paragraph()
             doc.add_paragraph("═" * 80)
-            
+
             if idx % 2 == 0 and idx < len(all_analyses):
                 doc.add_page_break()
         
@@ -2057,9 +3462,35 @@ RAPPELS IMPÉRATIFS:
             return
         
         predictions_df = self._get_predictions_from_db()
+        brvm_docs_by_symbol     = self._get_brvm_documents()
+        brvm_rapports_by_symbol = self._get_brvm_rapports_societes()
         
         logging.info(f"🤖 Génération de {len(df)} analyse(s) avec rotation Multi-AI...")
-        
+
+        # ── Fonction locale : confiance dynamique ─────────────────────────────
+        def _dynamic_confidence(tech_dec, fund_dec, rec_score):
+            """
+            Calcule un niveau de confiance selon la convergence tech / fondamental.
+            Élevée  : tech et fond convergent ET score ≥ 4
+            Faible  : forte divergence (ACHAT vs VENTE)
+            Moyen   : tous les autres cas
+            """
+            td = str(tech_dec).upper()
+            fd = str(fund_dec).upper()
+            # Convergence forte
+            if td == fd and td != 'NEUTRE' and rec_score >= 4:
+                return 'Élevée'
+            # Divergence directe ACHAT ↔ VENTE
+            if (('ACHAT' in td and 'VENTE' in fd) or
+                ('VENTE' in td and 'ACHAT' in fd)):
+                return 'Faible'
+            # Score extrême même sans convergence parfaite
+            if rec_score == 5:
+                return 'Élevée'
+            if rec_score == 1:
+                return 'Faible'
+            return 'Moyen'
+
         all_analyses = {}
         all_company_data = {}
         
@@ -2112,8 +3543,18 @@ RAPPELS IMPÉRATIFS:
                         if not summary:
                             continue
                         try:
+                            from datetime import date as _date
                             report_year = int(report_date_str[:4])
-                            date_label = f"{report_date_str} ⭐ RÉCENT" if report_year >= 2025 else report_date_str
+                            report_month = int(report_date_str[5:7]) if len(report_date_str) >= 7 else 1
+                            today = _date.today()
+                            months_ago = (today.year - report_year) * 12 + (today.month - report_month)
+                            if months_ago <= 3:
+                                freshness = "⭐ RÉCENT"
+                            elif months_ago <= 12:
+                                freshness = "📅 À JOUR"
+                            else:
+                                freshness = "⚠️ ANCIEN"
+                            date_label = f"{report_date_str} {freshness}"
                         except Exception:
                             date_label = report_date_str
                         fundamental_parts.append(
@@ -2153,21 +3594,57 @@ RAPPELS IMPÉRATIFS:
                 'stochastic_d': row.get('stochastic_d'),
                 'stochastic_decision': row.get('stochastic_decision'),
                 'fundamental_analyses': fundamental_text if fundamental_text else "Aucun rapport financier enregistré en base pour cette société.",
-                'predictions': []
+                'predictions': [],
+                'brvm_docs_raw': []
             }
-            
+
+            # ── Enrichissement avec brvm_documents ─────────────────────────────
+            symbol_brvm_docs = brvm_docs_by_symbol.get(symbol, [])
+            brvm_docs_text = self._format_brvm_documents_for_ai(symbol_brvm_docs)
+            if brvm_docs_text:
+                nb_docs = len(symbol_brvm_docs)
+                logging.info(f'   📎 {symbol}: {nb_docs} document(s) brvm_documents disponibles')
+                separator = '\n\n' + '─'*60 + '\n📎 DOCUMENTS OFFICIELS BRVM (brvm_documents):\n' + '─'*60 + '\n'
+                existing = data_dict['fundamental_analyses']
+                if existing and 'Aucun rapport' not in existing:
+                    data_dict['fundamental_analyses'] = existing + separator + brvm_docs_text
+                else:
+                    data_dict['fundamental_analyses'] = separator.lstrip() + brvm_docs_text
+            data_dict['brvm_docs_raw'] = symbol_brvm_docs
+
+            # ── Enrichissement avec brvm_rapports_societes ──────────────────────
+            symbol_rapports = brvm_rapports_by_symbol.get(symbol, [])
+            rapports_text   = self._format_rapports_societes_for_ai(symbol_rapports)
+            if rapports_text:
+                nb_rap = len(symbol_rapports)
+                logging.info(f'   📋 {symbol}: {nb_rap} rapport(s) brvm_rapports_societes disponibles')
+                sep2 = ('\n\n' + '─'*60 +
+                        '\n📋 RAPPORTS & COMMUNIQUÉS (brvm_rapports_societes):\n' +
+                        '─'*60 + '\n')
+                existing2 = data_dict['fundamental_analyses']
+                if existing2 and 'Aucun rapport' not in existing2:
+                    data_dict['fundamental_analyses'] = existing2 + sep2 + rapports_text
+                else:
+                    data_dict['fundamental_analyses'] = sep2.lstrip() + rapports_text
+            data_dict['brvm_rapports_raw'] = symbol_rapports
+
             symbol_predictions = predictions_df[predictions_df['symbol'] == symbol]
             if not symbol_predictions.empty:
-                # Filtrer les prédictions avec des prix valides (non NULL)
+                # Récupérer prédictions complètes avec IC
                 data_dict['predictions'] = [
-                    {'date': row['prediction_date'], 'price': row['predicted_price']}
-                    for _, row in symbol_predictions.head(10).iterrows()
-                    if pd.notna(row['predicted_price'])
+                    {
+                        'date':       str(r['prediction_date']),
+                        'price':      float(r['predicted_price'])      if pd.notna(r['predicted_price'])  else None,
+                        'lower':      float(r['lower_bound'])          if pd.notna(r.get('lower_bound'))  else None,
+                        'upper':      float(r['upper_bound'])          if pd.notna(r.get('upper_bound'))  else None,
+                        'confidence': str(r.get('confidence_level','')) if pd.notna(r.get('confidence_level')) else '',
+                    }
+                    for _, r in symbol_predictions.head(10).iterrows()
+                    if pd.notna(r['predicted_price'])
                 ]
-                # Générer le texte seulement si des prédictions valides existent
                 if data_dict['predictions']:
                     pred_list = [
-                        f"{p['date']}: {p['price']:.0f} FCFA" 
+                        f"{p['date']}: {p['price']:.0f} FCFA"
                         for p in data_dict['predictions'][:5]
                         if p['price'] is not None
                     ]
@@ -2180,7 +3657,26 @@ RAPPELS IMPÉRATIFS:
             analysis = self._generate_professional_analysis(symbol, data_dict)
             all_analyses[symbol] = analysis
             
-            recommendation, rec_score = self._extract_recommendation_from_analysis(analysis)
+            # ── Décision technique préliminaire (avant appel recommendation) ──
+            _tech_sigs_pre = []
+            for _k in ['mm_decision','bollinger_decision','macd_decision',
+                       'rsi_decision','stochastic_decision']:
+                _v = row.get(_k)
+                if _v and pd.notna(_v):
+                    _tech_sigs_pre.append(str(_v))
+            _buy_pre  = sum(1 for s in _tech_sigs_pre if 'Achat' in s)
+            _sell_pre = sum(1 for s in _tech_sigs_pre if 'Vente' in s)
+            _td_pre   = 'ACHAT' if _buy_pre > _sell_pre else ('VENTE' if _sell_pre > _buy_pre else 'NEUTRE')
+
+            # ── Décision fondamentale préliminaire (depuis texte IA brut) ──────
+            _al_pre = analysis.lower()
+            if 'achat' in _al_pre:   _fd_pre = 'ACHAT'
+            elif 'vente' in _al_pre: _fd_pre = 'VENTE'
+            else:                    _fd_pre = 'NEUTRE'
+
+            recommendation, rec_score = self._extract_recommendation_from_analysis(
+                analysis, tech_decision=_td_pre, fund_decision=_fd_pre
+            )
             
             # ✅ V30: Calcul de la décision technique (majorité des indicateurs)
             tech_signals = []
@@ -2248,15 +3744,23 @@ RAPPELS IMPÉRATIFS:
                 'investment_conclusion': '',
                 'recommendation': recommendation,
                 'recommendation_score': rec_score,
-                'confidence_level': 'Moyen',
+                'confidence_level': _dynamic_confidence(technical_decision, fundamental_decision, rec_score),
                 'risk_level': risk_data['level'],  # ✅ V30: Niveau de risque calculé
                 'investment_horizon': 'Moyen terme',
                 # ✅ V30: Nouvelles colonnes
                 'technical_decision': technical_decision,
                 'fundamental_decision': fundamental_decision,
                 'risk_score': risk_data['score'],
-                'risk_details': json.dumps(risk_data['details'], ensure_ascii=False)
+                'risk_details': json.dumps(risk_data['details'], ensure_ascii=False),
+                # ✅ Sources documentaires enrichies
+                'brvm_docs_raw':     data_dict.get('brvm_docs_raw', []),
+                'brvm_rapports_raw': data_dict.get('brvm_rapports_raw', []),
+                'predictions_full':  data_dict.get('predictions', []),
             }
+            # ── Score composite d'investissement ────────────────────────────────
+            inv_score, inv_label = self._compute_investment_score(all_company_data[symbol])
+            all_company_data[symbol]['investment_score'] = inv_score
+            all_company_data[symbol]['investment_label'] = inv_label
         
         filename = self._create_word_document(all_analyses, all_company_data)
         
