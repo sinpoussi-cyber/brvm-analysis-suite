@@ -2205,11 +2205,11 @@ RAPPELS IMPÉRATIFS:
                     div = 1e9
 
                     def fmt_mds(val):
-                        """Formate une valeur en milliards avec séparateur français"""
+                        """Formate une valeur en milliards avec séparateur français (3 décimales)"""
                         mds = val / div
                         entier = int(mds)
-                        dec = round((mds - entier) * 100)
-                        return f"{entier:,}".replace(",", " ") + f",{dec:02d}"
+                        dec = round((mds - entier) * 1000)
+                        return f"{entier:,}".replace(",", " ") + f",{dec:03d}"
 
                     p_cap.add_run("La capitalisation boursière totale a évolué de ")
                     cap_run = p_cap.add_run(f"{cap_evol:+.2f}%")
@@ -3399,8 +3399,8 @@ RAPPELS IMPÉRATIFS:
             cap_val = market_indicators.get('capitalisation', 0)
             cap_mds = cap_val / 1e9
             cap_mds_entier = int(cap_mds)
-            cap_mds_dec = round((cap_mds - cap_mds_entier) * 100)
-            cap_mds_display = f"{cap_mds_entier:,}".replace(",", " ") + f",{cap_mds_dec:02d}"
+            cap_mds_dec = round((cap_mds - cap_mds_entier) * 1000)
+            cap_mds_display = f"{cap_mds_entier:,}".replace(",", " ") + f",{cap_mds_dec:03d}"
             synthesis_text = (
                 f"Analyse ULTIMATE de {len(all_analyses)} sociétés. "
                 f"Indices: BRVM Composite {market_indicators['composite']:.2f} pts. "
