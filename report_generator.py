@@ -709,23 +709,31 @@ class BRVMReportGenerator:
 
     def _get_google_alerts_events(self):
         """
-        Récupère les 10 alertes les plus récentes depuis google_alerts_rapports.
-        Fallback sur new_market_events si la table est vide ou absente.
+        Récupère les alertes depuis google_alerts_rapports.
+        Exploite toutes les colonnes disponibles : mail_subject, alert_keyword,
+        points_cles, mot_cle, rapport_type, pertinence, sentiment.
+        Fallback sur new_market_events si vide.
         """
-        logging.info("📰 Récupération google_alerts_rapports...")
+        logging.info("📰 Récupération google_alerts_rapports (enrichi)...")
         query = """
         SELECT
             mail_date,
+            mail_subject,
             titre,
             resume,
+            points_cles,
             sentiment,
             pertinence,
             categorie,
+            rapport_type,
+            alert_keyword,
+            mot_cle,
             source_url
         FROM google_alerts_rapports
-        WHERE resume IS NOT NULL AND resume <> ''
+        WHERE (resume IS NOT NULL AND resume <> '')
+           OR (mail_subject IS NOT NULL AND mail_subject <> '')
         ORDER BY mail_date DESC NULLS LAST
-        LIMIT 12;
+        LIMIT 20;
         """
         try:
             df = pd.read_sql(query, self.db_conn)
@@ -745,6 +753,39 @@ class BRVMReportGenerator:
             )
             return df2
         except Exception:
+            return pd.DataFrame()
+
+    def _get_brvm_actualites(self):
+        """
+        Charge les documents officiels récents (AG, dividendes, convocations,
+        résultats) depuis brvm_documents — toutes sociétés confondues.
+        Retourne un DataFrame trié par date décroissante.
+        """
+        logging.info("📄 Chargement actualités brvm_documents (AG/dividendes/convocations)...")
+        query = """
+        SELECT
+            societe_confirmee,
+            titre,
+            date_doc,
+            date_publication,
+            categorie,
+            type_document,
+            rapport_type,
+            resume,
+            points_cles,
+            impact,
+            doc_url
+        FROM brvm_documents
+        WHERE resume IS NOT NULL AND resume <> ''
+        ORDER BY date_doc DESC NULLS LAST, date_publication DESC NULLS LAST
+        LIMIT 30;
+        """
+        try:
+            df = pd.read_sql(query, self.db_conn)
+            logging.info(f"   ✅ {len(df)} document(s) brvm_documents chargés (vue globale)")
+            return df
+        except Exception as e:
+            logging.warning(f"⚠️  brvm_documents actualités: {e}")
             return pd.DataFrame()
 
     def _get_brvm_documents(self):
@@ -2653,67 +2694,230 @@ RAPPELS IMPÉRATIFS:
                 doc.add_paragraph()
         
         doc.add_page_break()
-        
-        # ========== ÉVÉNEMENTS MARQUANTS ==========
-        doc.add_heading('📰 FAITS MARQUANTS RÉCENTS', level=2)
-        # ── Faits marquants depuis google_alerts_rapports ──────────────────────
-        alerts_df = self._get_google_alerts_events()
-        if not alerts_df.empty:
-            for _, alert_row in alerts_df.head(10).iterrows():
-                ap = doc.add_paragraph()
-                ap.paragraph_format.space_before = Pt(3)
-                ap.paragraph_format.space_after  = Pt(3)
 
-                # Date
-                mail_date = alert_row.get('mail_date')
-                date_str  = mail_date.strftime('%d/%m/%Y') if hasattr(mail_date,'strftime') else str(mail_date)[:10]
+        # ================================================================
+        # ========== ACTUALITÉS DU MARCHÉ (page dédiée) ==================
+        # ================================================================
+        doc.add_heading('📰 ACTUALITÉS DU MARCHÉ BRVM', level=1)
+        doc.add_paragraph(
+            "Cette section regroupe les derniers documents officiels publiés par les "
+            "sociétés cotées (AG, dividendes, convocations, résultats) ainsi que les "
+            "alertes d'actualité financière collectées via Google Alerts."
+        ).runs[0].font.size = Pt(9)
+        doc.add_paragraph()
 
-                # Sentiment → couleur
-                sent = str(alert_row.get('sentiment','')).lower()
-                if   'positif' in sent or 'positive' in sent: s_color = RGBColor(0,128,0)
-                elif 'negatif' in sent or 'negative' in sent: s_color = RGBColor(192,0,0)
-                else:                                          s_color = RGBColor(80,80,80)
+        # ── A) Documents officiels BRVM : AG / dividendes / convocations ─────
+        doc.add_heading('📄 A — Documents officiels des sociétés cotées', level=2)
+        brvm_actu_df = self._get_brvm_actualites()
 
-                sent_icon = {'positif':'🟢','positive':'🟢','negatif':'🔴','negative':'🔴'}.get(sent,'⚪')
+        if not brvm_actu_df.empty:
+            # Grouper par catégorie pour structurer la section
+            CAT_ICONS = {
+                'ag':           ('🏛️',  'Assemblées Générales'),
+                'dividende':    ('💰',  'Dividendes'),
+                'convocation':  ('📩',  'Convocations'),
+                'résultats':    ('📊',  'Résultats financiers'),
+                'résultat':     ('📊',  'Résultats financiers'),
+                'rapport':      ('📋',  'Rapports annuels'),
+                'communiqué':   ('📢',  'Communiqués de presse'),
+                'avis':         ('ℹ️',  'Avis & informations'),
+            }
 
-                titre_alerte = str(alert_row.get('titre') or alert_row.get('resume','')[:80])
-                resume_alerte= str(alert_row.get('resume',''))[:300]
-                categorie_a  = str(alert_row.get('categorie',''))
-                pertinence_a = alert_row.get('pertinence')
+            # Grouper les documents par catégorie
+            cat_groups = {}
+            for _, row in brvm_actu_df.iterrows():
+                cat_raw = str(row.get('categorie') or row.get('type_document') or row.get('rapport_type') or 'Autre').lower().strip()
+                # Normaliser la catégorie
+                cat_key = 'autre'
+                for key in CAT_ICONS:
+                    if key in cat_raw:
+                        cat_key = key
+                        break
+                cat_groups.setdefault(cat_key, []).append(row)
 
-                r_date = ap.add_run(f"[{date_str}] ")
-                r_date.bold = True
-                r_date.font.size = Pt(9)
-                r_date.font.color.rgb = RGBColor(60,60,60)
+            # Afficher par catégorie
+            for cat_key, rows in sorted(cat_groups.items()):
+                icon, cat_label = CAT_ICONS.get(cat_key, ('📌', cat_key.capitalize()))
+                doc.add_heading(f"{icon} {cat_label} ({len(rows)} document(s))", level=3)
 
-                r_sent = ap.add_run(f"{sent_icon} ")
-                r_sent.font.size = Pt(9)
+                # Tableau compact pour cette catégorie
+                tbl = doc.add_table(rows=1, cols=5)
+                tbl.style = 'Light Grid Accent 1'
+                hdrs = ['Date', 'Société', 'Titre', 'Impact', 'Résumé']
+                hcells = tbl.rows[0].cells
+                for ci, h in enumerate(hdrs):
+                    hcells[ci].text = h
+                    r = hcells[ci].paragraphs[0].runs[0]
+                    r.bold = True
+                    r.font.size = Pt(8)
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:fill'), '1F4E79')
+                    shd.set(qn('w:val'), 'clear')
+                    hcells[ci]._element.get_or_add_tcPr().append(shd)
+                    r.font.color.rgb = RGBColor(255,255,255)
 
-                r_titre = ap.add_run(f"{titre_alerte[:100]}  ")
-                r_titre.bold = True
-                r_titre.font.size = Pt(9)
-                r_titre.font.color.rgb = s_color
+                for row in rows[:10]:
+                    tr = tbl.add_row().cells
+                    # Date
+                    date_val = str(row.get('date_doc') or row.get('date_publication') or '')[:10]
+                    # Société
+                    soc = str(row.get('societe_confirmee') or '')[:12]
+                    # Titre
+                    titre_doc = str(row.get('titre') or '')[:50]
+                    # Impact
+                    impact_raw = str(row.get('impact') or 'neutre').lower()
+                    impact_map = {'positif':'🟢 +','negatif':'🔴 -','neutre':'⚪ ='}
+                    impact_txt = impact_map.get(impact_raw, '⚪ =')
+                    # Résumé court
+                    res_court = str(row.get('resume') or '')[:120]
 
-                if categorie_a:
-                    r_cat = ap.add_run(f"[{categorie_a}]  ")
-                    r_cat.font.size = Pt(8)
-                    r_cat.font.color.rgb = RGBColor(100,100,100)
+                    vals = [date_val, soc, titre_doc, impact_txt, res_court]
+                    for ci, v in enumerate(vals):
+                        tr[ci].text = v
+                        run = tr[ci].paragraphs[0].runs[0] if tr[ci].paragraphs[0].runs else tr[ci].paragraphs[0].add_run(v)
+                        run.font.size = Pt(7.5)
+                        # Colorer impact
+                        if ci == 3:
+                            if '🟢' in v: run.font.color.rgb = RGBColor(0,128,0)
+                            elif '🔴' in v: run.font.color.rgb = RGBColor(192,0,0)
+                            run.bold = True
 
-                if pertinence_a and pd.notna(pertinence_a):
-                    r_pert = ap.add_run(f"Pertinence: {int(pertinence_a)}/10")
-                    r_pert.font.size = Pt(8)
-                    r_pert.font.color.rgb = RGBColor(120,120,120)
+                    # Points clés en dessous si disponibles
+                    pk = row.get('points_cles')
+                    pts = []
+                    if isinstance(pk, list): pts = [str(p) for p in pk[:3]]
+                    elif isinstance(pk, str) and pk.strip():
+                        try:
+                            import json as _j
+                            parsed = _j.loads(pk)
+                            pts = [str(p) for p in parsed[:3]] if isinstance(parsed,list) else []
+                        except Exception: pass
 
-                if resume_alerte and resume_alerte != titre_alerte[:80]:
-                    ap2 = doc.add_paragraph()
-                    ap2.paragraph_format.left_indent = Pt(20)
-                    ap2.paragraph_format.space_before = Pt(0)
-                    ap2.paragraph_format.space_after  = Pt(4)
-                    r_res = ap2.add_run(resume_alerte)
-                    r_res.font.size = Pt(8.5)
-                    r_res.font.color.rgb = RGBColor(50,50,50)
+                    if pts:
+                        pk_row = tbl.add_row().cells
+                        # Fusionner les 5 colonnes pour les points clés
+                        pk_para = pk_row[0].paragraphs[0]
+                        pk_para.add_run("  → " + " | ".join(pts)).font.size = Pt(7)
+                        pk_row[0].paragraphs[0].runs[-1].font.color.rgb = RGBColor(80,80,80)
+                        # Étendre sur 5 cols (merge)
+                        for merge_ci in range(1, 5):
+                            pk_row[0].merge(pk_row[merge_ci])
+
+                doc.add_paragraph()
         else:
-            doc.add_paragraph("Aucun événement récent enregistré.")
+            doc.add_paragraph("ℹ️ Aucun document officiel récent disponible dans la base de données.")
+
+        doc.add_paragraph()
+
+        # ── B) Alertes Google — actualités marché ────────────────────────────
+        doc.add_heading('🔔 B — Alertes Google & actualités financières', level=2)
+        alerts_df = self._get_google_alerts_events()
+
+        if not alerts_df.empty:
+            # Grouper par mot-clé / catégorie pour éviter la liste plate
+            alert_groups = {}
+            for _, alert_row in alerts_df.iterrows():
+                kw = str(alert_row.get('alert_keyword') or alert_row.get('mot_cle') or
+                         alert_row.get('categorie') or 'Marché BRVM').strip()
+                alert_groups.setdefault(kw, []).append(alert_row)
+
+            for kw, rows in alert_groups.items():
+                grp_hdr = doc.add_paragraph()
+                grp_hdr.paragraph_format.space_before = Pt(6)
+                grp_hdr.paragraph_format.space_after  = Pt(2)
+                rk = grp_hdr.add_run(f"🔑 {kw}  ({len(rows)} alerte(s))")
+                rk.bold = True
+                rk.font.size = Pt(10)
+                rk.font.color.rgb = RGBColor(0,70,127)
+
+                for alert_row in rows[:5]:
+                    ap = doc.add_paragraph()
+                    ap.paragraph_format.left_indent  = Pt(18)
+                    ap.paragraph_format.space_before = Pt(2)
+                    ap.paragraph_format.space_after  = Pt(2)
+
+                    # Date
+                    mail_date = alert_row.get('mail_date')
+                    date_str  = mail_date.strftime('%d/%m/%Y') if hasattr(mail_date,'strftime') else str(mail_date)[:10]
+
+                    # Sentiment
+                    sent = str(alert_row.get('sentiment','') or '').lower()
+                    s_color   = RGBColor(0,128,0) if 'positif' in sent else (RGBColor(192,0,0) if 'negatif' in sent else RGBColor(80,80,80))
+                    sent_icon = '🟢' if 'positif' in sent else ('🔴' if 'negatif' in sent else '⚪')
+
+                    # Titre : mail_subject > titre > resume[:80]
+                    titre_a = str(
+                        alert_row.get('mail_subject') or
+                        alert_row.get('titre') or
+                        str(alert_row.get('resume',''))[:80]
+                    )[:120]
+
+                    resume_a = str(alert_row.get('resume') or '')[:350]
+                    cat_a    = str(alert_row.get('categorie') or alert_row.get('rapport_type') or '')
+                    pert_a   = alert_row.get('pertinence')
+                    url_a    = str(alert_row.get('source_url') or '')[:80]
+
+                    # Ligne titre
+                    rd = ap.add_run(f"[{date_str}] {sent_icon}  ")
+                    rd.font.size = Pt(8.5)
+                    rd.font.color.rgb = RGBColor(100,100,100)
+                    rt = ap.add_run(titre_a)
+                    rt.bold = True
+                    rt.font.size = Pt(9)
+                    rt.font.color.rgb = s_color
+
+                    if cat_a:
+                        rc = ap.add_run(f"  [{cat_a}]")
+                        rc.font.size = Pt(7.5)
+                        rc.font.color.rgb = RGBColor(120,120,120)
+
+                    if pert_a and pd.notna(pert_a):
+                        rp = ap.add_run(f"  ★ {int(pert_a)}/10")
+                        rp.font.size = Pt(8)
+                        rp.font.color.rgb = RGBColor(180,120,0)
+
+                    # Résumé sur la ligne suivante
+                    if resume_a and resume_a.strip() and resume_a[:80] not in titre_a:
+                        ap_res = doc.add_paragraph()
+                        ap_res.paragraph_format.left_indent  = Pt(30)
+                        ap_res.paragraph_format.space_before = Pt(0)
+                        ap_res.paragraph_format.space_after  = Pt(1)
+                        rr = ap_res.add_run(resume_a)
+                        rr.font.size = Pt(8.5)
+                        rr.font.color.rgb = RGBColor(50,50,50)
+
+                    # Points clés de l'alerte
+                    pk_a = alert_row.get('points_cles')
+                    pts_a = []
+                    if isinstance(pk_a, list): pts_a = [str(p) for p in pk_a[:4]]
+                    elif isinstance(pk_a, str) and pk_a.strip():
+                        try:
+                            import json as _jj
+                            parsed = _jj.loads(pk_a)
+                            pts_a = [str(p) for p in parsed[:4]] if isinstance(parsed,list) else []
+                        except Exception: pass
+
+                    if pts_a:
+                        pk_para = doc.add_paragraph()
+                        pk_para.paragraph_format.left_indent  = Pt(30)
+                        pk_para.paragraph_format.space_before = Pt(0)
+                        pk_para.paragraph_format.space_after  = Pt(2)
+                        pk_run = pk_para.add_run("Points clés : " + "  •  ".join(pts_a))
+                        pk_run.font.size = Pt(8)
+                        pk_run.font.color.rgb = RGBColor(0,100,60)
+
+                    # URL source
+                    if url_a and url_a.startswith('http'):
+                        url_para = doc.add_paragraph()
+                        url_para.paragraph_format.left_indent  = Pt(30)
+                        url_para.paragraph_format.space_before = Pt(0)
+                        url_para.paragraph_format.space_after  = Pt(3)
+                        ur = url_para.add_run(f"Source : {url_a}")
+                        ur.font.size = Pt(7.5)
+                        ur.font.color.rgb = RGBColor(0,100,180)
+
+        else:
+            doc.add_paragraph("ℹ️ Aucune alerte Google disponible pour cette période.")
 
         doc.add_page_break()
 
