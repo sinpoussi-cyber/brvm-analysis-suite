@@ -4194,6 +4194,18 @@ RAPPELS IMPÉRATIFS:
         else:
             synthesis_text = f"Analyse ULTIMATE de {len(all_analyses)} sociétés de la BRVM."
         
+        # market_events : utiliser les alertes Google déjà chargées ou chaîne vide
+        market_events = ""
+        try:
+            _me_df = self._get_google_alerts_events()
+            if not _me_df.empty:
+                market_events = " | ".join(
+                    str(r.get('titre') or r.get('resume',''))[:80]
+                    for _, r in _me_df.head(5).iterrows()
+                )
+        except Exception:
+            pass
+
         self._save_to_database(
             datetime.now().date(),
             synthesis_text,
