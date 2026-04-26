@@ -755,6 +755,275 @@ class BRVMReportGenerator:
         except Exception:
             return pd.DataFrame()
 
+
+    # =========================================================================
+    # ACTUALITÉ INTERNATIONALE / AFRICAINE / UEMOA
+    # =========================================================================
+
+    def _get_macro_news(self):
+        """
+        Charge les actualités macro depuis google_alerts_rapports :
+        - Actualités internationales (guerres, crises, taux Fed/BCE, matières premières)
+        - Actualités africaines (CEDEAO, Union Africaine, économies partenaires)
+        - Actualités UEMOA / BCEAO (politique monétaire, inflation, taux directeur)
+        
+        Retourne un dict avec 3 clés :
+          'international' : DataFrame des news mondiales
+          'afrique'       : DataFrame des news africaines
+          'uemoa'         : DataFrame des news UEMOA/BCEAO
+          'all'           : DataFrame complet (fallback si catégories vides)
+        """
+        logging.info("🌍 Chargement actualités macro (international / Afrique / UEMOA)...")
+
+        # Mots-clés par niveau géographique
+        KW_INTERNATIONAL = [
+            'fed','federal reserve','bce','banque centrale européenne',
+            'taux directeur','inflation','récession','guerre','conflit',
+            'ukraine','russie','chine','usa','dollar','euro','pétrole','oil',
+            'or','gold','matières premières','commodity','sp500','dow jones',
+            'nasdaq','bourse','marchés financiers','crise','sanctions',
+            'commerce mondial','exportation','importation','fmi','banque mondiale',
+            'g20','g7','ocde','dette souveraine','obligations','bitcoin','crypto'
+        ]
+        KW_AFRIQUE = [
+            'afrique','africa','cedeao','ecowas','union africaine','nigeria',
+            'ghana','kenya','maroc','egypte','éthiopie','afrique du sud',
+            'franc cfa','zone cfa','investissement afrique','croissance afrique',
+            'dette afrique','développement','infrastructure afrique'
+        ]
+        KW_UEMOA = [
+            'uemoa','bceao',"côte d'ivoire",'sénégal','mali','burkina',
+            'niger','togo','bénin',"guinée-bissau",'zone franc','fcfa',
+            'brvm','bourse abidjan','inflation uemoa','taux bceao',
+            'politique monétaire','réserves','liquidité bancaire'
+        ]
+
+        def _build_kw_filter(kw_list):
+            conditions = " OR ".join([
+                f"LOWER(COALESCE(alert_keyword,'') || ' ' || COALESCE(mot_cle,'') || ' ' || COALESCE(titre,'') || ' ' || COALESCE(resume,'')) LIKE '%{kw}%'"
+                for kw in kw_list
+            ])
+            return conditions
+
+        base_query = """
+        SELECT
+            mail_date,
+            mail_subject,
+            titre,
+            resume,
+            points_cles,
+            sentiment,
+            pertinence,
+            categorie,
+            alert_keyword,
+            mot_cle,
+            source_url
+        FROM google_alerts_rapports
+        WHERE ({filter})
+          AND (resume IS NOT NULL AND resume <> '')
+        ORDER BY mail_date DESC NULLS LAST
+        LIMIT 15;
+        """
+
+        result = {'international': pd.DataFrame(), 'afrique': pd.DataFrame(),
+                  'uemoa': pd.DataFrame(), 'all': pd.DataFrame()}
+        try:
+            # Chargement UEMOA
+            df_uemoa = pd.read_sql(
+                base_query.format(filter=_build_kw_filter(KW_UEMOA)),
+                self.db_conn
+            )
+            result['uemoa'] = df_uemoa
+
+            # Chargement Afrique
+            df_afrique = pd.read_sql(
+                base_query.format(filter=_build_kw_filter(KW_AFRIQUE)),
+                self.db_conn
+            )
+            result['afrique'] = df_afrique
+
+            # Chargement International
+            df_intl = pd.read_sql(
+                base_query.format(filter=_build_kw_filter(KW_INTERNATIONAL)),
+                self.db_conn
+            )
+            result['international'] = df_intl
+
+            # Fallback global si tout est vide
+            if all(v.empty for v in result.values()):
+                df_all = pd.read_sql(
+                    """SELECT mail_date, mail_subject, titre, resume, points_cles,
+                              sentiment, pertinence, categorie, alert_keyword,
+                              mot_cle, source_url
+                       FROM google_alerts_rapports
+                       WHERE resume IS NOT NULL AND resume <> ''
+                       ORDER BY mail_date DESC NULLS LAST LIMIT 20;""",
+                    self.db_conn
+                )
+                result['all'] = df_all
+
+            total = sum(len(v) for v in result.values())
+            logging.info(f"   ✅ {total} actualités macro chargées "
+                         f"(intl={len(result['international'])}, "
+                         f"afrique={len(result['afrique'])}, "
+                         f"uemoa={len(result['uemoa'])})")
+        except Exception as e:
+            logging.error(f"❌ Erreur chargement macro news: {e}")
+
+        return result
+
+    def _generate_macro_analysis(self, macro_news, all_company_data, market_indicators):
+        """
+        Génère une analyse macro internationale via IA (DeepSeek/Gemini/Mistral).
+        
+        Si aucune IA disponible, génère une analyse structurée depuis les données brutes.
+        
+        Retourne un dict :
+          'analysis_text'   : texte complet de l'analyse IA
+          'ai_provider'     : IA utilisée
+          'impacts_brvm'    : liste de dicts {secteur, impact, explication}
+          'impacts_societes': liste de dicts {symbole, impact, raison}
+        """
+        logging.info("🤖 Génération analyse macro internationale...")
+
+        # Construire le contexte pour le prompt IA
+        def _df_to_text(df, label, max_items=8):
+            if df is None or df.empty:
+                return f"[Aucune actualité {label} disponible]"
+            lines = []
+            for _, row in df.head(max_items).iterrows():
+                date_s = str(row.get('mail_date',''))[:10]
+                titre  = str(row.get('mail_subject') or row.get('titre') or '')[:150]
+                resume = str(row.get('resume',''))[:300]
+                sent   = str(row.get('sentiment','') or '')
+                kw     = str(row.get('alert_keyword') or row.get('mot_cle') or '')
+                lines.append(f"[{date_s}] {titre}\n  Résumé: {resume}\n  Sentiment: {sent} | Mot-clé: {kw}")
+            return "\n\n".join(lines)
+
+        # Liste des secteurs BRVM pour contextualiser
+        sectors = list(set(d.get('sector','') for d in all_company_data.values() if d.get('sector')))
+        # Liste des sociétés les plus importantes (top 10 par score)
+        top_companies = sorted(
+            [(sym, d) for sym,d in all_company_data.items()],
+            key=lambda x: x[1].get('investment_score',0), reverse=True
+        )[:10]
+        top_str = ", ".join([f"{s}({d.get('sector','')})" for s,d in top_companies])
+
+        # Indicateurs de marché
+        composite_val = market_indicators.get('composite','N/A') if market_indicators else 'N/A'
+
+        prompt = f"""Tu es un analyste financier expert des marchés africains et de la BRVM (Bourse Régionale des Valeurs Mobilières d'Afrique de l'Ouest).
+
+CONTEXTE MARCHÉ BRVM :
+- Indice BRVM Composite : {composite_val}
+- Secteurs cotés : {', '.join(sectors)}
+- Top 10 sociétés (symbole + secteur) : {top_str}
+
+ACTUALITÉS INTERNATIONALES RÉCENTES :
+{_df_to_text(macro_news.get('international'), 'internationale')}
+
+ACTUALITÉS AFRICAINES RÉCENTES :
+{_df_to_text(macro_news.get('afrique'), 'africaine')}
+
+ACTUALITÉS UEMOA / BCEAO RÉCENTES :
+{_df_to_text(macro_news.get('uemoa'), 'UEMOA')}
+
+MISSION :
+Rédige une analyse macro-économique structurée en FRANÇAIS avec les sections suivantes :
+
+## 1. CONTEXTE INTERNATIONAL
+Résume les 3-5 événements internationaux majeurs (conflits, décisions Fed/BCE, cours matières premières, crises géopolitiques) et leur impact PROBABLE sur les grandes bourses mondiales (Wall Street, Euronext, marchés asiatiques).
+
+## 2. CONTEXTE AFRICAIN
+Analyse les dynamiques économiques et politiques africaines importantes (stabilité régionale, flux d'investissement, dette souveraine, partenariats commerciaux) et leur impact sur les économies d'Afrique de l'Ouest.
+
+## 3. CONTEXTE UEMOA / BCEAO
+Analyse spécifiquement la situation monétaire et économique dans la zone UEMOA : politique de la BCEAO, inflation, liquidité bancaire, cours du FCFA, balance commerciale des pays membres.
+
+## 4. IMPACT SUR LA BRVM
+Pour chaque secteur coté à la BRVM, indique :
+- Impact DIRECT (positif/neutre/négatif) avec justification précise
+- Les principaux risques et opportunités identifiés
+
+## 5. IMPACT PAR SOCIÉTÉ COTÉE (cibler les 10 principales)
+Pour chacune des 10 principales sociétés, donne :
+- Impact probable sur le cours (positif/neutre/négatif)
+- Raison principale (max 2 phrases)
+
+## 6. SYNTHÈSE & RECOMMANDATION MACRO
+Recommandation globale pour un investisseur BRVM compte tenu du contexte international actuel.
+Niveau d'alerte : VERT (contexte favorable) / ORANGE (prudence) / ROUGE (risques élevés)
+
+Sois précis, factuel, et base-toi sur les actualités fournies. Maximum 1200 mots."""
+
+        # Tentative IA avec rotation
+        analysis_text = None
+        ai_provider   = None
+
+        for gen_func, name in [
+            (lambda p: self._generate_analysis_with_deepseek('MACRO', {}, p), 'deepseek'),
+            (lambda p: self._generate_analysis_with_gemini('MACRO', {}, p),   'gemini'),
+            (lambda p: self._generate_analysis_with_mistral('MACRO', {}, p),  'mistral'),
+        ]:
+            try:
+                text, prov = gen_func(prompt)
+                if text and len(text) > 200:
+                    analysis_text = text
+                    ai_provider   = prov or name
+                    logging.info(f"   ✅ Analyse macro générée via {ai_provider}")
+                    break
+            except Exception as e:
+                logging.warning(f"   ⚠️ {name} macro: {e}")
+                continue
+
+        # Fallback si aucune IA ne répond
+        if not analysis_text:
+            logging.warning("   ⚠️ Aucune IA disponible — analyse macro structurée depuis données brutes")
+            analysis_text = self._build_fallback_macro_analysis(macro_news, all_company_data)
+            ai_provider   = 'fallback_structuré'
+
+        return {
+            'analysis_text': analysis_text,
+            'ai_provider':   ai_provider,
+        }
+
+    def _build_fallback_macro_analysis(self, macro_news, all_company_data):
+        """
+        Génère une analyse macro structurée sans IA,
+        uniquement à partir des données brutes disponibles.
+        """
+        sections = []
+
+        for level, label in [
+            ('international', '🌍 ACTUALITÉS INTERNATIONALES'),
+            ('afrique',       '🌍 ACTUALITÉS AFRICAINES'),
+            ('uemoa',         '🏦 ACTUALITÉS UEMOA / BCEAO'),
+        ]:
+            df = macro_news.get(level, pd.DataFrame())
+            if df is None or df.empty:
+                sections.append(f"### {label}\nAucune actualité disponible pour cette période.")
+                continue
+
+            items = []
+            for _, row in df.head(6).iterrows():
+                date_s  = str(row.get('mail_date',''))[:10]
+                titre   = str(row.get('mail_subject') or row.get('titre') or row.get('resume','')[:80])[:120]
+                resume  = str(row.get('resume',''))[:250]
+                sent    = str(row.get('sentiment','') or '').lower()
+                s_label = '🟢 Positif' if 'positif' in sent else ('🔴 Négatif' if 'negatif' in sent else '⚪ Neutre')
+                items.append(f"• [{date_s}] {titre}\n  {resume}\n  Impact estimé : {s_label}")
+
+            sections.append(f"### {label}\n" + "\n\n".join(items))
+
+        sections.append(
+            "### 📊 IMPACT SUR LA BRVM (estimation automatique)\n"
+            "En l'absence d'analyse IA, l'impact macro sur la BRVM doit être "
+            "évalué manuellement en croisant les actualités ci-dessus avec les "
+            "fondamentaux des sociétés cotées."
+        )
+
+        return "\n\n".join(sections)
+
     def _get_brvm_actualites(self):
         """
         Charge les documents officiels récents (AG, dividendes, convocations,
@@ -787,6 +1056,134 @@ class BRVMReportGenerator:
         except Exception as e:
             logging.warning(f"⚠️  brvm_documents actualités: {e}")
             return pd.DataFrame()
+
+    # =========================================================================
+    # TABLE DE CORRESPONDANCE : nom long BDD → symbole BRVM officiel
+    # Basée sur les valeurs réelles de societe_confirmee / societe dans Supabase
+    # Cross-referencée avec fundamental_analyzer.py (source de vérité symboles)
+    # =========================================================================
+    _SOCIETE_TO_SYMBOL = {
+        # brvm_rapports_societes.societe → symbole BRVM
+        "AGL":             "SDSC",
+        "AIR LIQUIDE CI":  "SIVC",
+        "BERNABE CI":      "BNBC",
+        "BICI CI":         "BICC",
+        "BIIC":            "BICB",
+        "BOA BF":          "BOABF",
+        "BOA BN":          "BOAB",
+        "BOA CI":          "BOAC",
+        "BOA ML":          "BOAM",
+        "BOA NG":          "BOAN",
+        "BOA SN":          "BOAS",
+        "CFAO MOTORS CI":  "CFAC",
+        "CIE CI":          "CIEC",
+        "CORIS BANK":      "CBIBF",  # Coris Bank International Burkina Faso
+        "ECOBANK CI":      "ECOC",
+        "ECOBANK TG":      "ETIT",
+        "FILTISAC CI":     "FTSC",
+        "LNB":             "LNBB",
+        "NEI CEDA CI":     "NEIC",
+        "NESTLE CI":       "NTLC",
+        "NSBC":            "NSBC",
+        "ONATEL BF":       "ONTBF",
+        "ORAGROUP":        "ORGT",
+        "ORANGE CI":       "ORAC",
+        "PALM CI":         "PALC",
+        "SAFCA CI":        "SAFC",
+        "SAPH CI":         "SPHC",
+        "SERVAIR CI":      "ABJC",
+        "SETAO CI":        "STAC",
+        "SIB":             "SIBC",
+        "SICABLE":         "CABC",
+        "SITAB":           "STBC",
+        "SMB":             "SMBC",
+        "SODECI":          "SDCC",
+        "SOGB":            "SOGC",
+        "SOLIBRA":         "SLBC",
+        "SONATEL":         "SNTS",
+        "SUCRIVOIRE":      "SCRC",
+        "TOTAL CI":        "TTLC",
+        "TOTAL SENEGAL":   "TTLS",
+        "TRACTAFRIC CI":   "PRSC",
+        "UNIWAX CI":       "UNXC",
+        "VIVO ENERGY CI":  "SHEC",
+        # Aliases supplémentaires (variantes fréquentes et accents)
+        "TOTAL CÔTE D\'IVOIRE":   "TTLC",
+        "TOTAL COTE D\'IVOIRE":   "TTLC",
+        "ECOBANK":                  "ECOC",
+        "NESTLE":                   "NTLC",
+        "NESTLÉ CI":                "NTLC",
+        "NESTLÉ":                   "NTLC",
+        "ORANGE":                   "ORAC",
+        "SONATEL SENEGAL":          "SNTS",
+        "AIR LIQUIDE":              "SIVC",
+        "PALM":                     "PALC",
+        "SAPH":                     "SPHC",
+        "SODECI":                   "SDCC",
+        "SUCRIVOIRE":               "SCRC",
+        "SOLIBRA":                  "SLBC",
+        "SERVAIR":                  "ABJC",
+        "BERNABÉ CI":               "BNBC",
+        "TRACTAFRIC":               "PRSC",
+        "VIVO ENERGY":              "SHEC",
+        "ECOBANK CÔTE D\'IVOIRE":  "ECOC",
+        "ECOBANK COTE D\'IVOIRE":  "ECOC",
+        "ECOBANK TOGO":             "ETIT",
+        "ONATEL":                   "ONTBF",
+        "ORANGE CÔTE D\'IVOIRE":   "ORAC",
+        "BOA BURKINA":              "BOABF",
+        "BOA SENEGAL":              "BOAS",
+        "BOA BÉNIN":                "BOAB",
+        "BOA NIGER":                "BOAN",
+        "BOA MALI":                 "BOAM",
+        "CORIS BANK INTERNATIONAL":   "CBIBF",
+        "CORIS BANK BURKINA":         "CBIBF",
+        "CORIS BANK BF":              "CBIBF",
+        "FILTISAC":                   "FTSC",
+        "FILTISAC COTE D\'IVOIRE":   "FTSC",
+        "FILTISAC CI":                "FTSC",
+        "SICOR":                    "SICC",
+        "SGB CI":                   "SGBC",
+        "SGBCI":                    "SGBC",
+    }
+
+    def _normalize_societe_name(self, raw_name: str) -> str:
+        """
+        Convertit un nom long de société (tel que stocké en BDD) en symbole BRVM.
+
+        Stratégie en 4 passes :
+          1. Correspondance exacte dans _SOCIETE_TO_SYMBOL
+          2. Correspondance insensible à la casse
+          3. Le nom est déjà un symbole BRVM valide (≤ 6 chars, uppercase)
+          4. Recherche partielle sur les premières lettres significatives
+        Retourne le symbole normalisé ou le nom original en majuscules si aucune
+        correspondance n'est trouvée (avec warning dans les logs).
+        """
+        if not raw_name:
+            return ""
+        name = str(raw_name).strip()
+
+        # Passe 1 : correspondance exacte
+        if name in self._SOCIETE_TO_SYMBOL:
+            return self._SOCIETE_TO_SYMBOL[name]
+
+        # Passe 2 : insensible à la casse
+        name_upper = name.upper()
+        for key, sym in self._SOCIETE_TO_SYMBOL.items():
+            if key.upper() == name_upper:
+                return sym
+
+        # Passe 3 : déjà un symbole BRVM (court, tout en majuscules)
+        if len(name_upper) <= 6 and name_upper.isalpha():
+            return name_upper
+
+        # Passe 4 : correspondance partielle (le nom contient la clé ou vice-versa)
+        for key, sym in self._SOCIETE_TO_SYMBOL.items():
+            if key.upper() in name_upper or name_upper in key.upper():
+                return sym
+
+        logging.debug(f"_normalize_societe_name: aucun symbole trouvé pour '{name}'")
+        return name_upper
 
     def _get_brvm_documents(self):
         """
@@ -823,7 +1220,10 @@ class BRVMReportGenerator:
 
         docs_by_symbol = {}
         for _, row in df.iterrows():
-            sym = str(row['societe_confirmee']).strip().upper()
+            raw  = str(row['societe_confirmee'] or '').strip()
+            if not raw:
+                continue
+            sym  = self._normalize_societe_name(raw)
             if not sym:
                 continue
             doc = {
@@ -891,7 +1291,10 @@ class BRVMReportGenerator:
 
         rapports_by_symbol = {}
         for _, row in df.iterrows():
-            sym = str(row['societe']).strip().upper()
+            raw  = str(row['societe'] or '').strip()
+            if not raw:
+                continue
+            sym  = self._normalize_societe_name(raw)
             if not sym:
                 continue
             rapport = {
@@ -2693,6 +3096,182 @@ RAPPELS IMPÉRATIFS:
                     doc.add_paragraph(f"• {company}", style='List Bullet')
                 doc.add_paragraph()
         
+        doc.add_page_break()
+
+        # ================================================================
+        # ========== ANALYSE MACRO INTERNATIONALE (page dédiée) ==========
+        # ================================================================
+        doc.add_heading('🌍 ANALYSE MACRO — CONTEXTE INTERNATIONAL, AFRICAIN & UEMOA', level=1)
+        doc.add_paragraph(
+            "Analyse de l'environnement macro-économique mondial et régional susceptible "
+            "d'impacter la BRVM et les sociétés cotées. Générée par IA à partir des "
+            "actualités collectées via Google Alerts."
+        ).runs[0].font.size = Pt(9)
+        doc.add_paragraph()
+
+        # ── Chargement des données macro et génération IA ────────────────────
+        macro_news_data    = self._get_macro_news()
+        macro_indicators   = market_indicators_pre if 'market_indicators_pre' in dir() else self._get_market_indicators()
+        macro_result       = self._generate_macro_analysis(
+            macro_news_data, all_company_data, macro_indicators
+        )
+        macro_text    = macro_result.get('analysis_text', '')
+        macro_ai_prov = macro_result.get('ai_provider', '—')
+
+        # Badge IA utilisée
+        badge_p = doc.add_paragraph()
+        badge_p.paragraph_format.space_before = Pt(2)
+        badge_p.paragraph_format.space_after  = Pt(6)
+        br1 = badge_p.add_run(f"🤖 Analyse générée par : {macro_ai_prov.upper()}  |  ")
+        br1.font.size = Pt(8)
+        br1.font.color.rgb = RGBColor(100,100,100)
+        br2 = badge_p.add_run(f"Sources : {len(macro_news_data.get('international', pd.DataFrame()))} actualités internationales  |  "
+                              f"{len(macro_news_data.get('afrique', pd.DataFrame()))} africaines  |  "
+                              f"{len(macro_news_data.get('uemoa', pd.DataFrame()))} UEMOA")
+        br2.font.size = Pt(8)
+        br2.font.color.rgb = RGBColor(80,80,80)
+
+        # ── Rendu du texte IA structuré par sections ─────────────────────────
+        if macro_text:
+            # Parsing des sections ##
+            current_section = None
+            section_buffer  = []
+
+            SECTION_STYLES = {
+                '## 1': ('🌐 1. CONTEXTE INTERNATIONAL',       RGBColor(0,70,127)),
+                '## 2': ('🌍 2. CONTEXTE AFRICAIN',            RGBColor(0,100,60)),
+                '## 3': ('🏦 3. CONTEXTE UEMOA / BCEAO',       RGBColor(140,70,0)),
+                '## 4': ('📊 4. IMPACT SUR LA BRVM',           RGBColor(0,51,102)),
+                '## 5': ('🏢 5. IMPACT PAR SOCIÉTÉ COTÉE',     RGBColor(80,0,80)),
+                '## 6': ('🎯 6. SYNTHÈSE & RECOMMANDATION',    RGBColor(0,80,0)),
+            }
+
+            def _flush_section(doc, title, color, lines):
+                if title:
+                    sh = doc.add_heading(title, level=2)
+                    if sh.runs:
+                        sh.runs[0].font.color.rgb = color
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Détecter le niveau d'alerte VERT/ORANGE/ROUGE
+                    if any(k in line.upper() for k in ["NIVEAU D'ALERTE", 'ALERTE :']):
+                        al_p = doc.add_paragraph()
+                        al_p.paragraph_format.space_before = Pt(4)
+                        al_p.paragraph_format.space_after  = Pt(4)
+                        al_r = al_p.add_run(line)
+                        al_r.bold = True
+                        al_r.font.size = Pt(11)
+                        if 'VERT' in line.upper():
+                            al_r.font.color.rgb = RGBColor(0,128,0)
+                        elif 'ROUGE' in line.upper():
+                            al_r.font.color.rgb = RGBColor(192,0,0)
+                        elif 'ORANGE' in line.upper():
+                            al_r.font.color.rgb = RGBColor(200,80,0)
+                    # Détecter les lignes d'impact par société (contient symbole entre parenthèses)
+                    elif line.startswith('- ') or line.startswith('• '):
+                        bp = doc.add_paragraph(style='List Bullet')
+                        bp.paragraph_format.left_indent = Pt(18)
+                        bp.paragraph_format.space_before = Pt(1)
+                        bp.paragraph_format.space_after  = Pt(1)
+                        txt = line.lstrip('- •')
+                        # Colorier positif/négatif/neutre
+                        if any(k in txt.upper() for k in ['POSITIF','HAUSSE','FAVORABLE','OPPORTUNITÉ']):
+                            run = bp.add_run(txt)
+                            run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(0,128,0)
+                        elif any(k in txt.upper() for k in ['NÉGATIF','BAISSE','DÉFAVORABLE','RISQUE','PRESSION']):
+                            run = bp.add_run(txt)
+                            run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(192,0,0)
+                        else:
+                            run = bp.add_run(txt)
+                            run.font.size = Pt(9)
+                    # Sous-titre ### dans le texte IA
+                    elif line.startswith('### '):
+                        ssh = doc.add_heading(line[4:], level=3)
+                        if ssh.runs:
+                            ssh.runs[0].font.size = Pt(10)
+                    else:
+                        pp = doc.add_paragraph()
+                        pp.paragraph_format.space_before = Pt(1)
+                        pp.paragraph_format.space_after  = Pt(2)
+                        rr = pp.add_run(line)
+                        rr.font.size = Pt(9)
+
+            # Parser et afficher section par section
+            for raw_line in macro_text.split('\n'):
+                matched = False
+                for sec_key, (sec_title, sec_color) in SECTION_STYLES.items():
+                    if raw_line.strip().startswith(sec_key):
+                        # Flush la section précédente
+                        if current_section:
+                            _flush_section(doc, *current_section, section_buffer)
+                        current_section = (sec_title, sec_color)
+                        section_buffer  = []
+                        matched = True
+                        break
+                if not matched:
+                    section_buffer.append(raw_line)
+
+            # Flush dernière section
+            if current_section:
+                _flush_section(doc, *current_section, section_buffer)
+            elif section_buffer:
+                # Texte sans sections ## → affichage brut
+                for line in section_buffer:
+                    if line.strip():
+                        lp = doc.add_paragraph()
+                        lp.add_run(line.strip()).font.size = Pt(9)
+        else:
+            doc.add_paragraph("ℹ️ Analyse macro non disponible — aucune IA active et aucune donnée suffisante.")
+
+        # ── Tableau récapitulatif des sources macro ──────────────────────────
+        doc.add_paragraph()
+        doc.add_heading('📋 Sources macro utilisées pour cette analyse', level=3)
+
+        src_configs = [
+            ('🌐 International', macro_news_data.get('international', pd.DataFrame())),
+            ('🌍 Afrique',       macro_news_data.get('afrique', pd.DataFrame())),
+            ('🏦 UEMOA',        macro_news_data.get('uemoa', pd.DataFrame())),
+        ]
+
+        for src_label, src_df in src_configs:
+            if src_df is not None and not src_df.empty:
+                doc.add_heading(src_label, level=4)
+                src_tbl = doc.add_table(rows=1, cols=4)
+                src_tbl.style = 'Light Grid Accent 1'
+                src_hdrs = ['Date', 'Titre / Sujet', 'Sentiment', 'Pertinence']
+                shcells = src_tbl.rows[0].cells
+                for ci, sh in enumerate(src_hdrs):
+                    shcells[ci].text = sh
+                    sr = shcells[ci].paragraphs[0].runs[0]
+                    sr.bold = True
+                    sr.font.size = Pt(8)
+                    sshd = OxmlElement('w:shd')
+                    sshd.set(qn('w:fill'), '2E4057')
+                    sshd.set(qn('w:val'), 'clear')
+                    shcells[ci]._element.get_or_add_tcPr().append(sshd)
+                    sr.font.color.rgb = RGBColor(255,255,255)
+
+                for _, srow in src_df.head(8).iterrows():
+                    src_tr = src_tbl.add_row().cells
+                    s_date  = str(srow.get('mail_date',''))[:10]
+                    s_titre = str(srow.get('mail_subject') or srow.get('titre') or srow.get('resume','')[:70])[:80]
+                    s_sent  = str(srow.get('sentiment','') or '').capitalize()
+                    s_pert  = str(int(srow['pertinence'])) + '/10' if pd.notna(srow.get('pertinence')) else '—'
+
+                    for ci, sv in enumerate([s_date, s_titre, s_sent, s_pert]):
+                        src_tr[ci].text = sv
+                        sr2 = src_tr[ci].paragraphs[0].runs[0] if src_tr[ci].paragraphs[0].runs else src_tr[ci].paragraphs[0].add_run(sv)
+                        sr2.font.size = Pt(7.5)
+                        if ci == 2:  # Sentiment
+                            if 'Positif' in sv: sr2.font.color.rgb = RGBColor(0,128,0)
+                            elif 'Negatif' in sv or 'Négatif' in sv: sr2.font.color.rgb = RGBColor(192,0,0)
+
+                doc.add_paragraph()
+
         doc.add_page_break()
 
         # ================================================================
