@@ -74,6 +74,7 @@ hpack==4.0.0
 kaitaistruct==0.10
 pyOpenSSL==24.0.0
 
+feedparser>=6.0.0
 # ==============================================================================
 # NOTES DE COMPATIBILITÉ :
 #
