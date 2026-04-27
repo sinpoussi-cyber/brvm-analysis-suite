@@ -39,7 +39,7 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT')
 
-# ✅ CONFIGURATION MULTI-AI (Rotation: DeepSeek → Gemini → Mistral)
+# ✅ CONFIGURATION MULTI-AI (Rotation: DeepSeek → Claude → Gemini → Mistral)
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
@@ -52,11 +52,17 @@ MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
 MISTRAL_MODEL = "mistral-large-latest"
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
+# Claude (Anthropic) — fallback final si toutes les autres IA échouent
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"   # modèle rapide et économique
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
+
 
 class BRVMReportGenerator:
     def __init__(self):
         self.db_conn = None
-        self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0, 'total': 0}
+        self.request_count = {'deepseek': 0, 'gemini': 0, 'mistral': 0, 'claude': 0, 'total': 0}
         self.all_recommendations = {}
         
         try:
@@ -799,8 +805,9 @@ class BRVMReportGenerator:
         ]
 
         def _build_kw_filter(kw_list):
+            # Doubler les apostrophes pour éviter les erreurs SQL (ex: côte d'ivoire)
             conditions = " OR ".join([
-                f"LOWER(COALESCE(alert_keyword,'') || ' ' || COALESCE(mot_cle,'') || ' ' || COALESCE(titre,'') || ' ' || COALESCE(resume,'')) LIKE '%{kw}%'"
+                "LOWER(COALESCE(alert_keyword,'') || ' ' || COALESCE(mot_cle,'') || ' ' || COALESCE(titre,'') || ' ' || COALESCE(resume,'')) LIKE '%" + kw.replace("'", "''") + "%'"
                 for kw in kw_list
             ])
             return conditions
@@ -962,6 +969,7 @@ Sois précis, factuel, et base-toi sur les actualités fournies. Maximum 1200 mo
 
         for gen_func, name in [
             (lambda p: self._generate_analysis_with_deepseek('MACRO', {}, p), 'deepseek'),
+            (lambda p: self._generate_analysis_with_claude('MACRO', {}, p),   'claude'),
             (lambda p: self._generate_analysis_with_gemini('MACRO', {}, p),   'gemini'),
             (lambda p: self._generate_analysis_with_mistral('MACRO', {}, p),  'mistral'),
         ]:
@@ -1628,38 +1636,150 @@ Sois précis, factuel, et base-toi sur les actualités fournies. Maximum 1200 mo
             return None, None
 
     def _generate_analysis_with_mistral(self, symbol, data_dict, prompt):
-        """Génération d'analyse avec Mistral"""
+        """Génération d'analyse avec Mistral — avec gestion rate limit 429"""
         if not MISTRAL_API_KEY:
             return None, None
-        
+
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
         }
-        
+
+        # Réduire max_tokens pour rester dans les limites du free tier Mistral
+        # (≈ 2000 tokens/min sur le plan gratuit)
         request_body = {
             "model": MISTRAL_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 3000,
+            "max_tokens": 1500,
             "temperature": 0.4
         }
-        
-        try:
-            response = requests.post(MISTRAL_API_URL, headers=headers, json=request_body, timeout=60)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'choices' in data and len(data['choices']) > 0:
-                    text = data['choices'][0]['message']['content']
-                    self.request_count['mistral'] += 1
-                    self.request_count['total'] += 1
-                    return text, "mistral"
-            
+
+        for _attempt in range(3):
+            try:
+                response = requests.post(
+                    MISTRAL_API_URL, headers=headers,
+                    json=request_body, timeout=60
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'choices' in data and len(data['choices']) > 0:
+                        text = data['choices'][0]['message']['content']
+                        self.request_count['mistral'] += 1
+                        self.request_count['total'] += 1
+                        return text, "mistral"
+                    return None, None
+
+                elif response.status_code == 429:
+                    # Rate limit — attendre selon Retry-After ou délai exponentiel
+                    retry_after = int(response.headers.get('Retry-After', 10 * (2 ** _attempt)))
+                    logging.warning(
+                        f"    ⏳ Mistral rate limit (429) pour {symbol} — "
+                        f"attente {retry_after}s (tentative {_attempt+1}/3)"
+                    )
+                    time.sleep(retry_after)
+                    continue
+
+                elif response.status_code in (401, 403):
+                    logging.error(
+                        f"    🔑 Mistral clé API invalide ({response.status_code}) "
+                        f"— vérifier MISTRAL_API_KEY dans GitHub Secrets"
+                    )
+                    return None, None
+
+                else:
+                    logging.warning(
+                        f"    ⚠️  Mistral HTTP {response.status_code} pour {symbol}: "
+                        f"{response.text[:150]}"
+                    )
+                    return None, None
+
+            except Exception as e:
+                logging.error(f"❌ Mistral exception {symbol}: {e}")
+                if _attempt < 2:
+                    time.sleep(5)
+                    continue
+                return None, None
+
+        return None, None
+
+    def _generate_analysis_with_claude(self, symbol, data_dict, prompt):
+        """
+        Génération d'analyse avec Claude (Anthropic) — fallback final.
+        Utilise claude-haiku-4-5 (rapide, économique) via l'API Anthropic v1/messages.
+        Variable d'environnement requise : ANTHROPIC_API_KEY dans GitHub Secrets.
+        """
+        if not ANTHROPIC_API_KEY:
             return None, None
-                
-        except Exception as e:
-            logging.error(f"❌ Mistral exception: {e}")
-            return None, None
+
+        headers = {
+            "x-api-key":         ANTHROPIC_API_KEY,
+            "anthropic-version": ANTHROPIC_API_VERSION,
+            "content-type":      "application/json",
+        }
+
+        request_body = {
+            "model":      ANTHROPIC_MODEL,
+            "max_tokens": 1500,
+            "messages":   [{"role": "user", "content": prompt}],
+        }
+
+        for _attempt in range(3):
+            try:
+                response = requests.post(
+                    ANTHROPIC_API_URL,
+                    headers=headers,
+                    json=request_body,
+                    timeout=60,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    # Réponse Anthropic : {"content": [{"type": "text", "text": "..."}]}
+                    content = data.get("content", [])
+                    text = " ".join(
+                        block.get("text", "")
+                        for block in content
+                        if block.get("type") == "text"
+                    ).strip()
+                    if text:
+                        self.request_count["claude"] += 1
+                        self.request_count["total"]  += 1
+                        logging.info(f"    ✅ {symbol}: Analyse générée via CLAUDE")
+                        return text, "claude"
+                    return None, None
+
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", 15 * (2 ** _attempt)))
+                    logging.warning(
+                        f"    ⏳ Claude rate limit (429) pour {symbol} — "
+                        f"attente {retry_after}s (tentative {_attempt+1}/3)"
+                    )
+                    time.sleep(retry_after)
+                    continue
+
+                elif response.status_code in (401, 403):
+                    logging.error(
+                        f"    🔑 Claude clé API invalide ({response.status_code}) "
+                        f"— vérifier ANTHROPIC_API_KEY dans GitHub Secrets"
+                    )
+                    return None, None
+
+                else:
+                    logging.warning(
+                        f"    ⚠️  Claude HTTP {response.status_code} pour {symbol}: "
+                        f"{response.text[:150]}"
+                    )
+                    return None, None
+
+            except Exception as e:
+                logging.error(f"❌ Claude exception {symbol}: {e}")
+                if _attempt < 2:
+                    time.sleep(5)
+                    continue
+                return None, None
+
+        return None, None
 
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
         """
@@ -1779,21 +1899,25 @@ RAPPELS IMPÉRATIFS:
 - Mentionne TOUJOURS la date des rapports fondamentaux utilisés
 - Reste factuel et objectif"""
         
-        # ── Rotation Multi-AI: DeepSeek → Gemini → Mistral ──────────────────────────
+        # ── Rotation Multi-AI: DeepSeek → Claude → Gemini → Mistral ────────────────
         analysis = None
         provider = None
-        
+
         logging.info(f"    🤖 {symbol}: Tentative DeepSeek...")
         analysis, provider = self._generate_analysis_with_deepseek(symbol, data_dict, prompt)
-        
+
+        if not analysis:
+            logging.info(f"    🤖 {symbol}: Tentative Claude (Anthropic)...")
+            analysis, provider = self._generate_analysis_with_claude(symbol, data_dict, prompt)
+
         if not analysis:
             logging.info(f"    🤖 {symbol}: Tentative Gemini...")
             analysis, provider = self._generate_analysis_with_gemini(symbol, data_dict, prompt)
-        
+
         if not analysis:
             logging.info(f"    🤖 {symbol}: Tentative Mistral...")
             analysis, provider = self._generate_analysis_with_mistral(symbol, data_dict, prompt)
-        
+
         if not analysis:
             if attempt < max_attempts:
                 logging.warning(f"    ⚠️  {symbol}: Toutes API échouées, retry {attempt+1}/{max_attempts}")
@@ -4227,7 +4351,7 @@ RAPPELS IMPÉRATIFS:
         logging.info("="*80)
         
         # Vérifier qu'au moins une clé API est disponible
-        if not any([DEEPSEEK_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY]):
+        if not any([DEEPSEEK_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, ANTHROPIC_API_KEY]):
             logging.error("❌ Aucune clé API configurée!")
             return
         
@@ -4248,7 +4372,7 @@ RAPPELS IMPÉRATIFS:
         
         logging.info(f"✅ API disponibles: {', '.join(available_apis)}")
         if missing_apis:
-            logging.warning(f"⚠️  API non configurées (ajouter DEEPSEEK_API_KEY dans GitHub Secrets): {', '.join(missing_apis)}")
+            logging.warning(f"⚠️  API non configurées (ajouter dans GitHub Secrets): {', '.join(missing_apis)}")
         
         df = self._get_all_data_from_db()
         
@@ -4469,6 +4593,9 @@ RAPPELS IMPÉRATIFS:
             elif 'vente' in _al_pre: _fd_pre = 'VENTE'
             else:                    _fd_pre = 'NEUTRE'
 
+            # Délai entre sociétés pour éviter le rate limit Mistral free tier
+            time.sleep(1)
+
             recommendation, rec_score = self._extract_recommendation_from_analysis(
                 analysis, tech_decision=_td_pre, fund_decision=_fd_pre
             )
@@ -4564,6 +4691,7 @@ RAPPELS IMPÉRATIFS:
         logging.info(f"   - DeepSeek: {self.request_count['deepseek']}")
         logging.info(f"   - Gemini: {self.request_count['gemini']}")
         logging.info(f"   - Mistral: {self.request_count['mistral']}")
+        logging.info(f"   - Claude:  {self.request_count['claude']}")
         logging.info(f"   - TOTAL: {self.request_count['total']}")
         logging.info(f"\n📋 Analyses incluses:")
         logging.info(f"   ✅ Analyse par secteur")
