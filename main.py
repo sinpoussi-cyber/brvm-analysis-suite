@@ -4,7 +4,7 @@
 # ==============================================================================
 #
 # ORDRE D'EXÉCUTION :
-#   Étape 0 : MacroCollector  — Collecte actualités RSS + enrichissement IA
+#   Étape 0 : MacroCollector      — Collecte actualités RSS + enrichissement IA
 #   Étape 1 : BRVMDataCollector   — Collecte cours & indicateurs BRVM
 #   Étape 2 : TechnicalAnalyzer   — Calcul indicateurs techniques
 #   Étape 3 : PredictionAnalyzer  — Prédictions ML (GRU/LSTM)
@@ -15,20 +15,25 @@
 #   DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
 #   DEEPSEEK_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY
 #
+# CORRECTIONS v2 :
+#   - Stacktrace complète loggée pour chaque étape échouée
+#   - Correction scope db_conn_macro (était non défini dans le finally)
+#   - Étape 0 loggue désormais l'exception complète pour faciliter le debug
 # ==============================================================================
 
 import logging
 import os
 import sys
 import time
+import traceback
 import psycopg2
 
-from data_collector      import BRVMDataCollector
-from technical_analyzer  import TechnicalAnalyzer
-from prediction_analyzer import PredictionAnalyzer
+from data_collector       import BRVMDataCollector
+from technical_analyzer   import TechnicalAnalyzer
+from prediction_analyzer  import PredictionAnalyzer
 from fundamental_analyzer import BRVMAnalyzer
-from report_generator    import BRVMReportGenerator
-from macro_collector     import MacroCollector
+from report_generator     import BRVMReportGenerator
+from macro_collector      import MacroCollector
 
 # ── Configuration du logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -40,11 +45,11 @@ logging.basicConfig(
 )
 
 # ── Lecture des credentials depuis l'environnement ───────────────────────────
-DB_NAME         = os.environ.get("DB_NAME")
-DB_USER         = os.environ.get("DB_USER")
-DB_PASSWORD     = os.environ.get("DB_PASSWORD")
-DB_HOST         = os.environ.get("DB_HOST")
-DB_PORT         = os.environ.get("DB_PORT", "5432")
+DB_NAME      = os.environ.get("DB_NAME")
+DB_USER      = os.environ.get("DB_USER")
+DB_PASSWORD  = os.environ.get("DB_PASSWORD")
+DB_HOST      = os.environ.get("DB_HOST")
+DB_PORT      = os.environ.get("DB_PORT", "5432")
 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 MISTRAL_API_KEY  = os.environ.get("MISTRAL_API_KEY")
@@ -129,16 +134,19 @@ def main():
     # ÉTAPE 0 — Collecte actualités macro-économiques internationales (RSS)
     # Non critique : si elle échoue, le rapport se génère quand même
     # ──────────────────────────────────────────────────────────────────────────
-    _log_step(0, "🌍", "COLLECTE ACTUALITÉS MACRO (RSS + IA)")
+    _log_step(0, "🌍", "COLLECTE ACTUALITÉS MACRO (RSS Google News + IA)")
 
+    # CORRECTION : initialiser db_conn_macro avant le try pour éviter
+    # NameError dans le finally si la connexion échoue
+    db_conn_macro = None
     try:
         db_conn_macro = _get_db_connection()
         macro_collector = MacroCollector(
-            db_conn              = db_conn_macro,
-            gemini_keys          = GEMINI_API_KEYS,
-            deepseek_key         = DEEPSEEK_API_KEY,
-            mistral_key          = MISTRAL_API_KEY,
-            max_articles_per_source = 8,
+            db_conn                 = db_conn_macro,
+            gemini_keys             = GEMINI_API_KEYS,
+            deepseek_key            = DEEPSEEK_API_KEY,
+            mistral_key             = MISTRAL_API_KEY,
+            max_articles_per_source = 10,
         )
         macro_stats = macro_collector.run()
         _log_success(
@@ -147,13 +155,17 @@ def main():
             f"Erreurs: {macro_stats.get('errors', 0)}"
         )
     except Exception as e:
+        # CORRECTION : afficher la stacktrace complète pour faciliter le debug
         _log_warning(f"Étape 0 échouée (non critique) : {e}")
+        logging.warning("    Stacktrace complète :")
+        logging.warning(traceback.format_exc())
         logging.info("    → Le rapport sera généré sans nouvelles actualités macro RSS")
     finally:
-        try:
-            db_conn_macro.close()
-        except Exception:
-            pass
+        if db_conn_macro:
+            try:
+                db_conn_macro.close()
+            except Exception:
+                pass
 
     # ──────────────────────────────────────────────────────────────────────────
     # ÉTAPE 1 — Collecte des données de marché BRVM
@@ -167,12 +179,12 @@ def main():
         _log_success("Collecte données BRVM terminée")
     except Exception as e:
         _log_error(f"Étape 1 CRITIQUE : {e}")
+        logging.error(traceback.format_exc())
         raise RuntimeError(f"Collecte BRVM échouée : {e}") from e
 
     # ──────────────────────────────────────────────────────────────────────────
-    # ÉTAPE 2 — Analyse technique (indicateurs : MM, Bollinger, MACD, RSI, Stoch)
-    # Non critique : si elle échoue, les signaux seront manquants mais le
-    # rapport sera généré avec les données disponibles
+    # ÉTAPE 2 — Analyse technique (MM, Bollinger, MACD, RSI, Stoch)
+    # Non critique
     # ──────────────────────────────────────────────────────────────────────────
     _log_step(2, "📈", "ANALYSE TECHNIQUE")
 
@@ -182,11 +194,12 @@ def main():
         _log_success("Analyse technique terminée")
     except Exception as e:
         _log_warning(f"Étape 2 échouée (non critique) : {e}")
+        logging.warning(traceback.format_exc())
         logging.info("    → Signaux techniques manquants dans le rapport")
 
     # ──────────────────────────────────────────────────────────────────────────
     # ÉTAPE 3 — Prédictions ML (GRU / LSTM / BiGRU)
-    # Non critique : si elle échoue, les tableaux de prédictions seront vides
+    # Non critique
     # ──────────────────────────────────────────────────────────────────────────
     _log_step(3, "🔮", "PRÉDICTIONS ML (GRU/LSTM)")
 
@@ -196,11 +209,12 @@ def main():
         _log_success("Prédictions ML terminées")
     except Exception as e:
         _log_warning(f"Étape 3 échouée (non critique) : {e}")
+        logging.warning(traceback.format_exc())
         logging.info("    → Tableaux de prédictions absents dans le rapport")
 
     # ──────────────────────────────────────────────────────────────────────────
     # ÉTAPE 4 — Analyse fondamentale Multi-AI
-    # Non critique : si elle échoue, on utilise les analyses existantes en BDD
+    # Non critique
     # ──────────────────────────────────────────────────────────────────────────
     _log_step(4, "📄", "ANALYSE FONDAMENTALE MULTI-AI")
 
@@ -213,6 +227,7 @@ def main():
         )
     except Exception as e:
         _log_warning(f"Étape 4 échouée (non critique) : {e}")
+        logging.warning(traceback.format_exc())
         logging.info("    → Le rapport utilisera les analyses fondamentales existantes en BDD")
         new_analyses = {}
 
@@ -228,6 +243,7 @@ def main():
         _log_success("Rapport Word généré avec succès")
     except Exception as e:
         _log_error(f"Étape 5 CRITIQUE : {e}")
+        logging.error(traceback.format_exc())
         raise RuntimeError(f"Génération rapport échouée : {e}") from e
 
     # ──────────────────────────────────────────────────────────────────────────
