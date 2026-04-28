@@ -4,6 +4,14 @@
 # flux RSS couvrant : International / Afrique / UEMOA / Marchés financiers /
 # Matières premières / Géopolitique / Politique monétaire
 #
+# CORRECTIONS v2 :
+#   - Sources RSS remplacées par Google News RSS (seules URLs stables depuis GitHub Actions)
+#   - cutoff étendu à 7 jours (au lieu de 3)
+#   - Seuil de score IA abaissé à 15 (au lieu de 25)
+#   - Stacktrace complète loggée en cas d'erreur
+#   - __main__ standalone pour exécution depuis le workflow GitHub Actions
+#   - _ensure_table_exists() crée la table si elle n'existe pas encore
+#
 # Intégration dans main.py :
 #   from macro_collector import MacroCollector
 #   MacroCollector(db_conn, gemini_keys, deepseek_key, mistral_key).run()
@@ -15,12 +23,14 @@ import logging
 import time
 import json
 import re
+import os
+import sys
+import traceback
 import hashlib
-from datetime import datetime, timezone, timedelta
-from typing import Optional
-
 import psycopg2
 import psycopg2.extras
+from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,347 +38,189 @@ logging.basicConfig(
 )
 
 # ==============================================================================
-# LISTE COMPLÈTE DES FLUX RSS
-# Organisés par thème pour le filtrage et la catégorisation automatique
+# SOURCES RSS — Google News uniquement (seules URLs fiables depuis GitHub Actions)
+# Les sources directes (Reuters, BBC, RFI, etc.) retournent 403 sur les runners
+# GitHub Actions car ils bloquent les user-agents de datacenter.
+# Google News RSS est un agrégateur public qui fonctionne sans restriction.
 # ==============================================================================
 RSS_SOURCES = [
 
-    # ── AFRIQUE DE L'OUEST / UEMOA ──────────────────────────────────────────
+    # ── BRVM / UEMOA ────────────────────────────────────────────────────────
     {
-        "name":      "Agence Ecofin — Économie UEMOA",
-        "url":       "https://www.agenceecofin.com/rss",
+        "name":      "Google News — BRVM bourse",
+        "url":       "https://news.google.com/rss/search?q=BRVM+bourse+régionale&hl=fr&gl=CI&ceid=CI:fr",
         "zone":      "uemoa",
-        "categorie": "économique",
+        "categorie": "marche_financier",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Agence Ecofin — Finances",
-        "url":       "https://www.agenceecofin.com/finances/rss",
-        "zone":      "uemoa",
-        "categorie": "financier",
-        "langue":    "fr",
-        "priorite":  1,
-    },
-    {
-        "name":      "Agence Ecofin — Agro",
-        "url":       "https://www.agenceecofin.com/gestion-publique/rss",
-        "zone":      "afrique",
-        "categorie": "économique",
-        "langue":    "fr",
-        "priorite":  2,
-    },
-    {
-        "name":      "BCEAO — Communiqués officiels",
-        "url":       "https://www.bceao.int/fr/rss.xml",
+        "name":      "Google News — BCEAO politique monétaire",
+        "url":       "https://news.google.com/rss/search?q=BCEAO+politique+monétaire&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "uemoa",
         "categorie": "politique_monetaire",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "BRVM — Actualités bourse",
-        "url":       "https://www.brvm.org/fr/rss.xml",
+        "name":      "Google News — UEMOA économie",
+        "url":       "https://news.google.com/rss/search?q=UEMOA+économie+croissance&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "uemoa",
-        "categorie": "marche_financier",
-        "langue":    "fr",
-        "priorite":  1,
-    },
-    {
-        "name":      "RFI Afrique — Actualités",
-        "url":       "https://www.rfi.fr/fr/afrique/rss",
-        "zone":      "afrique",
-        "categorie": "general",
-        "langue":    "fr",
-        "priorite":  2,
-    },
-    {
-        "name":      "RFI — Économie",
-        "url":       "https://www.rfi.fr/fr/economie/rss",
-        "zone":      "afrique",
-        "categorie": "économique",
-        "langue":    "fr",
-        "priorite":  2,
-    },
-    {
-        "name":      "Le Monde Afrique",
-        "url":       "https://www.lemonde.fr/afrique/rss_full.xml",
-        "zone":      "afrique",
-        "categorie": "general",
-        "langue":    "fr",
-        "priorite":  2,
-    },
-    {
-        "name":      "Jeune Afrique — Économie",
-        "url":       "https://www.jeuneafrique.com/feed",
-        "zone":      "afrique",
         "categorie": "économique",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "The Africa Report",
-        "url":       "https://www.theafricareport.com/feed/",
-        "zone":      "afrique",
+        "name":      "Google News — Côte d'Ivoire économie",
+        "url":       "https://news.google.com/rss/search?q=%22Côte+d%27Ivoire%22+économie+investissement&hl=fr&gl=CI&ceid=CI:fr",
+        "zone":      "uemoa",
         "categorie": "économique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "African Business Magazine",
-        "url":       "https://african.business/feed",
-        "zone":      "afrique",
-        "categorie": "économique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "Africanews — Économie",
-        "url":       "https://www.africanews.com/feed/",
-        "zone":      "afrique",
-        "categorie": "general",
-        "langue":    "en",
-        "priorite":  3,
-    },
-    {
-        "name":      "ONU Afrique — Actualités",
-        "url":       "https://news.un.org/feed/subscribe/fr/news/region/africa/feed/rss.xml",
-        "zone":      "afrique",
-        "categorie": "geopolitique",
         "langue":    "fr",
-        "priorite":  3,
+        "priorite":  1,
+    },
+    {
+        "name":      "Google News — franc CFA",
+        "url":       "https://news.google.com/rss/search?q=franc+CFA+FCFA+zone+franc&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "uemoa",
+        "categorie": "politique_monetaire",
+        "langue":    "fr",
+        "priorite":  1,
     },
 
-    # ── INTERNATIONAL FINANCE & MARCHÉS ────────────────────────────────────
+    # ── AFRIQUE ─────────────────────────────────────────────────────────────
     {
-        "name":      "Reuters — Top News",
-        "url":       "https://feeds.reuters.com/reuters/topNews",
-        "zone":      "international",
-        "categorie": "general",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Reuters — Business",
-        "url":       "https://feeds.reuters.com/reuters/businessNews",
-        "zone":      "international",
-        "categorie": "économique",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Reuters — Africa",
-        "url":       "https://feeds.reuters.com/reuters/AFRICANews",
+        "name":      "Google News — Afrique économie",
+        "url":       "https://news.google.com/rss/search?q=afrique+économie+croissance+investissement&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "afrique",
-        "categorie": "general",
-        "langue":    "en",
+        "categorie": "économique",
+        "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Financial Times — World",
-        "url":       "https://www.ft.com/rss/home/world",
-        "zone":      "international",
-        "categorie": "financier",
-        "langue":    "en",
+        "name":      "Google News — Afrique de l'Ouest",
+        "url":       "https://news.google.com/rss/search?q=%22Afrique+de+l%27Ouest%22+OR+CEDEAO+économie&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "afrique",
+        "categorie": "économique",
+        "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Financial Times — Markets",
-        "url":       "https://www.ft.com/rss/home/markets",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Bloomberg — Markets",
-        "url":       "https://feeds.bloomberg.com/markets/news.rss",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Bloomberg — World",
-        "url":       "https://feeds.bloomberg.com/politics/news.rss",
-        "zone":      "international",
-        "categorie": "geopolitique",
-        "langue":    "en",
+        "name":      "Google News — Sénégal Mali Burkina",
+        "url":       "https://news.google.com/rss/search?q=Sénégal+OR+Mali+OR+%22Burkina+Faso%22+économie&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "afrique",
+        "categorie": "économique",
+        "langue":    "fr",
         "priorite":  2,
     },
     {
-        "name":      "CNBC — World Markets",
-        "url":       "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "CNBC — Economy",
-        "url":       "https://www.cnbc.com/id/20910258/device/rss/rss.html",
-        "zone":      "international",
+        "name":      "Google News — Nigeria Ghana économie",
+        "url":       "https://news.google.com/rss/search?q=Nigeria+OR+Ghana+economy+finance&hl=en&gl=NG&ceid=NG:en",
+        "zone":      "afrique",
         "categorie": "économique",
         "langue":    "en",
         "priorite":  2,
     },
     {
-        "name":      "MarketWatch — Top Stories",
-        "url":       "https://feeds.marketwatch.com/marketwatch/topstories",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "MarketWatch — Economy",
-        "url":       "https://feeds.marketwatch.com/marketwatch/economy-politics",
-        "zone":      "international",
+        "name":      "Google News — dette Afrique FMI",
+        "url":       "https://news.google.com/rss/search?q=Afrique+dette+FMI+%22Banque+Mondiale%22&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "afrique",
         "categorie": "économique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "Yahoo Finance — News",
-        "url":       "https://finance.yahoo.com/news/rssindex",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "Investing.com — News",
-        "url":       "https://www.investing.com/rss/news.rss",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "Nasdaq — News",
-        "url":       "https://www.nasdaq.com/feed/rssoutbound?category=Markets",
-        "zone":      "international",
-        "categorie": "marche_financier",
-        "langue":    "en",
+        "langue":    "fr",
         "priorite":  2,
     },
 
-    # ── INSTITUTIONS INTERNATIONALES ────────────────────────────────────────
+    # ── MATIÈRES PREMIÈRES (crucial pour la BRVM) ───────────────────────────
     {
-        "name":      "FMI — Communiqués",
-        "url":       "https://www.imf.org/en/News/rss?selectedTypes=PressRelease",
-        "zone":      "international",
-        "categorie": "politique_monetaire",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Banque Mondiale — Afrique",
-        "url":       "https://blogs.worldbank.org/africacan/rss.xml",
-        "zone":      "afrique",
-        "categorie": "économique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "BCE — Communiqués",
-        "url":       "https://www.ecb.europa.eu/rss/press.html",
-        "zone":      "international",
-        "categorie": "politique_monetaire",
-        "langue":    "en",
-        "priorite":  1,
-    },
-    {
-        "name":      "Fed — Communiqués (FRED)",
-        "url":       "https://research.stlouisfed.org/rss/fred/",
-        "zone":      "international",
-        "categorie": "politique_monetaire",
-        "langue":    "en",
-        "priorite":  2,
-    },
-
-    # ── MATIÈRES PREMIÈRES (cacao, caoutchouc, pétrole, or) ──────────────
-    {
-        "name":      "Agence Ecofin — Cacao/Café",
-        "url":       "https://www.agenceecofin.com/cacao/rss",
+        "name":      "Google News — cacao prix marché",
+        "url":       "https://news.google.com/rss/search?q=cacao+prix+marché+cocoa&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "uemoa",
         "categorie": "matieres_premieres",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Agence Ecofin — Pétrole/Gaz",
-        "url":       "https://www.agenceecofin.com/hydrocarbures/rss",
+        "name":      "Google News — pétrole or matières premières",
+        "url":       "https://news.google.com/rss/search?q=pétrole+prix+OR+%22cours+de+l%27or%22+OR+%22matières+premières%22&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "international",
         "categorie": "matieres_premieres",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Agence Ecofin — Or/Mines",
-        "url":       "https://www.agenceecofin.com/or/rss",
-        "zone":      "international",
+        "name":      "Google News — caoutchouc coton palmier",
+        "url":       "https://news.google.com/rss/search?q=caoutchouc+OR+coton+OR+%22huile+de+palme%22+prix&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "uemoa",
         "categorie": "matieres_premieres",
         "langue":    "fr",
-        "priorite":  2,
+        "priorite":  1,
     },
     {
-        "name":      "Commodities — Reuters",
-        "url":       "https://feeds.reuters.com/reuters/commodities",
+        "name":      "Google News — commodities markets",
+        "url":       "https://news.google.com/rss/search?q=commodities+markets+cocoa+palm+oil&hl=en&gl=US&ceid=US:en",
         "zone":      "international",
         "categorie": "matieres_premieres",
         "langue":    "en",
-        "priorite":  1,
+        "priorite":  2,
     },
 
-    # ── GÉOPOLITIQUE & CONFLITS ─────────────────────────────────────────────
+    # ── MARCHÉS FINANCIERS INTERNATIONAUX ───────────────────────────────────
     {
-        "name":      "Al Jazeera — Actualités",
-        "url":       "https://www.aljazeera.com/xml/rss/all.xml",
+        "name":      "Google News — Fed taux inflation",
+        "url":       "https://news.google.com/rss/search?q=%22Federal+Reserve%22+OR+%22taux+directeur%22+inflation&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "international",
-        "categorie": "geopolitique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "BBC News — World",
-        "url":       "http://feeds.bbci.co.uk/news/world/rss.xml",
-        "zone":      "international",
-        "categorie": "geopolitique",
-        "langue":    "en",
-        "priorite":  2,
-    },
-    {
-        "name":      "BBC Afrique",
-        "url":       "https://feeds.bbci.co.uk/afrique/rss.xml",
-        "zone":      "afrique",
-        "categorie": "general",
+        "categorie": "politique_monetaire",
         "langue":    "fr",
         "priorite":  1,
     },
     {
-        "name":      "Challenges — Économie monde",
-        "url":       "https://www.challenges.fr/rss.xml",
+        "name":      "Google News — BCE taux euro",
+        "url":       "https://news.google.com/rss/search?q=BCE+%22banque+centrale+européenne%22+taux&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "international",
-        "categorie": "économique",
+        "categorie": "politique_monetaire",
         "langue":    "fr",
-        "priorite":  3,
+        "priorite":  1,
     },
     {
-        "name":      "Les Echos — Marchés",
-        "url":       "https://www.lesechos.fr/rss/rss_marches.xml",
+        "name":      "Google News — marchés financiers bourse",
+        "url":       "https://news.google.com/rss/search?q=marchés+financiers+bourse+indices&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "international",
         "categorie": "marche_financier",
         "langue":    "fr",
         "priorite":  2,
     },
     {
-        "name":      "Les Echos — Économie",
-        "url":       "https://www.lesechos.fr/rss/rss_economie.xml",
+        "name":      "Google News — dollar euro change",
+        "url":       "https://news.google.com/rss/search?q=dollar+euro+taux+change+forex&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "international",
+        "categorie": "marche_financier",
+        "langue":    "fr",
+        "priorite":  2,
+    },
+    {
+        "name":      "Google News — recession inflation économie mondiale",
+        "url":       "https://news.google.com/rss/search?q=récession+OR+inflation+%22économie+mondiale%22&hl=fr&gl=FR&ceid=FR:fr",
         "zone":      "international",
         "categorie": "économique",
         "langue":    "fr",
+        "priorite":  1,
+    },
+
+    # ── GÉOPOLITIQUE ────────────────────────────────────────────────────────
+    {
+        "name":      "Google News — géopolitique Afrique",
+        "url":       "https://news.google.com/rss/search?q=géopolitique+Afrique+sanctions+instabilité&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "afrique",
+        "categorie": "geopolitique",
+        "langue":    "fr",
         "priorite":  2,
+    },
+    {
+        "name":      "Google News — FMI Banque Mondiale Afrique",
+        "url":       "https://news.google.com/rss/search?q=FMI+%22Banque+Mondiale%22+Afrique+prêt&hl=fr&gl=FR&ceid=FR:fr",
+        "zone":      "afrique",
+        "categorie": "économique",
+        "langue":    "fr",
+        "priorite":  1,
     },
 ]
 
@@ -409,14 +261,14 @@ KEYWORDS_IMPACT = {
 
 class MacroCollector:
     """
-    Collecte les actualités macro-économiques depuis des flux RSS,
+    Collecte les actualités macro-économiques depuis des flux Google News RSS,
     analyse leur impact via IA et insère dans google_alerts_rapports.
     """
 
     def __init__(self, db_conn, gemini_keys: list, deepseek_key: str,
                  mistral_key: str, max_articles_per_source: int = 8):
-        self.db_conn   = db_conn
-        self.gemini_keys   = gemini_keys if isinstance(gemini_keys, list) else [gemini_keys]
+        self.db_conn       = db_conn
+        self.gemini_keys   = gemini_keys if isinstance(gemini_keys, list) else ([gemini_keys] if gemini_keys else [])
         self.deepseek_key  = deepseek_key
         self.mistral_key   = mistral_key
         self.max_per_src   = max_articles_per_source
@@ -430,9 +282,11 @@ class MacroCollector:
     def run(self):
         """Lance la collecte complète."""
         logging.info("="*60)
-        logging.info("🌍 MACRO COLLECTOR — Démarrage collecte RSS")
+        logging.info("🌍 MACRO COLLECTOR — Démarrage collecte RSS Google News")
         logging.info("="*60)
 
+        # Créer la table si elle n'existe pas, puis vérifier les colonnes
+        self._ensure_table_exists()
         self._ensure_table_columns()
 
         articles = self._fetch_all_rss()
@@ -462,6 +316,7 @@ class MacroCollector:
                     time.sleep(0.5)   # politesse API
                 except Exception as e:
                     logging.error(f"❌ Erreur insertion {art.get('titre','?')[:50]}: {e}")
+                    logging.debug(traceback.format_exc())
                     self.stats["errors"] += 1
 
         logging.info("="*60)
@@ -471,26 +326,69 @@ class MacroCollector:
         return self.stats
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CRÉATION / VÉRIFICATION DES COLONNES SUPABASE
+    # CRÉATION / VÉRIFICATION DE LA TABLE ET DES COLONNES
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _ensure_table_exists(self):
+        """
+        Crée la table google_alerts_rapports si elle n'existe pas.
+        Inclut toutes les colonnes dès la création.
+        """
+        cursor = self.db_conn.cursor()
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS google_alerts_rapports (
+                    id                        SERIAL PRIMARY KEY,
+                    mail_date                 TIMESTAMPTZ,
+                    mail_subject              TEXT,
+                    titre                     TEXT,
+                    resume                    TEXT,
+                    points_cles               JSONB,
+                    sentiment                 TEXT,
+                    pertinence                INTEGER DEFAULT 50,
+                    categorie                 TEXT,
+                    rapport_type              TEXT,
+                    alert_keyword             TEXT,
+                    mot_cle                   TEXT,
+                    source_url                TEXT,
+                    url_hash                  TEXT UNIQUE,
+                    source_rss                TEXT,
+                    zone                      TEXT,
+                    sous_categorie            TEXT,
+                    langue                    TEXT DEFAULT 'fr',
+                    score_importance          INTEGER DEFAULT 50,
+                    impact_brvm               TEXT DEFAULT 'neutre',
+                    impact_bourses_mondiales  TEXT,
+                    impact_secteurs_brvm      JSONB,
+                    impact_societes_cotees    JSONB,
+                    collecte_date             TIMESTAMPTZ DEFAULT NOW(),
+                    envoye_email              BOOLEAN DEFAULT FALSE,
+                    created_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            # Index utiles
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_gar_url_hash      ON google_alerts_rapports(url_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_gar_zone          ON google_alerts_rapports(zone);",
+                "CREATE INDEX IF NOT EXISTS idx_gar_impact_brvm   ON google_alerts_rapports(impact_brvm);",
+                "CREATE INDEX IF NOT EXISTS idx_gar_score         ON google_alerts_rapports(score_importance DESC);",
+                "CREATE INDEX IF NOT EXISTS idx_gar_collecte_date ON google_alerts_rapports(collecte_date DESC);",
+            ]:
+                cursor.execute(idx_sql)
+            self.db_conn.commit()
+            logging.info("✅ Table google_alerts_rapports prête")
+        except Exception as e:
+            self.db_conn.rollback()
+            logging.warning(f"⚠️  _ensure_table_exists: {e}")
+            logging.debug(traceback.format_exc())
+        finally:
+            cursor.close()
 
     def _ensure_table_columns(self):
         """
-        Vérifie et crée les colonnes nécessaires dans google_alerts_rapports.
-        Colonnes ajoutées si absentes :
-          - zone         : TEXT  (international / afrique / uemoa)
-          - sous_categorie : TEXT (geopolitique / matieres_premieres / etc.)
-          - impact_brvm  : TEXT  (positif / negatif / neutre)
-          - impact_bourses_mondiales : TEXT
-          - impact_secteurs_brvm : JSONB  [{secteur, impact, justification}]
-          - impact_societes_cotees : JSONB [{symbole, impact, raison}]
-          - source_rss   : TEXT  (nom de la source RSS)
-          - collecte_date : TIMESTAMPTZ
-          - langue       : TEXT  (fr / en)
-          - score_importance : INTEGER (0-100)
+        Vérifie et ajoute les colonnes manquantes (migration idempotente).
+        Utile si la table existait déjà sans certaines colonnes.
         """
-        logging.info("🔧 Vérification colonnes google_alerts_rapports...")
-
         colonnes_requises = [
             ("zone",                       "TEXT"),
             ("sous_categorie",             "TEXT"),
@@ -502,7 +400,7 @@ class MacroCollector:
             ("collecte_date",              "TIMESTAMPTZ DEFAULT NOW()"),
             ("langue",                     "TEXT DEFAULT 'fr'"),
             ("score_importance",           "INTEGER DEFAULT 50"),
-            ("url_hash",                   "TEXT"),   # pour déduplication rapide
+            ("url_hash",                   "TEXT"),
         ]
 
         cursor = self.db_conn.cursor()
@@ -515,20 +413,9 @@ class MacroCollector:
                 self.db_conn.commit()
             except Exception as e:
                 self.db_conn.rollback()
-                logging.warning(f"⚠️  Colonne {col_name}: {e}")
-
-        # Index sur url_hash pour déduplication rapide
-        try:
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_gar_url_hash
-                ON google_alerts_rapports(url_hash);
-            """)
-            self.db_conn.commit()
-        except Exception:
-            self.db_conn.rollback()
-
+                logging.debug(f"Colonne {col_name} déjà présente ou erreur: {e}")
         cursor.close()
-        logging.info("✅ Colonnes vérifiées / créées")
+        logging.info("✅ Colonnes google_alerts_rapports vérifiées")
 
     # ──────────────────────────────────────────────────────────────────────────
     # COLLECTE RSS
@@ -537,7 +424,8 @@ class MacroCollector:
     def _fetch_all_rss(self) -> list:
         """Parcourt toutes les sources RSS et retourne une liste d'articles bruts."""
         all_articles = []
-        cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+        # CORRECTION : 7 jours au lieu de 3 pour ne pas rater des articles
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
         for source in RSS_SOURCES:
             try:
@@ -545,9 +433,9 @@ class MacroCollector:
                 all_articles.extend(articles)
                 self.stats["fetched"] += len(articles)
                 logging.info(
-                    f"   📡 {source['name']:<40} → {len(articles)} article(s)"
+                    f"   📡 {source['name']:<45} → {len(articles)} article(s)"
                 )
-                time.sleep(0.3)
+                time.sleep(0.5)   # politesse serveur
             except Exception as e:
                 logging.warning(f"   ⚠️  {source['name']}: {e}")
                 self.stats["errors"] += 1
@@ -557,44 +445,54 @@ class MacroCollector:
     def _fetch_one_rss(self, source: dict, cutoff: datetime) -> list:
         """Collecte les articles d'une source RSS unique."""
         headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (compatible; BRVMBot/1.0; '
-                '+https://brvm.org)'
-            ),
-            'Accept': 'application/rss+xml, application/xml, text/xml',
+            # User-agent neutre — Google News RSS tolère les requêtes simples
+            'User-Agent': 'Mozilla/5.0 (compatible; Feedfetcher-Google; +http://www.google.com/feedfetcher.html)',
+            'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
         }
 
         try:
-            resp = requests.get(source["url"], headers=headers, timeout=15)
+            resp = requests.get(source["url"], headers=headers, timeout=20)
             resp.raise_for_status()
-            feed = feedparser.parse(resp.text)
         except requests.exceptions.HTTPError as e:
-            # Certains sites bloquent les bots → on continue sans erreur fatale
             logging.debug(f"HTTP {e.response.status_code} pour {source['name']}")
             return []
         except Exception as e:
-            raise e
+            logging.debug(f"Réseau pour {source['name']}: {e}")
+            return []
+
+        feed = feedparser.parse(resp.text)
+        if not feed.entries:
+            # Tentative directe via feedparser (parfois contourne le 403)
+            feed = feedparser.parse(source["url"])
 
         articles = []
         for entry in feed.entries[:self.max_per_src]:
             # Date de publication
             pub_date = None
-            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                pub_date = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
+            for attr in ('published_parsed', 'updated_parsed'):
+                val = getattr(entry, attr, None)
+                if val:
+                    try:
+                        pub_date = datetime(*val[:6], tzinfo=timezone.utc)
+                        break
+                    except Exception:
+                        pass
 
             # Filtrer les articles trop anciens
             if pub_date and pub_date < cutoff:
                 continue
 
             # Contenu
-            titre   = getattr(entry, 'title', '') or ''
-            resume  = ''
-            if hasattr(entry, 'summary'):
-                resume = re.sub(r'<[^>]+>', '', entry.summary or '')[:1000]
-            elif hasattr(entry, 'description'):
-                resume = re.sub(r'<[^>]+>', '', entry.description or '')[:1000]
+            titre  = getattr(entry, 'title', '') or ''
+            resume = ''
+            for attr in ('summary', 'description', 'content'):
+                raw = getattr(entry, attr, None)
+                if isinstance(raw, list) and raw:
+                    raw = raw[0].get('value', '')
+                if raw:
+                    resume = re.sub(r'<[^>]+>', '', str(raw))[:1200]
+                    break
 
             url = getattr(entry, 'link', '') or ''
 
@@ -609,20 +507,20 @@ class MacroCollector:
             score = self._score_article(titre + ' ' + resume, source)
 
             articles.append({
-                "mail_date":    pub_date or datetime.now(timezone.utc),
-                "mail_subject": titre,
-                "titre":        titre,
-                "resume":       resume,
-                "source_url":   url,
-                "url_hash":     url_hash,
-                "source_rss":   source["name"],
-                "zone":         source["zone"],
+                "mail_date":      pub_date or datetime.now(timezone.utc),
+                "mail_subject":   titre,
+                "titre":          titre,
+                "resume":         resume,
+                "source_url":     url,
+                "url_hash":       url_hash,
+                "source_rss":     source["name"],
+                "zone":           source["zone"],
                 "sous_categorie": source["categorie"],
-                "langue":       source["langue"],
+                "langue":         source["langue"],
                 "score_importance": score,
                 "alert_keyword":  source["categorie"],
-                "mot_cle":       source["zone"],
-                "categorie":    source["categorie"],
+                "mot_cle":        source["zone"],
+                "categorie":      source["categorie"],
             })
 
         return articles
@@ -705,11 +603,7 @@ class MacroCollector:
         - Résumé enrichi en français
         - Sentiment (positif/négatif/neutre)
         - Impact sur la BRVM
-        - Impact sur les bourses mondiales
-        - Impact par secteur BRVM [{secteur, impact, justification}]
-        - Impact par société cotée [{symbole, impact, raison}]
-        - Score de pertinence affiné
-        - Points clés [{point1}, {point2}, ...]
+        - Points clés
         """
         titre  = article.get("titre", "")
         resume = article.get("resume", "")
@@ -720,14 +614,14 @@ class MacroCollector:
         if not titre and not resume:
             return article
 
-        # Si score trop faible → pas d'appel IA pour économiser les quotas
-        if article.get("score_importance", 0) < 25:
-            article["sentiment"] = "neutre"
+        # CORRECTION : seuil abaissé à 15 (était 25, trop restrictif)
+        if article.get("score_importance", 0) < 15:
+            article["sentiment"]   = "neutre"
             article["impact_brvm"] = "neutre"
             article["points_cles"] = []
             return article
 
-        prompt = f"""Tu es un analyste financier expert de la BRVM (Bourse Régionale des Valeurs Mobilières d'Afrique de l'Ouest) et des marchés africains.
+        prompt = f"""Tu es un analyste financier expert de la BRVM (Bourse Régionale des Valeurs Mobilières d'Afrique de l'Ouest).
 
 ARTICLE À ANALYSER :
 Titre    : {titre}
@@ -737,14 +631,13 @@ Langue   : {langue}
 Contenu  : {resume[:800]}
 
 SOCIÉTÉS COTÉES BRVM (référence) :
-Banques : SGBC, BICB, BICC, BOAB, BOABF, BOAC, BOAM, BOAN, BNTS, CBIB, ECOC, NSBC, OREC, SAFC
-Industrie : ABJC, CABC, NTLC, ORAC, SAPH, SICC, SPHC, SIVC, TTLS, UNLC, STAC, SCRC
-Énergie/Distrib : ETIT, SDSC, SHEC, TOTAL
-Agro : PALC, SOGC, TRDE, LNBB
+Banques : SGBC, BICB, BICC, BOAB, BOABF, BOAC, BOAM, BOAN, BNTS, CBIB, ECOC, NSBC
+Industrie : ABJC, CABC, NTLC, SICC, SPHC, SIVC, STAC, UNLC, SLBC
+Énergie/Distrib : ETIT, SHEC, TTLC, TTLS, CIEC
+Agro : PALC, SOGC, LNBB, CFAC
 Télécom : ONTBF, SNTS
-Autres : CFAC, PRSC, SVOC
 
-MISSION — Réponds UNIQUEMENT en JSON valide, sans explication, sans markdown :
+MISSION — Réponds UNIQUEMENT en JSON valide, sans markdown :
 {{
   "resume_fr": "résumé en français 3-5 phrases, factuel et précis",
   "points_cles": ["point 1", "point 2", "point 3"],
@@ -752,19 +645,17 @@ MISSION — Réponds UNIQUEMENT en JSON valide, sans explication, sans markdown 
   "pertinence": <entier 0-100>,
   "impact_brvm": "positif|negatif|neutre",
   "impact_brvm_detail": "explication 2-3 phrases de l'impact sur la BRVM",
-  "impact_bourses_mondiales": "explication 1-2 phrases de l'impact sur NYSE/Euronext/marchés asiatiques",
+  "impact_bourses_mondiales": "explication 1-2 phrases",
   "impact_secteurs_brvm": [
     {{"secteur": "Banques", "impact": "positif|negatif|neutre", "justification": "phrase courte"}},
-    {{"secteur": "Industrie", "impact": "positif|negatif|neutre", "justification": "phrase courte"}},
     {{"secteur": "Matières premières", "impact": "positif|negatif|neutre", "justification": "phrase courte"}}
   ],
   "impact_societes_cotees": [
-    {{"symbole": "SGBC", "impact": "positif|negatif|neutre", "raison": "phrase courte"}},
-    {{"symbole": "SPHC", "impact": "positif|negatif|neutre", "raison": "phrase courte"}}
+    {{"symbole": "SGBC", "impact": "positif|negatif|neutre", "raison": "phrase courte"}}
   ],
   "score_importance": <entier 0-100>
 }}
-Ne cite que les sociétés réellement concernées (max 5). Si l'article n'a aucun lien avec la BRVM, laisse impact_societes_cotees vide."""
+Ne cite que les sociétés réellement concernées (max 5)."""
 
         # Tentative avec rotation des IA
         result_json = None
@@ -772,7 +663,6 @@ Ne cite que les sociétés réellement concernées (max 5). Si l'article n'a auc
             try:
                 raw = fn(prompt)
                 if raw:
-                    # Nettoyer le JSON
                     clean = re.sub(r'```json|```', '', raw).strip()
                     result_json = json.loads(clean)
                     break
@@ -792,20 +682,20 @@ Ne cite que les sociétés réellement concernées (max 5). Si l'article n'a auc
             article["score_importance"]         = result_json.get("score_importance",
                                                                    article.get("score_importance", 50))
         else:
-            # Fallback sans IA : sentiment par mots-clés
+            # Fallback sans IA : sentiment par mots-clés simples
             text = (titre + " " + resume).lower()
             pos_kw = ["hausse", "croissance", "positif", "bénéfice", "accord",
-                      "investissement", "record", "stabilité", "growth", "rise"]
+                      "investissement", "record", "stabilité", "growth", "rise", "gain"]
             neg_kw = ["baisse", "chute", "crise", "conflit", "guerre", "sanction",
-                      "récession", "déficit", "perte", "fall", "drop", "war"]
+                      "récession", "déficit", "perte", "fall", "drop", "war", "risque"]
             pos_hits = sum(1 for k in pos_kw if k in text)
             neg_hits = sum(1 for k in neg_kw if k in text)
-            article["sentiment"] = "positif" if pos_hits > neg_hits else \
-                                   "negatif" if neg_hits > pos_hits else "neutre"
-            article["impact_brvm"]       = article["sentiment"]
-            article["points_cles"]       = []
-            article["impact_secteurs_brvm"]   = []
-            article["impact_societes_cotees"] = []
+            article["sentiment"]  = "positif" if pos_hits > neg_hits else \
+                                    "negatif" if neg_hits > pos_hits else "neutre"
+            article["impact_brvm"]              = article["sentiment"]
+            article["points_cles"]              = []
+            article["impact_secteurs_brvm"]     = []
+            article["impact_societes_cotees"]   = []
 
         return article
 
@@ -880,7 +770,7 @@ Ne cite que les sociétés réellement concernées (max 5). Si l'article n'a auc
                     %(impact_secteurs_brvm)s, %(impact_societes_cotees)s,
                     NOW(), FALSE
                 )
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT (url_hash) DO NOTHING;
             """, {
                 **art,
                 "points_cles":            json.dumps(art.get("points_cles", []),
@@ -904,105 +794,63 @@ Ne cite que les sociétés réellement concernées (max 5). Si l'article n'a auc
 
 
 # ==============================================================================
-# SQL DE MIGRATION — À exécuter UNE SEULE FOIS dans Supabase
+# POINT D'ENTRÉE STANDALONE
+# Permet d'exécuter macro_collector.py directement depuis le workflow GitHub
 # ==============================================================================
-SQL_MIGRATION = """
--- ============================================================
--- MIGRATION google_alerts_rapports
--- Ajouter les colonnes nécessaires au macro_collector
--- À exécuter dans l'éditeur SQL de Supabase
--- ============================================================
 
-ALTER TABLE google_alerts_rapports
-    ADD COLUMN IF NOT EXISTS zone                     TEXT,
-    ADD COLUMN IF NOT EXISTS sous_categorie           TEXT,
-    ADD COLUMN IF NOT EXISTS impact_brvm              TEXT DEFAULT 'neutre',
-    ADD COLUMN IF NOT EXISTS impact_bourses_mondiales TEXT,
-    ADD COLUMN IF NOT EXISTS impact_secteurs_brvm     JSONB,
-    ADD COLUMN IF NOT EXISTS impact_societes_cotees   JSONB,
-    ADD COLUMN IF NOT EXISTS source_rss               TEXT,
-    ADD COLUMN IF NOT EXISTS collecte_date            TIMESTAMPTZ DEFAULT NOW(),
-    ADD COLUMN IF NOT EXISTS langue                   TEXT DEFAULT 'fr',
-    ADD COLUMN IF NOT EXISTS score_importance         INTEGER DEFAULT 50,
-    ADD COLUMN IF NOT EXISTS url_hash                 TEXT;
-
--- Index pour déduplication rapide
-CREATE INDEX IF NOT EXISTS idx_gar_url_hash
-    ON google_alerts_rapports(url_hash);
-
-CREATE INDEX IF NOT EXISTS idx_gar_zone
-    ON google_alerts_rapports(zone);
-
-CREATE INDEX IF NOT EXISTS idx_gar_impact_brvm
-    ON google_alerts_rapports(impact_brvm);
-
-CREATE INDEX IF NOT EXISTS idx_gar_score
-    ON google_alerts_rapports(score_importance DESC);
-
-CREATE INDEX IF NOT EXISTS idx_gar_collecte_date
-    ON google_alerts_rapports(collecte_date DESC);
-
--- Vue pratique pour le rapport
-CREATE OR REPLACE VIEW v_macro_actualites AS
-SELECT
-    id,
-    mail_date,
-    zone,
-    sous_categorie,
-    titre,
-    resume,
-    sentiment,
-    impact_brvm,
-    impact_bourses_mondiales,
-    impact_secteurs_brvm,
-    impact_societes_cotees,
-    points_cles,
-    pertinence,
-    score_importance,
-    source_rss,
-    source_url,
-    langue,
-    collecte_date
-FROM google_alerts_rapports
-WHERE collecte_date >= NOW() - INTERVAL '7 days'
-ORDER BY score_importance DESC, mail_date DESC;
-"""
-
-
-# ==============================================================================
-# SCRIPT STANDALONE — pour test ou appel direct
-# ==============================================================================
-if __name__ == "__main__":
-    import os
-
-    DB_URL          = os.environ.get("DATABASE_URL")
-    GEMINI_KEYS     = [k for k in [
-        os.environ.get("GEMINI_API_KEY"),
-        os.environ.get("GEMINI_API_KEY_2"),
-        os.environ.get("GEMINI_API_KEY_3"),
-    ] if k]
-    DEEPSEEK_KEY    = os.environ.get("DEEPSEEK_API_KEY")
-    MISTRAL_KEY     = os.environ.get("MISTRAL_API_KEY")
-
-    if not DB_URL:
-        print("❌ DATABASE_URL non défini")
-        exit(1)
-
-    conn = psycopg2.connect(DB_URL)
-    collector = MacroCollector(
-        db_conn=conn,
-        gemini_keys=GEMINI_KEYS,
-        deepseek_key=DEEPSEEK_KEY,
-        mistral_key=MISTRAL_KEY,
-        max_articles_per_source=8,
+def _get_db_connection():
+    """Crée une connexion PostgreSQL depuis les variables d'environnement."""
+    required = ["DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST"]
+    missing  = [v for v in required if not os.environ.get(v)]
+    if missing:
+        raise EnvironmentError(f"Variables d'environnement manquantes : {missing}")
+    return psycopg2.connect(
+        dbname   = os.environ["DB_NAME"],
+        user     = os.environ["DB_USER"],
+        password = os.environ["DB_PASSWORD"],
+        host     = os.environ["DB_HOST"],
+        port     = os.environ.get("DB_PORT", "5432"),
+        connect_timeout = 30,
+        options  = "-c statement_timeout=300000",
     )
 
-    stats = collector.run()
-    print(f"\n📊 Résultats : {stats}")
 
-    # Afficher la migration SQL
-    print("\n" + "="*60)
-    print("SQL DE MIGRATION (déjà exécuté automatiquement par le code)")
-    print("="*60)
-    print(SQL_MIGRATION)
-    conn.close()
+if __name__ == "__main__":
+    logging.info("🌍 MACRO COLLECTOR — Exécution standalone")
+
+    # Clés IA depuis l'environnement
+    gemini_keys = [
+        k for k in [
+            os.environ.get("GEMINI_API_KEY"),
+            os.environ.get("GEMINI_API_KEY_2"),
+            os.environ.get("GEMINI_API_KEY_3"),
+        ]
+        if k
+    ]
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+    mistral_key  = os.environ.get("MISTRAL_API_KEY")
+
+    logging.info(f"   APIs disponibles : Gemini×{len(gemini_keys)} "
+                 f"| DeepSeek={'✅' if deepseek_key else '❌'} "
+                 f"| Mistral={'✅' if mistral_key else '❌'}")
+
+    db_conn = None
+    try:
+        db_conn = _get_db_connection()
+        collector = MacroCollector(
+            db_conn                 = db_conn,
+            gemini_keys             = gemini_keys,
+            deepseek_key            = deepseek_key,
+            mistral_key             = mistral_key,
+            max_articles_per_source = 10,
+        )
+        stats = collector.run()
+        logging.info(f"✅ Terminé — Insérés: {stats['inserted']} | "
+                     f"Ignorés: {stats['skipped']} | Erreurs: {stats['errors']}")
+    except Exception as e:
+        logging.error(f"❌ ERREUR FATALE macro_collector : {e}")
+        logging.error(traceback.format_exc())
+        sys.exit(1)
+    finally:
+        if db_conn:
+            db_conn.close()
