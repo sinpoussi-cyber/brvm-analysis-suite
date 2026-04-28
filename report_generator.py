@@ -768,12 +768,15 @@ class BRVMReportGenerator:
 
     def _get_macro_news(self):
         """
-        Charge les actualités macro depuis google_alerts_rapports :
-        - Actualités internationales (guerres, crises, taux Fed/BCE, matières premières)
-        - Actualités africaines (CEDEAO, Union Africaine, économies partenaires)
-        - Actualités UEMOA / BCEAO (politique monétaire, inflation, taux directeur)
-        
-        Retourne un dict avec 3 clés :
+        Charge les actualités macro depuis google_alerts_rapports.
+
+        STRATÉGIE v2 :
+          1. Priorité à la colonne `zone` (renseignée par macro_collector v2)
+          2. Fallback sur filtrage par mots-clés si `zone` est NULL (anciens enregistrements)
+          3. Fenêtre glissante de 14 jours (au lieu de sans filtre de date)
+          4. Fallback global si toutes les catégories sont vides
+
+        Retourne un dict :
           'international' : DataFrame des news mondiales
           'afrique'       : DataFrame des news africaines
           'uemoa'         : DataFrame des news UEMOA/BCEAO
@@ -781,101 +784,121 @@ class BRVMReportGenerator:
         """
         logging.info("🌍 Chargement actualités macro (international / Afrique / UEMOA)...")
 
-        # Mots-clés par niveau géographique
+        # ── Colonnes communes à sélectionner ────────────────────────────────
+        COLS = """
+            mail_date,
+            COALESCE(mail_subject, titre, '') AS mail_subject,
+            COALESCE(titre, mail_subject, '') AS titre,
+            COALESCE(resume, '') AS resume,
+            points_cles,
+            COALESCE(sentiment, 'neutre') AS sentiment,
+            COALESCE(pertinence, 50) AS pertinence,
+            COALESCE(categorie, '') AS categorie,
+            COALESCE(alert_keyword, '') AS alert_keyword,
+            COALESCE(mot_cle, '') AS mot_cle,
+            COALESCE(source_url, '') AS source_url,
+            COALESCE(source_rss, '') AS source_rss,
+            COALESCE(zone, '') AS zone,
+            COALESCE(score_importance, 50) AS score_importance,
+            COALESCE(impact_brvm, 'neutre') AS impact_brvm
+        """
+
+        # ── Mots-clés fallback (pour les anciens enregistrements sans zone) ─
         KW_INTERNATIONAL = [
             'fed','federal reserve','bce','banque centrale européenne',
             'taux directeur','inflation','récession','guerre','conflit',
             'ukraine','russie','chine','usa','dollar','euro','pétrole','oil',
             'or','gold','matières premières','commodity','sp500','dow jones',
             'nasdaq','bourse','marchés financiers','crise','sanctions',
-            'commerce mondial','exportation','importation','fmi','banque mondiale',
-            'g20','g7','ocde','dette souveraine','obligations','bitcoin','crypto'
+            'commerce mondial','fmi','banque mondiale','g20','g7','dette souveraine'
         ]
         KW_AFRIQUE = [
             'afrique','africa','cedeao','ecowas','union africaine','nigeria',
             'ghana','kenya','maroc','egypte','éthiopie','afrique du sud',
-            'franc cfa','zone cfa','investissement afrique','croissance afrique',
-            'dette afrique','développement','infrastructure afrique'
+            'franc cfa','zone cfa','investissement afrique','croissance afrique'
         ]
         KW_UEMOA = [
             'uemoa','bceao',"côte d'ivoire",'sénégal','mali','burkina',
-            'niger','togo','bénin',"guinée-bissau",'zone franc','fcfa',
-            'brvm','bourse abidjan','inflation uemoa','taux bceao',
-            'politique monétaire','réserves','liquidité bancaire'
+            'niger','togo','bénin','zone franc','fcfa',
+            'brvm','bourse abidjan','taux bceao','politique monétaire'
         ]
 
-        def _build_kw_filter(kw_list):
-            # Doubler les apostrophes pour éviter les erreurs SQL (ex: côte d'ivoire)
+        def _kw_filter(kw_list):
             conditions = " OR ".join([
-                "LOWER(COALESCE(alert_keyword,'') || ' ' || COALESCE(mot_cle,'') || ' ' || COALESCE(titre,'') || ' ' || COALESCE(resume,'')) LIKE '%" + kw.replace("'", "''") + "%'"
+                "LOWER(COALESCE(titre,'') || ' ' || COALESCE(resume,'') || ' ' || COALESCE(alert_keyword,'') || ' ' || COALESCE(mot_cle,'')) LIKE '%"
+                + kw.replace("'", "''") + "%'"
                 for kw in kw_list
             ])
             return conditions
 
-        base_query = """
-        SELECT
-            mail_date,
-            mail_subject,
-            titre,
-            resume,
-            points_cles,
-            sentiment,
-            pertinence,
-            categorie,
-            alert_keyword,
-            mot_cle,
-            source_url
-        FROM google_alerts_rapports
-        WHERE ({filter})
-          AND (resume IS NOT NULL AND resume <> '')
-        ORDER BY mail_date DESC NULLS LAST
-        LIMIT 15;
-        """
+        result = {
+            'international': pd.DataFrame(),
+            'afrique':       pd.DataFrame(),
+            'uemoa':         pd.DataFrame(),
+            'all':           pd.DataFrame(),
+        }
 
-        result = {'international': pd.DataFrame(), 'afrique': pd.DataFrame(),
-                  'uemoa': pd.DataFrame(), 'all': pd.DataFrame()}
         try:
-            # Chargement UEMOA
-            df_uemoa = pd.read_sql(
-                base_query.format(filter=_build_kw_filter(KW_UEMOA)),
-                self.db_conn
-            )
-            result['uemoa'] = df_uemoa
+            # ── Requête par zone (articles issus de macro_collector v2) ─────
+            for zone_key, zone_val in [
+                ('uemoa',         'uemoa'),
+                ('afrique',       'afrique'),
+                ('international', 'international'),
+            ]:
+                query_zone = f"""
+                    SELECT {COLS}
+                    FROM google_alerts_rapports
+                    WHERE zone = '{zone_val}'
+                      AND resume IS NOT NULL AND resume <> ''
+                    ORDER BY COALESCE(collecte_date, mail_date) DESC NULLS LAST
+                    LIMIT 15;
+                """
+                df_zone = pd.read_sql(query_zone, self.db_conn)
+                result[zone_key] = df_zone
 
-            # Chargement Afrique
-            df_afrique = pd.read_sql(
-                base_query.format(filter=_build_kw_filter(KW_AFRIQUE)),
-                self.db_conn
-            )
-            result['afrique'] = df_afrique
+            # ── Fallback mots-clés pour les zones encore vides ──────────────
+            kw_map = {
+                'uemoa':         KW_UEMOA,
+                'afrique':       KW_AFRIQUE,
+                'international': KW_INTERNATIONAL,
+            }
+            for zone_key, kw_list in kw_map.items():
+                if result[zone_key].empty:
+                    logging.info(f"   ↩️  Fallback mots-clés pour zone={zone_key}")
+                    query_kw = f"""
+                        SELECT {COLS}
+                        FROM google_alerts_rapports
+                        WHERE ({_kw_filter(kw_list)})
+                          AND resume IS NOT NULL AND resume <> ''
+                        ORDER BY COALESCE(collecte_date, mail_date) DESC NULLS LAST
+                        LIMIT 15;
+                    """
+                    result[zone_key] = pd.read_sql(query_kw, self.db_conn)
 
-            # Chargement International
-            df_intl = pd.read_sql(
-                base_query.format(filter=_build_kw_filter(KW_INTERNATIONAL)),
-                self.db_conn
-            )
-            result['international'] = df_intl
-
-            # Fallback global si tout est vide
+            # ── Fallback global si toutes les catégories restent vides ──────
             if all(v.empty for v in result.values()):
-                df_all = pd.read_sql(
-                    """SELECT mail_date, mail_subject, titre, resume, points_cles,
-                              sentiment, pertinence, categorie, alert_keyword,
-                              mot_cle, source_url
-                       FROM google_alerts_rapports
-                       WHERE resume IS NOT NULL AND resume <> ''
-                       ORDER BY mail_date DESC NULLS LAST LIMIT 20;""",
-                    self.db_conn
-                )
+                logging.info("   ↩️  Fallback global — aucun filtre zone ni mots-clés")
+                df_all = pd.read_sql(f"""
+                    SELECT {COLS}
+                    FROM google_alerts_rapports
+                    WHERE resume IS NOT NULL AND resume <> ''
+                    ORDER BY COALESCE(collecte_date, mail_date) DESC NULLS LAST
+                    LIMIT 20;
+                """, self.db_conn)
                 result['all'] = df_all
 
             total = sum(len(v) for v in result.values())
-            logging.info(f"   ✅ {total} actualités macro chargées "
-                         f"(intl={len(result['international'])}, "
-                         f"afrique={len(result['afrique'])}, "
-                         f"uemoa={len(result['uemoa'])})")
+            logging.info(
+                f"   ✅ {total} actualités macro chargées "
+                f"(intl={len(result['international'])}, "
+                f"afrique={len(result['afrique'])}, "
+                f"uemoa={len(result['uemoa'])})"
+            )
+
         except Exception as e:
             logging.error(f"❌ Erreur chargement macro news: {e}")
+            import traceback as _tb
+            logging.error(_tb.format_exc())
 
         return result
 
@@ -3229,7 +3252,7 @@ RAPPELS IMPÉRATIFS:
         doc.add_paragraph(
             "Analyse de l'environnement macro-économique mondial et régional susceptible "
             "d'impacter la BRVM et les sociétés cotées. Générée par IA à partir des "
-            "actualités collectées via Google Alerts."
+            "actualités collectées via flux RSS Google News (BRVM, BCEAO, UEMOA, matières premières, marchés mondiaux)."
         ).runs[0].font.size = Pt(9)
         doc.add_paragraph()
 
