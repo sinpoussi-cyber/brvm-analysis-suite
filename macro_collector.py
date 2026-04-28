@@ -37,102 +37,90 @@ logging.basicConfig(
 # SOURCES RSS (tentative 1 — peut échouer sur certains runners)
 # ==============================================================================
 RSS_SOURCES = [
-    {
-        "name":      "Google News — BRVM bourse",
-        "url":       "https://news.google.com/rss/search?q=BRVM+bourse+régionale&hl=fr&gl=CI&ceid=CI:fr",
-        "zone":      "uemoa", "categorie": "marche_financier", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — BCEAO",
-        "url":       "https://news.google.com/rss/search?q=BCEAO+politique+monétaire&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "uemoa", "categorie": "politique_monetaire", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — UEMOA économie",
-        "url":       "https://news.google.com/rss/search?q=UEMOA+économie+croissance&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "uemoa", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — Côte d'Ivoire",
-        "url":       "https://news.google.com/rss/search?q=%22Côte+d%27Ivoire%22+économie&hl=fr&gl=CI&ceid=CI:fr",
-        "zone":      "uemoa", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — franc CFA",
-        "url":       "https://news.google.com/rss/search?q=franc+CFA+FCFA&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "uemoa", "categorie": "politique_monetaire", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — Afrique économie",
-        "url":       "https://news.google.com/rss/search?q=afrique+économie+croissance+investissement&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "afrique", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — Afrique de l'Ouest",
-        "url":       "https://news.google.com/rss/search?q=%22Afrique+de+l%27Ouest%22+OR+CEDEAO&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "afrique", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — dette Afrique FMI",
-        "url":       "https://news.google.com/rss/search?q=Afrique+dette+FMI+Banque+Mondiale&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "afrique", "categorie": "économique", "langue": "fr", "priorite": 2,
-    },
-    {
-        "name":      "Google News — cacao prix",
-        "url":       "https://news.google.com/rss/search?q=cacao+prix+marché+cocoa&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "uemoa", "categorie": "matieres_premieres", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — pétrole or",
-        "url":       "https://news.google.com/rss/search?q=pétrole+prix+OR+%22cours+de+l%27or%22&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "international", "categorie": "matieres_premieres", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — Fed BCE taux",
-        "url":       "https://news.google.com/rss/search?q=%22Federal+Reserve%22+OR+BCE+taux+inflation&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "international", "categorie": "politique_monetaire", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — marchés financiers",
-        "url":       "https://news.google.com/rss/search?q=marchés+financiers+bourse+indices&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "international", "categorie": "marche_financier", "langue": "fr", "priorite": 2,
-    },
-    {
-        "name":      "Google News — récession inflation",
-        "url":       "https://news.google.com/rss/search?q=récession+OR+inflation+économie+mondiale&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "international", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — FMI Banque Mondiale",
-        "url":       "https://news.google.com/rss/search?q=FMI+%22Banque+Mondiale%22+Afrique&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "afrique", "categorie": "économique", "langue": "fr", "priorite": 1,
-    },
-    {
-        "name":      "Google News — géopolitique Afrique",
-        "url":       "https://news.google.com/rss/search?q=géopolitique+Afrique+sanctions&hl=fr&gl=FR&ceid=FR:fr",
-        "zone":      "afrique", "categorie": "geopolitique", "langue": "fr", "priorite": 2,
-    },
+    # ── BRVM / UEMOA — FINANCIER ─────────────────────────────────────────────
+    {"name":"Google News — BRVM bourse","url":"https://news.google.com/rss/search?q=BRVM+bourse+régionale&hl=fr&gl=CI&ceid=CI:fr",
+     "zone":"uemoa","categorie":"marche_financier","type_actualite":"financiere","langue":"fr","priorite":1},
+    {"name":"Google News — BRVM sociétés cotées","url":"https://news.google.com/rss/search?q=BRVM+société+cotée+bourse+abidjan&hl=fr&gl=CI&ceid=CI:fr",
+     "zone":"brvm","categorie":"marche_financier","type_actualite":"financiere","langue":"fr","priorite":1},
+    # ── BRVM / UEMOA — MACROÉCONOMIQUE ───────────────────────────────────────
+    {"name":"Google News — BCEAO taux directeur","url":"https://news.google.com/rss/search?q=BCEAO+taux+directeur+politique+monétaire&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"politique_monetaire","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — UEMOA inflation PIB","url":"https://news.google.com/rss/search?q=UEMOA+inflation+PIB+croissance&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"économique","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — franc CFA FCFA","url":"https://news.google.com/rss/search?q=franc+CFA+FCFA+dévaluation&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"politique_monetaire","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — cacao prix UEMOA","url":"https://news.google.com/rss/search?q=cacao+prix+marché+Côte+Ivoire&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"matieres_premieres","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — caoutchouc coton palmier","url":"https://news.google.com/rss/search?q=caoutchouc+coton+huile+palme+prix&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"matieres_premieres","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    # ── BRVM / UEMOA — POLITIQUE ─────────────────────────────────────────────
+    {"name":"Google News — politique Côte d'Ivoire","url":"https://news.google.com/rss/search?q=%22Côte+d%27Ivoire%22+politique+gouvernement&hl=fr&gl=CI&ceid=CI:fr",
+     "zone":"uemoa","categorie":"politique","type_actualite":"politique","langue":"fr","priorite":1},
+    {"name":"Google News — politique UEMOA pays","url":"https://news.google.com/rss/search?q=Sénégal+OR+Mali+OR+%22Burkina+Faso%22+OR+Togo+politique&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"uemoa","categorie":"politique","type_actualite":"politique","langue":"fr","priorite":1},
+    # ── AFRIQUE DE L'OUEST ────────────────────────────────────────────────────
+    {"name":"Google News — CEDEAO Afrique Ouest économie","url":"https://news.google.com/rss/search?q=CEDEAO+%22Afrique+de+l%27Ouest%22+économie&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique_ouest","categorie":"économique","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — Afrique Ouest politique sécurité","url":"https://news.google.com/rss/search?q=%22Afrique+de+l%27Ouest%22+sécurité+politique+instabilité&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique_ouest","categorie":"geopolitique","type_actualite":"politique","langue":"fr","priorite":1},
+    {"name":"Google News — Nigeria Ghana finance","url":"https://news.google.com/rss/search?q=Nigeria+OR+Ghana+finance+bourse+économie&hl=en&gl=NG&ceid=NG:en",
+     "zone":"afrique_ouest","categorie":"marche_financier","type_actualite":"financiere","langue":"en","priorite":2},
+    # ── AFRIQUE ───────────────────────────────────────────────────────────────
+    {"name":"Google News — Afrique économie croissance","url":"https://news.google.com/rss/search?q=afrique+économie+croissance+investissement&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique","categorie":"économique","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — FMI Banque Mondiale Afrique","url":"https://news.google.com/rss/search?q=FMI+%22Banque+Mondiale%22+Afrique+programme&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique","categorie":"économique","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — Afrique politique élections","url":"https://news.google.com/rss/search?q=Afrique+élections+politique+gouvernement+2025&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique","categorie":"politique","type_actualite":"politique","langue":"fr","priorite":1},
+    {"name":"Google News — Afrique marchés capitaux","url":"https://news.google.com/rss/search?q=Afrique+marchés+capitaux+obligations+bourse&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"afrique","categorie":"marche_financier","type_actualite":"financiere","langue":"fr","priorite":2},
+    # ── INTERNATIONAL — MACROÉCONOMIQUE ──────────────────────────────────────
+    {"name":"Google News — Fed taux inflation USA","url":"https://news.google.com/rss/search?q=%22Federal+Reserve%22+taux+inflation+USA&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"politique_monetaire","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — BCE taux euro zone","url":"https://news.google.com/rss/search?q=BCE+%22banque+centrale+européenne%22+taux&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"politique_monetaire","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — pétrole or matières premières","url":"https://news.google.com/rss/search?q=pétrole+prix+OR+%22cours+or%22+matières+premières&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"matieres_premieres","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    {"name":"Google News — récession inflation croissance mondiale","url":"https://news.google.com/rss/search?q=récession+inflation+croissance+économie+mondiale&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"économique","type_actualite":"macroeconomique","langue":"fr","priorite":1},
+    # ── INTERNATIONAL — FINANCIER ─────────────────────────────────────────────
+    {"name":"Google News — marchés financiers Wall Street","url":"https://news.google.com/rss/search?q=marchés+financiers+%22Wall+Street%22+bourse&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"marche_financier","type_actualite":"financiere","langue":"fr","priorite":1},
+    {"name":"Google News — dollar euro change forex","url":"https://news.google.com/rss/search?q=dollar+euro+taux+change+forex+FCFA&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"marche_financier","type_actualite":"financiere","langue":"fr","priorite":1},
+    # ── INTERNATIONAL — POLITIQUE ─────────────────────────────────────────────
+    {"name":"Google News — géopolitique mondiale","url":"https://news.google.com/rss/search?q=géopolitique+guerre+sanctions+conflit+international&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"geopolitique","type_actualite":"politique","langue":"fr","priorite":1},
+    {"name":"Google News — commerce mondial G20 G7","url":"https://news.google.com/rss/search?q=commerce+mondial+G20+G7+protectionnisme&hl=fr&gl=FR&ceid=FR:fr",
+     "zone":"international","categorie":"politique","type_actualite":"politique","langue":"fr","priorite":2},
 ]
 
 # ==============================================================================
 # REQUÊTES pour la collecte Mistral web_search (fallback si RSS échoue)
 # ==============================================================================
 MISTRAL_SEARCH_QUERIES = [
-    # (query, zone, categorie)
-    ("BRVM bourse régionale valeurs mobilières actualités",                            "uemoa",         "marche_financier"),
-    ("BCEAO politique monétaire taux directeur UEMOA",                                "uemoa",         "politique_monetaire"),
-    ("économie Côte d'Ivoire Sénégal Mali Burkina Faso actualités",                   "uemoa",         "économique"),
-    ("cacao prix marché mondial cocoa Côte d'Ivoire",                                 "uemoa",         "matieres_premieres"),
-    ("caoutchouc huile de palme coton prix Afrique Ouest",                            "uemoa",         "matieres_premieres"),
-    ("économie Afrique croissance investissement dette actualités",                    "afrique",       "économique"),
-    ("CEDEAO Afrique de l'Ouest instabilité politique élections",                     "afrique",       "geopolitique"),
-    ("FMI Banque Mondiale Afrique prêt programme économique",                         "afrique",       "économique"),
-    ("Federal Reserve Fed taux d'intérêt inflation décision",                         "international", "politique_monetaire"),
-    ("BCE Banque Centrale Européenne taux euro zone",                                 "international", "politique_monetaire"),
-    ("pétrole Brent WTI prix marché énergie",                                         "international", "matieres_premieres"),
-    ("marchés financiers bourse Wall Street indices actions actualités",              "international", "marche_financier"),
-    ("récession inflation croissance économie mondiale PIB",                          "international", "économique"),
-    ("dollar euro change forex taux FCFA",                                            "international", "marche_financier"),
+    # (query, zone, categorie, type_actualite)
+    ("BRVM bourse régionale valeurs mobilières actualités récentes",                   "brvm",          "marche_financier",   "financiere"),
+    ("BRVM société cotée performance cours bourse Abidjan",                            "brvm",          "marche_financier",   "financiere"),
+    ("BCEAO taux directeur politique monétaire UEMOA décision",                        "uemoa",         "politique_monetaire","macroeconomique"),
+    ("UEMOA inflation PIB croissance économique zone franc",                           "uemoa",         "économique",         "macroeconomique"),
+    ("cacao prix marché mondial Côte d Ivoire exportation",                            "uemoa",         "matieres_premieres", "macroeconomique"),
+    ("caoutchouc huile palme coton matières premières Afrique Ouest",                  "uemoa",         "matieres_premieres", "macroeconomique"),
+    ("Côte Ivoire Sénégal Mali politique gouvernement décision",                       "uemoa",         "politique",          "politique"),
+    ("CEDEAO Afrique Ouest économie commerce investissement",                          "afrique_ouest", "économique",         "macroeconomique"),
+    ("Afrique Ouest sécurité politique élections instabilité",                         "afrique_ouest", "geopolitique",       "politique"),
+    ("Nigeria Ghana bourse marché financier économie",                                 "afrique_ouest", "marche_financier",   "financiere"),
+    ("Afrique économie croissance dette investissement FMI",                           "afrique",       "économique",         "macroeconomique"),
+    ("Afrique politique élections gouvernements 2025 actualités",                      "afrique",       "politique",          "politique"),
+    ("Afrique marchés obligataires capitaux financement",                              "afrique",       "marche_financier",   "financiere"),
+    ("Federal Reserve Fed taux intérêt inflation décision récente",                    "international", "politique_monetaire","macroeconomique"),
+    ("BCE Banque Centrale Européenne taux politique monétaire",                        "international", "politique_monetaire","macroeconomique"),
+    ("pétrole Brent WTI prix or matières premières marché",                            "international", "matieres_premieres", "macroeconomique"),
+    ("récession inflation croissance PIB économie mondiale",                           "international", "économique",         "macroeconomique"),
+    ("Wall Street marchés financiers indices actions bourse",                          "international", "marche_financier",   "financiere"),
+    ("dollar euro taux change forex marchés devises",                                  "international", "marche_financier",   "financiere"),
+    ("géopolitique guerre sanctions conflit international",                             "international", "geopolitique",       "politique"),
+    ("commerce mondial protectionnisme G7 G20 accords",                               "international", "politique",          "politique"),
 ]
 
 # ==============================================================================
@@ -308,6 +296,7 @@ class MacroCollector:
             ("langue",                   "TEXT DEFAULT 'fr'"),
             ("score_importance",         "INTEGER DEFAULT 50"),
             ("url_hash",                 "TEXT"),
+            ("type_actualite",           "TEXT DEFAULT 'macroeconomique'"),
         ]
         cursor = self.db_conn.cursor()
         # 1. Ajouter les colonnes manquantes
@@ -419,6 +408,7 @@ class MacroCollector:
                 "alert_keyword":  source["categorie"],
                 "mot_cle":        source["zone"],
                 "categorie":      source["categorie"],
+                "type_actualite": source.get("type_actualite", "macroeconomique"),
             })
         return articles
 
@@ -446,7 +436,7 @@ class MacroCollector:
         all_articles = []
         today_str = datetime.now().strftime("%d %B %Y")
 
-        for query, zone, categorie in MISTRAL_SEARCH_QUERIES:
+        for query, zone, categorie, type_actualite in MISTRAL_SEARCH_QUERIES:
             prompt = f"""Tu es un collecteur d'actualités macro-économiques pour un système d'analyse boursière de la BRVM (Bourse Régionale des Valeurs Mobilières d'Afrique de l'Ouest).
 
 Date d'aujourd'hui : {today_str}
@@ -511,13 +501,13 @@ Si aucune actualité récente n'est trouvée, retourne {{"articles": []}}."""
                         raw_text = data["choices"][0]["message"].get("content", "") or ""
 
                     if raw_text:
-                        parsed = self._parse_mistral_articles(raw_text, zone, categorie)
+                        parsed = self._parse_mistral_articles(raw_text, zone, categorie, type_actualite)
                         if parsed:
                             all_articles.extend(parsed)
                             logging.info(f"   🤖 Mistral ({zone}/{categorie}): {len(parsed)} article(s)")
                         else:
                             # Fallback : essai sans tools (prompt pur)
-                            parsed = self._collect_mistral_simple(headers, prompt, zone, categorie)
+                            parsed = self._collect_mistral_simple(headers, prompt, zone, categorie, type_actualite)
                             all_articles.extend(parsed)
                     time.sleep(1.5)  # politesse API
 
@@ -527,7 +517,7 @@ Si aucune actualité récente n'est trouvée, retourne {{"articles": []}}."""
                 else:
                     logging.warning(f"   ⚠️  Mistral HTTP {resp.status_code} pour '{query[:40]}'")
                     # Fallback sans tools
-                    parsed = self._collect_mistral_simple(headers, prompt, zone, categorie)
+                    parsed = self._collect_mistral_simple(headers, prompt, zone, categorie, type_actualite)
                     all_articles.extend(parsed)
                     time.sleep(2)
 
@@ -537,7 +527,7 @@ Si aucune actualité récente n'est trouvée, retourne {{"articles": []}}."""
 
         return all_articles
 
-    def _collect_mistral_simple(self, headers: dict, prompt: str, zone: str, categorie: str) -> list:
+    def _collect_mistral_simple(self, headers: dict, prompt: str, zone: str, categorie: str, type_actualite: str = "macroeconomique") -> list:
         """
         Appel Mistral sans tools — lui demande de rédiger les actualités
         depuis sa connaissance interne récente (jusqu'à sa date de coupure).
@@ -556,12 +546,12 @@ Si aucune actualité récente n'est trouvée, retourne {{"articles": []}}."""
             if resp.status_code == 200:
                 data = resp.json()
                 raw_text = data["choices"][0]["message"].get("content", "") or ""
-                return self._parse_mistral_articles(raw_text, zone, categorie)
+                return self._parse_mistral_articles(raw_text, zone, categorie, type_actualite)
         except Exception as e:
             logging.debug(f"_collect_mistral_simple: {e}")
         return []
 
-    def _parse_mistral_articles(self, raw_text: str, zone: str, categorie: str) -> list:
+    def _parse_mistral_articles(self, raw_text: str, zone: str, categorie: str, type_actualite: str = "macroeconomique") -> list:
         """Parse la réponse JSON de Mistral et retourne une liste d'articles."""
         try:
             clean = re.sub(r'```json|```', '', raw_text).strip()
@@ -797,6 +787,7 @@ Réponds UNIQUEMENT en JSON valide :
             "impact_brvm":            art.get("impact_brvm", "neutre"),
             "impact_bourses_mondiales": art.get("impact_bourses_mondiales", ""),
             "mail_subject":           art.get("mail_subject") or art.get("titre", ""),
+            "type_actualite":         art.get("type_actualite", "macroeconomique"),
         }
 
         COLS = """(
