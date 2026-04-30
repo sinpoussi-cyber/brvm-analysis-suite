@@ -519,62 +519,101 @@ class BRVMReportGenerator:
             return None
 
     def _generate_composite_chart(self, df_hist):
-        """Graphique BRVM Composite (courbe) + Capitalisation (barres)."""
+        """
+        Génère DEUX graphiques séparés retournés dans un tuple (buf_composite, buf_cap).
+        - buf_composite : courbe indice BRVM Composite seule (sans MM20)
+        - buf_cap       : barres capitalisation boursière seules
+        Chacun est un BytesIO PNG indépendant.
+        """
         if not MATPLOTLIB_OK or df_hist is None or df_hist.empty or len(df_hist) < 5:
-            return None
+            return None, None
+
+        dates = pd.to_datetime(df_hist['extraction_date'])
+        comp  = df_hist['brvm_composite'].astype(float)
+        evol  = ((comp.iloc[-1] - comp.iloc[0]) / comp.iloc[0] * 100) if comp.iloc[0] else 0
+        sign  = '+' if evol >= 0 else ''
+        color_t = '#27ae60' if evol >= 0 else '#c0392b'
+
+        def _x_axis(ax):
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
+            plt.setp(ax.get_xticklabels(), rotation=30, fontsize=7)
+            ax.spines[['top','right']].set_visible(False)
+            ax.tick_params(axis='both', labelsize=7)
+
+        # ── Graphique 1 : Indice Composite uniquement ─────────────────────
+        buf_comp = None
         try:
-            fig = plt.figure(figsize=(10, 5))
-            gs  = GridSpec(2, 1, height_ratios=[3, 1.4], hspace=0.08)
-            ax1 = fig.add_subplot(gs[0])
-            ax2 = fig.add_subplot(gs[1], sharex=ax1)
-            dates = pd.to_datetime(df_hist['extraction_date'])
-            comp  = df_hist['brvm_composite'].astype(float)
-            ax1.plot(dates, comp, color='#1a5276', linewidth=2.0, zorder=3, label='BRVM Composite')
-            ax1.fill_between(dates, comp, comp.min()*0.97, alpha=0.10, color='#1a5276')
-            if len(comp) >= 20:
-                mm20 = comp.rolling(20).mean()
-                ax1.plot(dates, mm20, color='#e67e22', linewidth=1.2, linestyle='--', alpha=0.85, label='MM20')
+            fig1, ax = plt.subplots(figsize=(10, 3.8))
+            ax.plot(dates, comp, color='#1a5276', linewidth=2.2, zorder=3)
+            ax.fill_between(dates, comp, comp.min() * 0.97, alpha=0.10, color='#1a5276')
+
+            # Annotations min / max
             idx_max = comp.idxmax(); idx_min = comp.idxmin()
-            ax1.annotate(f"{comp[idx_max]:,.2f}", xy=(dates[idx_max], comp[idx_max]),
-                         fontsize=7, color='#27ae60', fontweight='bold', xytext=(0, 7), textcoords='offset points', ha='center')
-            ax1.annotate(f"{comp[idx_min]:,.2f}", xy=(dates[idx_min], comp[idx_min]),
-                         fontsize=7, color='#c0392b', fontweight='bold', xytext=(0, -12), textcoords='offset points', ha='center')
-            evol = ((comp.iloc[-1] - comp.iloc[0]) / comp.iloc[0] * 100) if comp.iloc[0] else 0
-            sign = '+' if evol >= 0 else ''
-            color_t = '#27ae60' if evol >= 0 else '#c0392b'
-            ax1.set_title(f"Indice BRVM Composite \u2014 100 derniers jours  ({sign}{evol:.2f}%)",
-                          fontsize=11, fontweight='bold', color=color_t, pad=6)
-            ax1.set_ylabel("Points", fontsize=8)
-            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.2f}"))
-            ax1.grid(True, linestyle='--', alpha=0.4, color='#cccccc')
-            ax1.tick_params(axis='both', labelsize=7)
-            ax1.legend(fontsize=7, loc='upper left')
-            plt.setp(ax1.get_xticklabels(), visible=False)
-            ax1.spines[['top','right']].set_visible(False)
-            cap_vals = df_hist['capitalisation_globale'].astype(float) / 1e9
-            cap_color = ['#27ae60' if c >= cap_vals.iloc[max(0,i-1)] else '#c0392b' for i, c in enumerate(cap_vals)]
-            ax2.bar(dates, cap_vals, color=cap_color, alpha=0.70, width=0.8)
-            ax2.plot(dates, cap_vals, color='#2c3e50', linewidth=0.8, alpha=0.5)
-            ax2.set_ylabel("Capitalisation\n(Mds FCFA)", fontsize=7)
-            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-            ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
-            plt.setp(ax2.get_xticklabels(), rotation=30, fontsize=7)
-            ax2.grid(True, linestyle='--', alpha=0.3, color='#cccccc', axis='y')
-            ax2.spines[['top','right']].set_visible(False)
-            ax2.set_xlabel("Date", fontsize=8)
-            fig.patch.set_facecolor('white')
-            plt.tight_layout(pad=0.6)
-            buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
-            buf.seek(0)
-            plt.close(fig)
-            return buf
+            ax.annotate(f"{comp[idx_max]:,.2f}",
+                        xy=(dates[idx_max], comp[idx_max]),
+                        fontsize=7.5, color='#27ae60', fontweight='bold',
+                        xytext=(0, 8), textcoords='offset points', ha='center')
+            ax.annotate(f"{comp[idx_min]:,.2f}",
+                        xy=(dates[idx_min], comp[idx_min]),
+                        fontsize=7.5, color='#c0392b', fontweight='bold',
+                        xytext=(0, -13), textcoords='offset points', ha='center')
+
+            # Dernière valeur à droite
+            ax.annotate(f"  {comp.iloc[-1]:,.2f} pts",
+                        xy=(dates.iloc[-1], comp.iloc[-1]),
+                        fontsize=8, color='#1a5276', fontweight='bold',
+                        xytext=(4, 0), textcoords='offset points', va='center')
+
+            ax.set_title(f"Indice BRVM Composite — 100 derniers jours  ({sign}{evol:.2f}%)",
+                         fontsize=11, fontweight='bold', color=color_t, pad=6)
+            ax.set_ylabel("Points", fontsize=8)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.2f}"))
+            ax.grid(True, linestyle='--', alpha=0.35, color='#cccccc')
+            _x_axis(ax)
+            fig1.patch.set_facecolor('white')
+            fig1.tight_layout(pad=0.6)
+            buf_comp = io.BytesIO()
+            fig1.savefig(buf_comp, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            buf_comp.seek(0)
+            plt.close(fig1)
         except Exception as e:
-            logging.warning(f"\u26a0\ufe0f  Graphique composite: {e}")
+            logging.warning(f"⚠️  Graphique composite: {e}")
             try: plt.close('all')
             except Exception: pass
-            return None
+
+        # ── Graphique 2 : Capitalisation boursière uniquement ─────────────
+        buf_cap = None
+        try:
+            cap_vals  = df_hist['capitalisation_globale'].astype(float) / 1e9
+            cap_color = ['#27ae60' if c >= cap_vals.iloc[max(0,i-1)] else '#c0392b'
+                         for i, c in enumerate(cap_vals)]
+            evol_cap  = ((cap_vals.iloc[-1] - cap_vals.iloc[0]) / cap_vals.iloc[0] * 100) if cap_vals.iloc[0] else 0
+            sign_cap  = '+' if evol_cap >= 0 else ''
+            col_cap   = '#27ae60' if evol_cap >= 0 else '#c0392b'
+
+            fig2, ax2 = plt.subplots(figsize=(10, 3.2))
+            ax2.bar(dates, cap_vals, color=cap_color, alpha=0.75, width=0.7)
+
+            ax2.set_title(f"Capitalisation boursière BRVM — 100 derniers jours  ({sign_cap}{evol_cap:.2f}%)",
+                          fontsize=10, fontweight='bold', color=col_cap, pad=6)
+            ax2.set_ylabel("Mds FCFA", fontsize=8)
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            ax2.grid(True, linestyle='--', alpha=0.30, color='#cccccc', axis='y')
+            _x_axis(ax2)
+            ax2.set_xlabel("Date", fontsize=8)
+            fig2.patch.set_facecolor('white')
+            fig2.tight_layout(pad=0.6)
+            buf_cap = io.BytesIO()
+            fig2.savefig(buf_cap, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            buf_cap.seek(0)
+            plt.close(fig2)
+        except Exception as e:
+            logging.warning(f"⚠️  Graphique capitalisation: {e}")
+            try: plt.close('all')
+            except Exception: pass
+
+        return buf_comp, buf_cap
 
     def _generate_price_chart_with_predictions(self, symbol, hist_df, predictions):
         """
@@ -1232,9 +1271,67 @@ RÈGLES IMPÉRATIVES :
     def _build_fallback_macro_analysis(self, macro_news, all_company_data):
         """
         Génère une analyse macro structurée sans IA,
-        uniquement à partir des données brutes disponibles.
+        à partir des données brutes (titres, résumés, sentiments, impacts).
         """
         sections = []
+
+        # ── Fonction d'analyse automatique d'impact ───────────────────────
+        def _auto_impact(df, zone):
+            """Génère un texte d'impact automatique à partir des sentiments et résumés."""
+            if df is None or df.empty:
+                return "- Données insuffisantes pour cette zone."
+
+            pos = [r for _, r in df.iterrows()
+                   if 'positif' in str(r.get('impact_brvm','')).lower()
+                   or 'positif' in str(r.get('sentiment','')).lower()]
+            neg = [r for _, r in df.iterrows()
+                   if 'negatif' in str(r.get('impact_brvm','')).lower()
+                   or 'negatif' in str(r.get('sentiment','')).lower()]
+            neu = [r for _, r in df.iterrows() if r not in pos and r not in neg]
+
+            lines = []
+
+            # Tendance générale
+            if len(pos) > len(neg):
+                lines.append(
+                    f"- Tendance globalement positive sur {len(df)} actualité(s). "
+                    f"{len(pos)} signal(aux) haussier(s) détecté(s) pour la BRVM."
+                )
+            elif len(neg) > len(pos):
+                lines.append(
+                    f"- Tendance globalement négative sur {len(df)} actualité(s). "
+                    f"{len(neg)} signal(aux) baissier(s) détecté(s) pour la BRVM."
+                )
+            else:
+                lines.append(
+                    f"- Tendance neutre/mixte sur {len(df)} actualité(s) — "
+                    f"{len(pos)} positif(s), {len(neg)} négatif(s)."
+                )
+
+            # Détailler les impacts positifs
+            for row in pos[:2]:
+                titre = str(row.get('titre') or row.get('mail_subject') or '')[:80]
+                if titre:
+                    lines.append(f"- 🟢 Impact positif : {titre}")
+
+            # Détailler les impacts négatifs
+            for row in neg[:2]:
+                titre = str(row.get('titre') or row.get('mail_subject') or '')[:80]
+                if titre:
+                    lines.append(f"- 🔴 Impact négatif : {titre}")
+
+            # Sociétés potentiellement concernées selon la zone
+            zone_societes = {
+                'uemoa':        "SGBC, BICB, PALC, SOGC, ETIT, ONTBF, CFAC, SLBC",
+                'brvm':         "Toutes sociétés cotées BRVM",
+                'afrique_ouest':"BOAB, BOABF, BOAC, BOAM, BOAN, BOAS, SMBC, STBC",
+                'afrique':      "ORAC, SNTS, ORGT, SGBC, BICB",
+                'international':"PALC (cacao/huile de palme), SOGC (caoutchouc), ETIT, NTLC",
+            }
+            societes = zone_societes.get(zone, "Sociétés cotées BRVM")
+            lines.append(f"- Sociétés potentiellement impactées : {societes}")
+
+            return "\n".join(lines) if lines else "- Impact non déterminable sur la base des données disponibles."
 
         # Nouvelle structure : 3 types × 5 zones
         TYPES_MAP = {
@@ -1280,11 +1377,10 @@ RÈGLES IMPÉRATIVES :
                         f"  Sentiment: {s_lbl} | Impact BRVM estimé: {i_lbl}"
                     )
                 sections.append(f"{z_header}\n" + "\n\n".join(items))
-                sections.append(
-                    "#### Impact estimé sur la BRVM\n"
-                    f"- Basé sur {len(df)} actualité(s) collectée(s). "
-                    "Analyse IA indisponible — évaluer manuellement l'impact sur les sociétés cotées."
-                )
+
+                # ── Impact automatique basé sur sentiments + mots-clés ────
+                impact_lines = _auto_impact(df, z_key)
+                sections.append("#### Impact estimé sur la BRVM\n" + impact_lines)
 
         if not sections:
             sections.append(
@@ -1292,11 +1388,66 @@ RÈGLES IMPÉRATIVES :
                 "### PLAN MONDIAL\nAucune actualité disponible pour cette période."
             )
 
+        # ── Synthèse automatique globale ─────────────────────────────────
+        all_dfs = [
+            macro_news.get(t, {}).get(z, pd.DataFrame())
+            for t in TYPES_MAP
+            for z in ZONES_MAP
+            if isinstance(macro_news.get(t, {}), dict)
+        ]
+        all_dfs = [d for d in all_dfs if isinstance(d, pd.DataFrame) and not d.empty]
+        total_arts = sum(len(d) for d in all_dfs)
+
+        pos_count = sum(
+            1 for d in all_dfs
+            for _, r in d.iterrows()
+            if 'positif' in str(r.get('sentiment','')).lower()
+               or 'positif' in str(r.get('impact_brvm','')).lower()
+        )
+        neg_count = sum(
+            1 for d in all_dfs
+            for _, r in d.iterrows()
+            if 'negatif' in str(r.get('sentiment','')).lower()
+               or 'negatif' in str(r.get('impact_brvm','')).lower()
+        )
+        if total_arts > 0:
+            pct_pos = pos_count / total_arts * 100
+            pct_neg = neg_count / total_arts * 100
+        else:
+            pct_pos = pct_neg = 0
+
+        if pct_pos > 50:
+            alerte = "VERT"
+            alerte_txt = (
+                f"L'environnement macro est globalement favorable à la BRVM. "
+                f"Sur {total_arts} actualités analysées, {pos_count} présentent "
+                f"un sentiment positif ({pct_pos:.0f}%). Les flux d'investissement "
+                f"pourraient soutenir la tendance haussière des indices."
+            )
+        elif pct_neg > 40:
+            alerte = "ROUGE"
+            alerte_txt = (
+                f"L'environnement macro présente des risques significatifs. "
+                f"Sur {total_arts} actualités analysées, {neg_count} signalent "
+                f"des facteurs défavorables ({pct_neg:.0f}%). Prudence recommandée "
+                f"sur les positions longues à court terme."
+            )
+        else:
+            alerte = "ORANGE"
+            alerte_txt = (
+                f"L'environnement macro est mitigé. Sur {total_arts} actualités analysées, "
+                f"{pos_count} sont positives et {neg_count} négatives. "
+                f"Une vigilance accrue est conseillée, particulièrement sur les valeurs "
+                f"exposées aux matières premières et aux changes."
+            )
+
         sections.append(
-            "## SYNTHESE_FINALE\n"
-            "Niveau d'alerte : ORANGE — Analyse IA indisponible. "
-            "Les données macro ont bien été collectées mais aucune IA n'a pu générer "
-            "l'analyse. Consulter les tableaux de sources ci-dessous."
+            f"## SYNTHESE_FINALE\n"
+            f"Niveau d'alerte global pour un investisseur BRVM : {alerte}\n"
+            f"- {alerte_txt}\n"
+            f"- Analyse automatique basée sur {total_arts} actualités collectées "
+            f"(sentiment positif: {pos_count}, négatif: {neg_count}, neutre: {total_arts-pos_count-neg_count}).\n"
+            f"- Consulter les tableaux de sources en fin de section pour le détail."
         )
 
         return "\n\n".join(sections)
@@ -3028,11 +3179,11 @@ RAPPELS IMPÉRATIFS:
                 else:
                     p_composite.add_run("L'indice évolue dans une phase de consolidation, sans tendance directrice nette sur la période.")
 
-                # ── Graphique BRVM Composite ─────────────────────────────
-                composite_chart_buf = self._generate_composite_chart(df_hist)
-                if composite_chart_buf:
+                # ── Graphique BRVM Composite (courbe seule) ──────────────
+                buf_comp, buf_cap = self._generate_composite_chart(df_hist)
+                if buf_comp:
                     try:
-                        doc.add_picture(composite_chart_buf, width=Inches(6.5))
+                        doc.add_picture(buf_comp, width=Inches(6.5))
                         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                     except Exception as _ce:
                         logging.warning(f"⚠️  Insertion graphique composite: {_ce}")
@@ -3069,16 +3220,13 @@ RAPPELS IMPÉRATIFS:
                         f"et le plancher de {fmt_mds(cap_min)} Mds FCFA."
                     )
 
-                # ── Graphique capitalisation (intégré au graphique composite) ─
-                cap_note = doc.add_paragraph()
-                cap_note_r = cap_note.add_run(
-                    "📈 Le graphique ci-dessus intègre l'évolution de la capitalisation boursière "
-                    "(histogramme du panneau inférieur)."
-                )
-                cap_note_r.font.size = Pt(8)
-                cap_note_r.font.italic = True
-                cap_note_r.font.color.rgb = RGBColor(100,100,100)
-
+                # ── Graphique capitalisation (séparé) ───────────────────
+                if buf_cap:
+                    try:
+                        doc.add_picture(buf_cap, width=Inches(6.5))
+                        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    except Exception as _ce2:
+                        logging.warning(f"⚠️  Insertion graphique capitalisation: {_ce2}")
                 doc.add_paragraph()
         
         # ========== TOP 10 ACHATS ==========
