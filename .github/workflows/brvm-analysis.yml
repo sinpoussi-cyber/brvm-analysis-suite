@@ -1,45 +1,46 @@
-name: BRVM Analysis Suite V25.0 - Mistral AI
+name: BRVM Analysis Suite — Multi-AI
 
 on:
   schedule:
-    - cron: '0 6 * * *'
-  workflow_dispatch:
+    - cron: '0 20 * * 1-5'   # Lundi-Vendredi à 20h00 UTC
+  workflow_dispatch:          # Lancement manuel possible
 
 jobs:
   brvm-analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    
+
     steps:
+      # ──────────────────────────────────────────────────────────────────────
       - name: 🔥 Checkout
         uses: actions/checkout@v4
-      
+
       - name: 🐍 Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: 📦 Installation dépendances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: 🌐 Installation Chrome/Chromedriver
+
+      - name: 🌐 Installation Chrome / Chromedriver
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y wget unzip
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
-          
+
           CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
-          CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d. -f1)
-          
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip || \
-          wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR_VERSION}" -O version.txt && \
-          CHROMEDRIVER_VERSION=$(cat version.txt) && \
-          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" -O chromedriver.zip
-          
+          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
+
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" \
+               -O chromedriver.zip || \
+          ( wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}" -O ver.txt && \
+            wget -q "https://chromedriver.storage.googleapis.com/$(cat ver.txt)/chromedriver_linux64.zip" -O chromedriver.zip )
+
           unzip -q chromedriver.zip
           if [ -d "chromedriver-linux64" ]; then
             sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
@@ -47,140 +48,154 @@ jobs:
             sudo mv chromedriver /usr/local/bin/
           fi
           sudo chmod +x /usr/local/bin/chromedriver
-          
-          rm -rf chromedriver-linux64 chromedriver.zip version.txt google-chrome-stable_current_amd64.deb
-          
-          echo "✅ Chrome: $(google-chrome --version)"
+          rm -rf chromedriver-linux64 chromedriver.zip ver.txt google-chrome-stable_current_amd64.deb
+
+          echo "✅ Chrome      : $(google-chrome --version)"
           echo "✅ Chromedriver: $(chromedriver --version)"
-      
-      - name: 🌍 ÉTAPE 0 - Collecte Macro (RSS Google News)
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 0 — Collecte actualités macro
+      # Non bloquante : une erreur ici n'interrompt pas le pipeline
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 🌍 ÉTAPE 0 — Collecte Macro (RSS + IA)
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          DB_NAME:           ${{ secrets.DB_NAME }}
+          DB_USER:           ${{ secrets.DB_USER }}
+          DB_PASSWORD:       ${{ secrets.DB_PASSWORD }}
+          DB_HOST:           ${{ secrets.DB_HOST }}
+          DB_PORT:           ${{ secrets.DB_PORT }}
+          MISTRAL_API_KEY:   ${{ secrets.MISTRAL_API_KEY }}
+          DEEPSEEK_API_KEY:  ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           echo "🚀 Collecte actualités macro (RSS Google News)..."
           python macro_collector.py || echo "⚠️ Macro collecte échouée (non bloquant)"
           echo "✅ Macro collecte terminée"
 
-      - name: 📊 ÉTAPE 1 - Collecte Données
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 1 — Collecte données de marché BRVM
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📊 ÉTAPE 1 — Collecte Données BRVM
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
+          DB_NAME:     ${{ secrets.DB_NAME }}
+          DB_USER:     ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_HOST:     ${{ secrets.DB_HOST }}
+          DB_PORT:     ${{ secrets.DB_PORT }}
         run: |
           echo "🚀 Collecte données BRVM..."
           python data_collector.py
           echo "✅ Collecte terminée"
-      
-      - name: 📈 ÉTAPE 2 - Analyse Technique
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 2 — Analyse technique
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📈 ÉTAPE 2 — Analyse Technique
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
+          DB_NAME:     ${{ secrets.DB_NAME }}
+          DB_USER:     ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_HOST:     ${{ secrets.DB_HOST }}
+          DB_PORT:     ${{ secrets.DB_PORT }}
         run: |
           echo "🚀 Analyse technique..."
           python technical_analyzer.py
           echo "✅ Analyse technique terminée"
-      
-      - name: 🔮 ÉTAPE 3 - Prédictions
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 3 — Prédictions ML (GRU / LSTM / BiGRU)
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 🔮 ÉTAPE 3 — Prédictions ML
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
+          DB_NAME:     ${{ secrets.DB_NAME }}
+          DB_USER:     ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_HOST:     ${{ secrets.DB_HOST }}
+          DB_PORT:     ${{ secrets.DB_PORT }}
         run: |
-          echo "🚀 Prédictions 20 jours..."
+          echo "🚀 Prédictions ML..."
           python prediction_analyzer.py
           echo "✅ Prédictions terminées"
-      
-      - name: 📄 ÉTAPE 4 - Analyse Fondamentale (Mistral AI)
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 4 — Analyse fondamentale Multi-AI
+      # Rotation : DeepSeek → Gemini → Mistral → Claude
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📄 ÉTAPE 4 — Analyse Fondamentale Multi-AI
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          DB_NAME:           ${{ secrets.DB_NAME }}
+          DB_USER:           ${{ secrets.DB_USER }}
+          DB_PASSWORD:       ${{ secrets.DB_PASSWORD }}
+          DB_HOST:           ${{ secrets.DB_HOST }}
+          DB_PORT:           ${{ secrets.DB_PORT }}
+          MISTRAL_API_KEY:   ${{ secrets.MISTRAL_API_KEY }}
+          DEEPSEEK_API_KEY:  ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          echo "🚀 Analyse fondamentale avec Mistral AI..."
-          echo "🤖 Modèle: mistral-large-latest"
-          echo "🔑 API: Mistral AI"
-          echo "📄 Support: PDF natif avec OCR"
-          echo "⚡ Capacité: Pas de rate limit strict"
-          echo "🛡️  Limite: 3 tentatives max par document"
-          echo "💎 Qualité: Excellente analyse financière"
-          echo "🇫🇷 Origine: IA française"
+          echo "🚀 Analyse fondamentale Multi-AI..."
+          echo "🤖 Rotation : DeepSeek → Gemini → Mistral → Claude"
           python fundamental_analyzer.py
           echo "✅ Analyse fondamentale terminée"
-      
-      - name: 📝 ÉTAPE 5 - Génération Rapports (Mistral AI)
+
+      # ──────────────────────────────────────────────────────────────────────
+      # ÉTAPE 5 — Génération rapport Word
+      # Analyse macro (3 types x 5 zones) + graphiques + prédictions
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📝 ÉTAPE 5 — Génération Rapport Word Multi-AI
         env:
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          DB_NAME:                  ${{ secrets.DB_NAME }}
+          DB_USER:                  ${{ secrets.DB_USER }}
+          DB_PASSWORD:              ${{ secrets.DB_PASSWORD }}
+          DB_HOST:                  ${{ secrets.DB_HOST }}
+          DB_PORT:                  ${{ secrets.DB_PORT }}
+          MISTRAL_API_KEY:          ${{ secrets.MISTRAL_API_KEY }}
+          DEEPSEEK_API_KEY:         ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY:           ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+          DRIVE_FOLDER_ID:          ${{ secrets.DRIVE_FOLDER_ID }}
+          SPREADSHEET_ID:           ${{ secrets.SPREADSHEET_ID }}
+          GSPREAD_SERVICE_ACCOUNT:  ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
         run: |
-          echo "🚀 Génération rapports avec Mistral AI..."
+          echo "🚀 Génération rapport avec Multi-AI..."
           python report_generator.py
           echo "✅ Rapports générés"
-      
-      - name: 📤 Upload Rapports
+
+      # ──────────────────────────────────────────────────────────────────────
+      # Upload artefact
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📤 Upload Rapport
         uses: actions/upload-artifact@v4
         with:
-          name: rapports-brvm-${{ github.run_number }}
+          name: rapport-brvm-${{ github.run_number }}
           path: Rapport_*.docx
           retention-days: 90
-      
-      - name: 📊 Résumé
+
+      # ──────────────────────────────────────────────────────────────────────
+      # Résumé (toujours exécuté même en cas d'erreur)
+      # ──────────────────────────────────────────────────────────────────────
+      - name: 📋 Résumé
         if: always()
         run: |
           echo "═══════════════════════════════════════════════════════════"
-          echo "📈 BRVM ANALYSIS SUITE V25.0 (Mistral AI)"
+          echo "📈 BRVM ANALYSIS SUITE — Multi-AI"
           echo "═══════════════════════════════════════════════════════════"
-          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Run: ${{ github.run_number }}"
+          echo "Date : $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Run  : ${{ github.run_number }}"
           echo ""
-          echo "⚙️  Configuration:"
-          echo "  - IA: Mistral AI (🇫🇷 France)"
-          echo "  - Modèle: mistral-large-latest"
-          echo "  - API: Mistral AI (stable)"
-          echo "  - Support: PDF natif avec OCR intégré"
-          echo "  - Rate limit: Flexible"
-          echo "  - Qualité: ⭐⭐⭐⭐⭐ (Excellente)"
-          echo "  - Fallback: Analyse automatique"
+          echo "📋 Étapes exécutées :"
+          echo "  🌍 Étape 0 — Collecte macro RSS"
+          echo "  📊 Étape 1 — Collecte données BRVM"
+          echo "  📈 Étape 2 — Analyse technique"
+          echo "  🔮 Étape 3 — Prédictions ML"
+          echo "  📄 Étape 4 — Analyse fondamentale"
+          echo "  📝 Étape 5 — Génération rapport"
           echo ""
-          echo "💰 Coût estimé:"
-          echo "  - Analyse fondamentale: ~$0.92 (46 PDFs)"
-          echo "  - Recommandations: ~$0.46 (46 sociétés)"
-          echo "  - Total: ~$1.00 par exécution"
-          echo "  - Crédit disponible: 5€ gratuit"
-          echo ""
-          echo "📋 Étapes:" 
-          echo "  ✅ Collecte données"
-          echo "  ✅ Analyse technique"
-          echo "  ✅ Prédictions"
-          echo "  ✅ Analyse fondamentale (Mistral AI)"
-          echo "  ✅ Génération rapports (Mistral AI)"
-          echo ""
-          if [ -f "Rapport_"*.docx ]; then
-            echo "✅ Rapports générés:"
+          if ls Rapport_*.docx 1>/dev/null 2>&1; then
+            echo "✅ Rapport(s) généré(s) :"
             ls -lh Rapport_*.docx
           else
-            echo "⚠️  Aucun rapport trouvé"
+            echo "⚠️  Aucun rapport .docx trouvé"
           fi
           echo "═══════════════════════════════════════════════════════════"
