@@ -520,61 +520,94 @@ class BRVMReportGenerator:
 
     def _generate_composite_chart(self, df_hist):
         """
-        Génère DEUX graphiques séparés retournés dans un tuple (buf_composite, buf_cap).
-        - buf_composite : courbe indice BRVM Composite seule (sans MM20)
-        - buf_cap       : barres capitalisation boursière seules
-        Chacun est un BytesIO PNG indépendant.
+        Génère DEUX courbes d'évolution séparées (BytesIO PNG) :
+        - buf_comp : courbe lisse de l'indice BRVM Composite
+        - buf_cap  : courbe lisse de la capitalisation boursière (Mds FCFA)
+        Utilise subplots() simple sans GridSpec pour éviter les warnings tight_layout.
         """
         if not MATPLOTLIB_OK or df_hist is None or df_hist.empty or len(df_hist) < 5:
             return None, None
 
-        dates = pd.to_datetime(df_hist['extraction_date'])
-        comp  = df_hist['brvm_composite'].astype(float)
-        evol  = ((comp.iloc[-1] - comp.iloc[0]) / comp.iloc[0] * 100) if comp.iloc[0] else 0
-        sign  = '+' if evol >= 0 else ''
-        color_t = '#27ae60' if evol >= 0 else '#c0392b'
+        # ── Données ───────────────────────────────────────────────────────
+        df = df_hist.copy().reset_index(drop=True)
+        dates = pd.to_datetime(df['extraction_date'])
+        comp  = df['brvm_composite'].astype(float)
 
-        def _x_axis(ax):
+        # Capitalisation : nettoyer les nulls et normaliser en Mds FCFA
+        cap_raw = df['capitalisation_globale'].copy()
+        cap_raw = pd.to_numeric(cap_raw, errors='coerce')
+        cap_raw = cap_raw.ffill().bfill()
+        # Détecter l'unité : si médiane > 1e9 → valeurs en FCFA brut, diviser par 1e9
+        if cap_raw.median() > 1e9:
+            cap = cap_raw / 1e9
+        else:
+            cap = cap_raw   # déjà en Mds FCFA
+
+        def _style_ax(ax, title, ylabel, color_title):
+            """Style commun pour les deux axes."""
+            ax.set_title(title, fontsize=11, fontweight='bold', color=color_title, pad=8)
+            ax.set_ylabel(ylabel, fontsize=9)
+            ax.set_xlabel("Date", fontsize=9)
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            # Environ 8-10 ticks sur l'axe X
             ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
-            plt.setp(ax.get_xticklabels(), rotation=30, fontsize=7)
-            ax.spines[['top','right']].set_visible(False)
-            ax.tick_params(axis='both', labelsize=7)
+            plt.setp(ax.get_xticklabels(), rotation=30, fontsize=8, ha='right')
+            ax.grid(True, linestyle='--', alpha=0.35, color='#cccccc')
+            ax.spines[['top', 'right']].set_visible(False)
+            ax.tick_params(axis='y', labelsize=8)
 
-        # ── Graphique 1 : Indice Composite uniquement ─────────────────────
+        # ── Graphique 1 : Courbe Indice BRVM Composite ────────────────────
         buf_comp = None
         try:
-            fig1, ax = plt.subplots(figsize=(10, 3.8))
-            ax.plot(dates, comp, color='#1a5276', linewidth=2.2, zorder=3)
-            ax.fill_between(dates, comp, comp.min() * 0.97, alpha=0.10, color='#1a5276')
+            evol  = ((comp.iloc[-1] - comp.iloc[0]) / comp.iloc[0] * 100) if comp.iloc[0] else 0
+            sign  = '+' if evol >= 0 else ''
+            col_t = '#27ae60' if evol >= 0 else '#c0392b'
+
+            fig1, ax1 = plt.subplots(figsize=(11, 4), dpi=110)
+            fig1.patch.set_facecolor('white')
+
+            # Courbe principale
+            ax1.plot(dates, comp, color='#154360', linewidth=2.0, zorder=3)
+            ax1.fill_between(dates, comp, comp.min() * 0.985,
+                             alpha=0.12, color='#154360')
+
+            # Zone colorée selon tendance (fond léger)
+            ax1.fill_between(dates, comp, comp.mean(),
+                             where=(comp >= comp.mean()),
+                             alpha=0.08, color='#27ae60')
+            ax1.fill_between(dates, comp, comp.mean(),
+                             where=(comp < comp.mean()),
+                             alpha=0.08, color='#c0392b')
 
             # Annotations min / max
-            idx_max = comp.idxmax(); idx_min = comp.idxmin()
-            ax.annotate(f"{comp[idx_max]:,.2f}",
-                        xy=(dates[idx_max], comp[idx_max]),
-                        fontsize=7.5, color='#27ae60', fontweight='bold',
-                        xytext=(0, 8), textcoords='offset points', ha='center')
-            ax.annotate(f"{comp[idx_min]:,.2f}",
-                        xy=(dates[idx_min], comp[idx_min]),
-                        fontsize=7.5, color='#c0392b', fontweight='bold',
-                        xytext=(0, -13), textcoords='offset points', ha='center')
+            i_max = comp.idxmax(); i_min = comp.idxmin()
+            ax1.annotate(f"{comp[i_max]:,.2f} pts",
+                         xy=(dates[i_max], comp[i_max]),
+                         fontsize=8, color='#27ae60', fontweight='bold',
+                         xytext=(0, 10), textcoords='offset points', ha='center',
+                         arrowprops=dict(arrowstyle='->', color='#27ae60', lw=1.0))
+            ax1.annotate(f"{comp[i_min]:,.2f} pts",
+                         xy=(dates[i_min], comp[i_min]),
+                         fontsize=8, color='#c0392b', fontweight='bold',
+                         xytext=(0, -15), textcoords='offset points', ha='center',
+                         arrowprops=dict(arrowstyle='->', color='#c0392b', lw=1.0))
 
-            # Dernière valeur à droite
-            ax.annotate(f"  {comp.iloc[-1]:,.2f} pts",
-                        xy=(dates.iloc[-1], comp.iloc[-1]),
-                        fontsize=8, color='#1a5276', fontweight='bold',
-                        xytext=(4, 0), textcoords='offset points', va='center')
+            # Dernière valeur
+            ax1.annotate(f" {comp.iloc[-1]:,.2f}",
+                         xy=(dates.iloc[-1], comp.iloc[-1]),
+                         fontsize=8.5, color='#154360', fontweight='bold',
+                         xytext=(6, 0), textcoords='offset points', va='center')
 
-            ax.set_title(f"Indice BRVM Composite — 100 derniers jours  ({sign}{evol:.2f}%)",
-                         fontsize=11, fontweight='bold', color=color_t, pad=6)
-            ax.set_ylabel("Points", fontsize=8)
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.2f}"))
-            ax.grid(True, linestyle='--', alpha=0.35, color='#cccccc')
-            _x_axis(ax)
-            fig1.patch.set_facecolor('white')
-            fig1.tight_layout(pad=0.6)
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.1f}"))
+            _style_ax(ax1,
+                      f"Indice BRVM Composite — {len(comp)} jours ({sign}{evol:.2f}%)",
+                      "Points",
+                      col_t)
+
+            fig1.subplots_adjust(left=0.09, right=0.97, top=0.88, bottom=0.18)
             buf_comp = io.BytesIO()
-            fig1.savefig(buf_comp, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            fig1.savefig(buf_comp, format='png', bbox_inches='tight',
+                         facecolor='white', edgecolor='none')
             buf_comp.seek(0)
             plt.close(fig1)
         except Exception as e:
@@ -582,30 +615,58 @@ class BRVMReportGenerator:
             try: plt.close('all')
             except Exception: pass
 
-        # ── Graphique 2 : Capitalisation boursière uniquement ─────────────
+        # ── Graphique 2 : Courbe Capitalisation Boursière ─────────────────
         buf_cap = None
         try:
-            cap_vals  = df_hist['capitalisation_globale'].astype(float) / 1e9
-            cap_color = ['#27ae60' if c >= cap_vals.iloc[max(0,i-1)] else '#c0392b'
-                         for i, c in enumerate(cap_vals)]
-            evol_cap  = ((cap_vals.iloc[-1] - cap_vals.iloc[0]) / cap_vals.iloc[0] * 100) if cap_vals.iloc[0] else 0
-            sign_cap  = '+' if evol_cap >= 0 else ''
-            col_cap   = '#27ae60' if evol_cap >= 0 else '#c0392b'
+            evol_c  = ((cap.iloc[-1] - cap.iloc[0]) / cap.iloc[0] * 100) if cap.iloc[0] else 0
+            sign_c  = '+' if evol_c >= 0 else ''
+            col_c   = '#27ae60' if evol_c >= 0 else '#c0392b'
 
-            fig2, ax2 = plt.subplots(figsize=(10, 3.2))
-            ax2.bar(dates, cap_vals, color=cap_color, alpha=0.75, width=0.7)
-
-            ax2.set_title(f"Capitalisation boursière BRVM — 100 derniers jours  ({sign_cap}{evol_cap:.2f}%)",
-                          fontsize=10, fontweight='bold', color=col_cap, pad=6)
-            ax2.set_ylabel("Mds FCFA", fontsize=8)
-            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-            ax2.grid(True, linestyle='--', alpha=0.30, color='#cccccc', axis='y')
-            _x_axis(ax2)
-            ax2.set_xlabel("Date", fontsize=8)
+            fig2, ax2 = plt.subplots(figsize=(11, 4), dpi=110)
             fig2.patch.set_facecolor('white')
-            fig2.tight_layout(pad=0.6)
+
+            # Courbe principale
+            ax2.plot(dates, cap, color='#1a5276', linewidth=2.0, zorder=3)
+            ax2.fill_between(dates, cap, cap.min() * 0.985,
+                             alpha=0.12, color='#1a5276')
+
+            # Zone colorée selon tendance
+            ax2.fill_between(dates, cap, cap.mean(),
+                             where=(cap >= cap.mean()),
+                             alpha=0.08, color='#27ae60')
+            ax2.fill_between(dates, cap, cap.mean(),
+                             where=(cap < cap.mean()),
+                             alpha=0.08, color='#c0392b')
+
+            # Annotations min / max
+            i_max2 = cap.idxmax(); i_min2 = cap.idxmin()
+            ax2.annotate(f"{cap[i_max2]:,.0f} Mds",
+                         xy=(dates[i_max2], cap[i_max2]),
+                         fontsize=8, color='#27ae60', fontweight='bold',
+                         xytext=(0, 10), textcoords='offset points', ha='center',
+                         arrowprops=dict(arrowstyle='->', color='#27ae60', lw=1.0))
+            ax2.annotate(f"{cap[i_min2]:,.0f} Mds",
+                         xy=(dates[i_min2], cap[i_min2]),
+                         fontsize=8, color='#c0392b', fontweight='bold',
+                         xytext=(0, -15), textcoords='offset points', ha='center',
+                         arrowprops=dict(arrowstyle='->', color='#c0392b', lw=1.0))
+
+            # Dernière valeur
+            ax2.annotate(f" {cap.iloc[-1]:,.0f}",
+                         xy=(dates.iloc[-1], cap.iloc[-1]),
+                         fontsize=8.5, color='#1a5276', fontweight='bold',
+                         xytext=(6, 0), textcoords='offset points', va='center')
+
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            _style_ax(ax2,
+                      f"Capitalisation Boursière BRVM — {len(cap)} jours ({sign_c}{evol_c:.2f}%)",
+                      "Mds FCFA",
+                      col_c)
+
+            fig2.subplots_adjust(left=0.09, right=0.97, top=0.88, bottom=0.18)
             buf_cap = io.BytesIO()
-            fig2.savefig(buf_cap, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            fig2.savefig(buf_cap, format='png', bbox_inches='tight',
+                         facecolor='white', edgecolor='none')
             buf_cap.seek(0)
             plt.close(fig2)
         except Exception as e:
@@ -2000,7 +2061,7 @@ RÈGLES IMPÉRATIVES :
         data = {
             "model": DEEPSEEK_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 3000,
+            "max_tokens": 4000,
             "temperature": 0.4
         }
         
@@ -2318,7 +2379,10 @@ RAPPELS IMPÉRATIFS:
 - Sois précis avec les chiffres — cite les valeurs exactes des données fournies
 - Si des analyses fondamentales sont fournies, TU DOIS LES UTILISER — instruction OBLIGATOIRE
 - Mentionne TOUJOURS la date des rapports fondamentaux utilisés
-- Reste factuel et objectif"""
+- Reste factuel et objectif
+- LONGUEUR OBLIGATOIRE : chaque partie doit respecter scrupuleusement le nombre de lignes demandé
+  (Partie 1: 5-7 lignes, Partie 2: 2-3 lignes par indicateur + 3-4 lignes conclusion, 
+   Partie 3: 8-10 lignes, Partie 4: 5-6 lignes). Un rapport trop court est un rapport incomplet."""
         
         # ── Rotation Multi-AI: DeepSeek → Claude → Gemini → Mistral ────────────────
         analysis = None
@@ -4725,7 +4789,7 @@ RAPPELS IMPÉRATIFS:
             doc.add_paragraph()
             doc.add_paragraph("═" * 80)
 
-            if idx % 2 == 0 and idx < len(all_analyses):
+            if idx < len(all_analyses):
                 doc.add_page_break()
         
         # ========== PIED DE PAGE ==========
