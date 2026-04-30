@@ -518,6 +518,169 @@ class BRVMReportGenerator:
                 pass
             return None
 
+    def _generate_composite_chart(self, df_hist):
+        """Graphique BRVM Composite (courbe) + Capitalisation (barres)."""
+        if not MATPLOTLIB_OK or df_hist is None or df_hist.empty or len(df_hist) < 5:
+            return None
+        try:
+            fig = plt.figure(figsize=(10, 5))
+            gs  = GridSpec(2, 1, height_ratios=[3, 1.4], hspace=0.08)
+            ax1 = fig.add_subplot(gs[0])
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            dates = pd.to_datetime(df_hist['extraction_date'])
+            comp  = df_hist['brvm_composite'].astype(float)
+            ax1.plot(dates, comp, color='#1a5276', linewidth=2.0, zorder=3, label='BRVM Composite')
+            ax1.fill_between(dates, comp, comp.min()*0.97, alpha=0.10, color='#1a5276')
+            if len(comp) >= 20:
+                mm20 = comp.rolling(20).mean()
+                ax1.plot(dates, mm20, color='#e67e22', linewidth=1.2, linestyle='--', alpha=0.85, label='MM20')
+            idx_max = comp.idxmax(); idx_min = comp.idxmin()
+            ax1.annotate(f"{comp[idx_max]:,.2f}", xy=(dates[idx_max], comp[idx_max]),
+                         fontsize=7, color='#27ae60', fontweight='bold', xytext=(0, 7), textcoords='offset points', ha='center')
+            ax1.annotate(f"{comp[idx_min]:,.2f}", xy=(dates[idx_min], comp[idx_min]),
+                         fontsize=7, color='#c0392b', fontweight='bold', xytext=(0, -12), textcoords='offset points', ha='center')
+            evol = ((comp.iloc[-1] - comp.iloc[0]) / comp.iloc[0] * 100) if comp.iloc[0] else 0
+            sign = '+' if evol >= 0 else ''
+            color_t = '#27ae60' if evol >= 0 else '#c0392b'
+            ax1.set_title(f"Indice BRVM Composite \u2014 100 derniers jours  ({sign}{evol:.2f}%)",
+                          fontsize=11, fontweight='bold', color=color_t, pad=6)
+            ax1.set_ylabel("Points", fontsize=8)
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.2f}"))
+            ax1.grid(True, linestyle='--', alpha=0.4, color='#cccccc')
+            ax1.tick_params(axis='both', labelsize=7)
+            ax1.legend(fontsize=7, loc='upper left')
+            plt.setp(ax1.get_xticklabels(), visible=False)
+            ax1.spines[['top','right']].set_visible(False)
+            cap_vals = df_hist['capitalisation_globale'].astype(float) / 1e9
+            cap_color = ['#27ae60' if c >= cap_vals.iloc[max(0,i-1)] else '#c0392b' for i, c in enumerate(cap_vals)]
+            ax2.bar(dates, cap_vals, color=cap_color, alpha=0.70, width=0.8)
+            ax2.plot(dates, cap_vals, color='#2c3e50', linewidth=0.8, alpha=0.5)
+            ax2.set_ylabel("Capitalisation\n(Mds FCFA)", fontsize=7)
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
+            plt.setp(ax2.get_xticklabels(), rotation=30, fontsize=7)
+            ax2.grid(True, linestyle='--', alpha=0.3, color='#cccccc', axis='y')
+            ax2.spines[['top','right']].set_visible(False)
+            ax2.set_xlabel("Date", fontsize=8)
+            fig.patch.set_facecolor('white')
+            plt.tight_layout(pad=0.6)
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            buf.seek(0)
+            plt.close(fig)
+            return buf
+        except Exception as e:
+            logging.warning(f"\u26a0\ufe0f  Graphique composite: {e}")
+            try: plt.close('all')
+            except Exception: pass
+            return None
+
+    def _generate_price_chart_with_predictions(self, symbol, hist_df, predictions):
+        """
+        Graphique cours reels (bleu) + cours predits (orange pointille) + IC + volumes.
+        Distinction visuelle claire entre historique et previsions.
+        """
+        if not MATPLOTLIB_OK or hist_df is None or hist_df.empty or len(hist_df) < 5:
+            return None
+        try:
+            fig = plt.figure(figsize=(9, 4.5))
+            gs  = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
+            ax1 = fig.add_subplot(gs[0])
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            dates_r  = pd.to_datetime(hist_df['trade_date'])
+            prices_r = hist_df['price'].astype(float)
+            vols     = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
+            # Cours reels
+            ax1.plot(dates_r, prices_r, color='#1a5276', linewidth=1.8, zorder=3, label='Cours r\u00e9els')
+            ax1.fill_between(dates_r, prices_r, prices_r.min()*0.97, alpha=0.07, color='#1a5276')
+            idx_max = prices_r.idxmax(); idx_min = prices_r.idxmin()
+            ax1.annotate(f"{prices_r[idx_max]:,.0f}", xy=(dates_r[idx_max], prices_r[idx_max]),
+                         fontsize=7, color='#27ae60', fontweight='bold', xytext=(0, 6), textcoords='offset points', ha='center')
+            ax1.annotate(f"{prices_r[idx_min]:,.0f}", xy=(dates_r[idx_min], prices_r[idx_min]),
+                         fontsize=7, color='#c0392b', fontweight='bold', xytext=(0, -12), textcoords='offset points', ha='center')
+            # Cours predits
+            has_preds = False
+            if predictions:
+                pred_dates  = []
+                pred_prices = []
+                pred_lower  = []
+                pred_upper  = []
+                for p in predictions:
+                    pd_d = pd.to_datetime(p.get('date'))
+                    pp   = p.get('price')
+                    pl   = p.get('lower_bound')
+                    pu   = p.get('upper_bound')
+                    if pd_d is not None and pp is not None:
+                        pred_dates.append(pd_d)
+                        pred_prices.append(float(pp))
+                        pred_lower.append(float(pl) if pl else float(pp)*0.98)
+                        pred_upper.append(float(pu) if pu else float(pp)*1.02)
+                if pred_dates:
+                    has_preds = True
+                    # Trait de jonction dernier reel -> premier predit
+                    ax1.plot([dates_r.iloc[-1], pred_dates[0]],
+                             [prices_r.iloc[-1], pred_prices[0]],
+                             color='#e67e22', linewidth=1.2, linestyle='--', alpha=0.5)
+                    # Courbe predite
+                    ax1.plot(pred_dates, pred_prices, color='#e67e22', linewidth=2.0,
+                             linestyle='--', marker='o', markersize=4, zorder=4,
+                             label='Cours pr\u00e9dits (ML)')
+                    # Zone intervalle de confiance
+                    ax1.fill_between(pred_dates, pred_lower, pred_upper,
+                                     alpha=0.18, color='#e67e22', label='IC 90%')
+                    # Annotations J+1 et dernier jour
+                    ax1.annotate(f"J+1\n{pred_prices[0]:,.0f}",
+                                 xy=(pred_dates[0], pred_prices[0]),
+                                 fontsize=6.5, color='#e67e22', fontweight='bold',
+                                 xytext=(4, 8), textcoords='offset points')
+                    ax1.annotate(f"J+{len(pred_dates)}\n{pred_prices[-1]:,.0f}",
+                                 xy=(pred_dates[-1], pred_prices[-1]),
+                                 fontsize=6.5, color='#e67e22', fontweight='bold',
+                                 xytext=(4, 8), textcoords='offset points')
+                    # Ligne verticale separatrice
+                    ax1.axvline(x=dates_r.iloc[-1], color='#7f8c8d', linewidth=0.9,
+                                linestyle=':', alpha=0.8)
+                    y_top = prices_r.max() * 1.01
+                    ax1.text(dates_r.iloc[-1], y_top, "  Aujourd'hui",
+                             fontsize=6.5, color='#7f8c8d', va='top')
+            evol = ((prices_r.iloc[-1] - prices_r.iloc[0]) / prices_r.iloc[0] * 100) if prices_r.iloc[0] else 0
+            sign = '+' if evol >= 0 else ''
+            color_t = '#27ae60' if evol >= 0 else '#c0392b'
+            pred_lbl = "  +  pr\u00e9dictions J+1\u2192J+10" if has_preds else ""
+            ax1.set_title(f"{symbol} \u2014 Cours r\u00e9els ({sign}{evol:.1f}%){pred_lbl}",
+                          fontsize=10, fontweight='bold', color=color_t, pad=6)
+            ax1.set_ylabel("Prix (FCFA)", fontsize=8)
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            ax1.grid(True, linestyle='--', alpha=0.4, color='#aaaaaa')
+            ax1.tick_params(axis='both', labelsize=7)
+            ax1.legend(fontsize=7, loc='upper left')
+            plt.setp(ax1.get_xticklabels(), visible=False)
+            ax1.spines[['top','right']].set_visible(False)
+            # Volumes
+            bar_colors = ['#27ae60' if p >= prices_r.iloc[max(0,i-1)] else '#c0392b' for i, p in enumerate(prices_r)]
+            ax2.bar(dates_r, vols, color=bar_colors, alpha=0.65, width=0.8)
+            ax2.set_ylabel("Volume", fontsize=7)
+            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x/1000:.0f}k" if x >= 1000 else f"{x:.0f}"))
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
+            plt.setp(ax2.get_xticklabels(), rotation=30, fontsize=7)
+            ax2.grid(True, linestyle='--', alpha=0.3, color='#aaaaaa', axis='y')
+            ax2.spines[['top','right']].set_visible(False)
+            ax2.set_xlabel("Date", fontsize=8)
+            fig.patch.set_facecolor('white')
+            plt.tight_layout(pad=0.5)
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            buf.seek(0)
+            plt.close(fig)
+            return buf
+        except Exception as e:
+            logging.warning(f"\u26a0\ufe0f  Graphique predit {symbol}: {e}")
+            try: plt.close('all')
+            except Exception: pass
+            return None
+
     # =========================================================================
     # PHASE 1 — C : Score composite d'investissement 0–100
     # =========================================================================
@@ -2819,7 +2982,17 @@ RAPPELS IMPÉRATIFS:
                     p_composite.add_run("L'indice accuse une tendance baissière sur la période, reflétant une pression vendeuse sur le marché.")
                 else:
                     p_composite.add_run("L'indice évolue dans une phase de consolidation, sans tendance directrice nette sur la période.")
-                
+
+                # ── Graphique BRVM Composite ─────────────────────────────
+                composite_chart_buf = self._generate_composite_chart(df_hist)
+                if composite_chart_buf:
+                    try:
+                        doc.add_picture(composite_chart_buf, width=Inches(6.5))
+                        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    except Exception as _ce:
+                        logging.warning(f"⚠️  Insertion graphique composite: {_ce}")
+                doc.add_paragraph()
+
                 # Commentaire capitalisation 100j
                 cap_vals = df_hist['capitalisation_globale'].dropna()
                 cap_vals = cap_vals[cap_vals > 0]
@@ -2850,7 +3023,17 @@ RAPPELS IMPÉRATIFS:
                         f"Le pic de capitalisation observé sur les 100 jours est de {fmt_mds(cap_max)} Mds FCFA "
                         f"et le plancher de {fmt_mds(cap_min)} Mds FCFA."
                     )
-                
+
+                # ── Graphique capitalisation (intégré au graphique composite) ─
+                cap_note = doc.add_paragraph()
+                cap_note_r = cap_note.add_run(
+                    "📈 Le graphique ci-dessus intègre l'évolution de la capitalisation boursière "
+                    "(histogramme du panneau inférieur)."
+                )
+                cap_note_r.font.size = Pt(8)
+                cap_note_r.font.italic = True
+                cap_note_r.font.color.rgb = RGBColor(100,100,100)
+
                 doc.add_paragraph()
         
         # ========== TOP 10 ACHATS ==========
@@ -4023,14 +4206,15 @@ RAPPELS IMPÉRATIFS:
             else:                 sr2.font.color.rgb = RGBColor(192,0,0)
             doc.add_paragraph()
 
-            # ── Graphique cours + volumes ────────────────────────────────────────
+            # ── Graphique cours réels + prédictions ML ────────────────────────
             hist_df_chart = self._get_historical_data_100days(company_data.get('company_id'))
-            chart_buf = self._generate_price_chart(symbol, hist_df_chart)
+            # Récupérer les prédictions déjà chargées dans company_data
+            preds_for_chart = company_data.get('predictions_full', [])
+            chart_buf = self._generate_price_chart_with_predictions(symbol, hist_df_chart, preds_for_chart)
             if chart_buf:
                 try:
                     doc.add_picture(chart_buf, width=Inches(6.2))
-                    last_pic = doc.paragraphs[-1]
-                    last_pic.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                     doc.add_paragraph()
                 except Exception as ce:
                     logging.warning(f"⚠️  Insertion image {symbol}: {ce}")
