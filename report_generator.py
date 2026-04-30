@@ -1037,18 +1037,17 @@ class BRVMReportGenerator:
         """
         logging.info("🤖 Génération analyse macro (3 types × 5 zones)...")
 
-        def _df_to_text(df, max_items=5):
+        def _df_to_text(df, max_items=3):
             if df is None or df.empty:
-                return "Aucune actualité disponible."
+                return "Aucune actualité."
             lines = []
             for _, row in df.head(max_items).iterrows():
-                date_s  = str(row.get('mail_date',''))[:10]
-                titre   = str(row.get('titre') or row.get('mail_subject',''))[:120]
-                resume  = str(row.get('resume',''))[:250]
-                sent    = str(row.get('sentiment','') or '').capitalize()
-                impact  = str(row.get('impact_brvm','') or '').capitalize()
-                lines.append(f"[{date_s}] {titre}\n  → {resume}\n  Sentiment: {sent} | Impact BRVM estimé: {impact}")
-            return "\n\n".join(lines)
+                date_s = str(row.get('mail_date',''))[:10]
+                titre  = str(row.get('titre') or row.get('mail_subject',''))[:100]
+                resume = str(row.get('resume',''))[:150]
+                sent   = str(row.get('sentiment','') or '').capitalize()
+                lines.append(f"[{date_s}] {titre} — {resume} (Sentiment: {sent})")
+            return " | ".join(lines)
 
         ZONES_LABELS = {
             'international': 'MONDIAL / INTERNATIONAL',
@@ -1187,34 +1186,44 @@ Niveau d'alerte global pour un investisseur BRVM : VERT / ORANGE / ROUGE
 [Synthèse en 3-4 phrases. Recommandation concrète.]
 
 ═══════════════════════════════════════════════════════════════
-RÈGLES :
-- Sois factuel et précis, base-toi sur les actualités fournies
-- Si une section n'a pas de données, écris "Données insuffisantes pour cette période."
-- Pour chaque impact BRVM, cite des sociétés cotées par symbole (SGBC, BICB, PALC, etc.)
-- Maximum 2500 mots au total
+RÈGLES IMPÉRATIVES :
+- Sois factuel, base-toi UNIQUEMENT sur les actualités fournies
+- Si une section manque de données : "Données insuffisantes."
+- Cite les symboles BRVM (SGBC, BICB, PALC, ETIT, ONTBF, SOGC, CFAC, NTLC, SIVC, SLBC)
+- Sois concis : 2-3 phrases par sous-section "Impact estimé"
+- Maximum 1500 mots au total — sois synthétique
 """
 
         analysis_text = None
         ai_provider   = None
-        for gen_func, name in [
-            (lambda p: self._generate_analysis_with_deepseek('MACRO', {}, p), 'deepseek'),
-            (lambda p: self._generate_analysis_with_claude('MACRO', {}, p),   'claude'),
-            (lambda p: self._generate_analysis_with_gemini('MACRO', {}, p),   'gemini'),
-            (lambda p: self._generate_analysis_with_mistral('MACRO', {}, p),  'mistral'),
-        ]:
+
+        # Appels IA séquentiels — sans lambda pour éviter le bug de late binding
+        # Ordre : DeepSeek → Gemini → Mistral → Claude
+        # max_tokens limité à 2500 pour rester dans les limites de tous les plans
+        _ai_attempts = [
+            ('deepseek', self._generate_analysis_with_deepseek),
+            ('gemini',   self._generate_analysis_with_gemini),
+            ('mistral',  self._generate_analysis_with_mistral),
+            ('claude',   self._generate_analysis_with_claude),
+        ]
+        for name, fn in _ai_attempts:
             try:
-                text, prov = gen_func(prompt)
-                if text and len(text) > 300:
+                logging.info(f"   🤖 Tentative analyse macro via {name}...")
+                text, prov = fn('MACRO', {}, prompt)
+                if text and len(text.strip()) > 200:
                     analysis_text = text
                     ai_provider   = prov or name
-                    logging.info(f"   ✅ Analyse macro générée via {ai_provider}")
+                    logging.info(f"   ✅ Analyse macro générée via {ai_provider} ({len(text)} chars)")
                     break
+                else:
+                    logging.warning(f"   ⚠️ {name}: réponse trop courte ou vide ({len(text) if text else 0} chars)")
             except Exception as e:
-                logging.warning(f"   ⚠️ {name} macro: {e}")
+                logging.warning(f"   ⚠️ {name} macro exception: {e}")
+                import traceback as _tb; logging.debug(_tb.format_exc())
                 continue
 
         if not analysis_text:
-            logging.warning("   ⚠️ Aucune IA disponible — fallback structuré")
+            logging.warning("   ⚠️ Toutes les IAs ont échoué — fallback structuré à partir des données brutes")
             analysis_text = self._build_fallback_macro_analysis(macro_news, all_company_data)
             ai_provider   = 'fallback_structuré'
 
@@ -1227,32 +1236,67 @@ RÈGLES :
         """
         sections = []
 
-        for level, label in [
-            ('international', '🌍 ACTUALITÉS INTERNATIONALES'),
-            ('afrique',       '🌍 ACTUALITÉS AFRICAINES'),
-            ('uemoa',         '🏦 ACTUALITÉS UEMOA / BCEAO'),
-        ]:
-            df = macro_news.get(level, pd.DataFrame())
-            if df is None or df.empty:
-                sections.append(f"### {label}\nAucune actualité disponible pour cette période.")
+        # Nouvelle structure : 3 types × 5 zones
+        TYPES_MAP = {
+            'macroeconomique': '## TYPE_1. ACTUALITÉS MACRO-ÉCONOMIQUES',
+            'politique':       '## TYPE_2. ACTUALITÉS POLITIQUES & GÉOPOLITIQUES',
+            'financiere':      '## TYPE_3. ACTUALITÉS FINANCIÈRES & MARCHÉS',
+        }
+        ZONES_MAP = {
+            'international': ('### PLAN MONDIAL',          '🌐'),
+            'afrique':       ('### PLAN AFRICAIN',         '🌍'),
+            'afrique_ouest': ("### PLAN AFRIQUE DE L'OUEST", '0001F30D'),
+            'uemoa':         ('### PLAN UEMOA',            '🏦'),
+            'brvm':          ('### PLAN BRVM',             '📈'),
+        }
+
+        for t_key, t_label in TYPES_MAP.items():
+            t_data = macro_news.get(t_key, {})
+            if not isinstance(t_data, dict):
                 continue
+            has_any = any(
+                isinstance(df, pd.DataFrame) and not df.empty
+                for df in t_data.values()
+            )
+            if not has_any:
+                continue
+            sections.append(t_label)
+            for z_key, (z_header, z_emoji) in ZONES_MAP.items():
+                df = t_data.get(z_key, pd.DataFrame())
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    continue
+                items = []
+                for _, row in df.head(5).iterrows():
+                    date_s = str(row.get('mail_date',''))[:10]
+                    titre  = str(row.get('titre') or row.get('mail_subject') or '')[:120]
+                    resume = str(row.get('resume',''))[:300]
+                    sent   = str(row.get('sentiment','') or '').lower()
+                    impact = str(row.get('impact_brvm','') or '').lower()
+                    s_lbl  = '🟢 Positif' if 'positif' in sent else ('🔴 Négatif' if 'negatif' in sent else '⚪ Neutre')
+                    i_lbl  = '🟢 Positif' if 'positif' in impact else ('🔴 Négatif' if 'negatif' in impact else '⚪ Neutre')
+                    items.append(
+                        f"- [{date_s}] {titre}\n"
+                        f"  {resume}\n"
+                        f"  Sentiment: {s_lbl} | Impact BRVM estimé: {i_lbl}"
+                    )
+                sections.append(f"{z_header}\n" + "\n\n".join(items))
+                sections.append(
+                    "#### Impact estimé sur la BRVM\n"
+                    f"- Basé sur {len(df)} actualité(s) collectée(s). "
+                    "Analyse IA indisponible — évaluer manuellement l'impact sur les sociétés cotées."
+                )
 
-            items = []
-            for _, row in df.head(6).iterrows():
-                date_s  = str(row.get('mail_date',''))[:10]
-                titre   = str(row.get('mail_subject') or row.get('titre') or row.get('resume','')[:80])[:120]
-                resume  = str(row.get('resume',''))[:250]
-                sent    = str(row.get('sentiment','') or '').lower()
-                s_label = '🟢 Positif' if 'positif' in sent else ('🔴 Négatif' if 'negatif' in sent else '⚪ Neutre')
-                items.append(f"• [{date_s}] {titre}\n  {resume}\n  Impact estimé : {s_label}")
-
-            sections.append(f"### {label}\n" + "\n\n".join(items))
+        if not sections:
+            sections.append(
+                "## TYPE_1. ACTUALITÉS MACRO-ÉCONOMIQUES\n"
+                "### PLAN MONDIAL\nAucune actualité disponible pour cette période."
+            )
 
         sections.append(
-            "### 📊 IMPACT SUR LA BRVM (estimation automatique)\n"
-            "En l'absence d'analyse IA, l'impact macro sur la BRVM doit être "
-            "évalué manuellement en croisant les actualités ci-dessus avec les "
-            "fondamentaux des sociétés cotées."
+            "## SYNTHESE_FINALE\n"
+            "Niveau d'alerte : ORANGE — Analyse IA indisponible. "
+            "Les données macro ont bien été collectées mais aucune IA n'a pu générer "
+            "l'analyse. Consulter les tableaux de sources ci-dessous."
         )
 
         return "\n\n".join(sections)
@@ -1870,12 +1914,13 @@ RÈGLES :
             "Content-Type": "application/json"
         }
 
-        # Réduire max_tokens pour rester dans les limites du free tier Mistral
-        # (≈ 2000 tokens/min sur le plan gratuit)
+        # max_tokens selon longueur du prompt (macro = plus long)
+        prompt_len   = len(prompt)
+        max_tok      = 2500 if prompt_len > 2000 else 1500
         request_body = {
             "model": MISTRAL_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1500,
+            "max_tokens": max_tok,
             "temperature": 0.4
         }
 
