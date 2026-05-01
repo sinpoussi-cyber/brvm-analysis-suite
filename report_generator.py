@@ -443,30 +443,24 @@ class BRVMReportGenerator:
 
     def _generate_price_chart(self, symbol, hist_df):
         """
-        Génère un graphique matplotlib : courbe de cours (haut) + volumes (bas).
-        Retourne un objet BytesIO prêt pour doc.add_picture(), ou None si erreur.
+        Génère courbe de cours + volumes sans GridSpec ni tight_layout
+        pour éviter les warnings et crashs silencieux.
         """
         if not MATPLOTLIB_OK or hist_df is None or hist_df.empty or len(hist_df) < 5:
             return None
         try:
-            fig = plt.figure(figsize=(9, 4))
-            gs  = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
-
-            ax1 = fig.add_subplot(gs[0])
-            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 4.5),
+                                            gridspec_kw={'height_ratios': [3, 1]})
+            fig.patch.set_facecolor('white')
 
             dates  = pd.to_datetime(hist_df['trade_date'])
             prices = hist_df['price'].astype(float)
             vols   = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
 
-            # — Courbe de prix —
-            ax1.plot(dates, prices, color='#1a5276', linewidth=1.6, zorder=3)
-            ax1.fill_between(dates, prices, prices.min()*0.98,
-                             alpha=0.08, color='#1a5276')
+            ax1.plot(dates, prices, color='#1a5276', linewidth=1.8, zorder=3)
+            ax1.fill_between(dates, prices, prices.min()*0.98, alpha=0.08, color='#1a5276')
 
-            # Annotations min / max
-            idx_max = prices.idxmax()
-            idx_min = prices.idxmin()
+            idx_max = prices.idxmax(); idx_min = prices.idxmin()
             ax1.annotate(f"{prices[idx_max]:,.0f}",
                          xy=(dates[idx_max], prices[idx_max]),
                          fontsize=7, color='#27ae60', fontweight='bold',
@@ -477,10 +471,10 @@ class BRVMReportGenerator:
                          xytext=(0, -12), textcoords='offset points', ha='center')
 
             evol = ((prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0] * 100) if prices.iloc[0] else 0
-            color_title = '#27ae60' if evol >= 0 else '#c0392b'
+            col  = '#27ae60' if evol >= 0 else '#c0392b'
             sign = '+' if evol >= 0 else ''
             ax1.set_title(f"{symbol} — Cours 100 derniers jours  ({sign}{evol:.1f}%)",
-                          fontsize=10, fontweight='bold', color=color_title, pad=6)
+                          fontsize=10, fontweight='bold', color=col, pad=6)
             ax1.set_ylabel("Prix (FCFA)", fontsize=8)
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
             ax1.grid(True, linestyle='--', alpha=0.4, color='#aaaaaa')
@@ -488,7 +482,6 @@ class BRVMReportGenerator:
             plt.setp(ax1.get_xticklabels(), visible=False)
             ax1.spines[['top','right']].set_visible(False)
 
-            # — Barres de volumes —
             bar_colors = ['#27ae60' if p >= prices.iloc[max(0,i-1)] else '#c0392b'
                           for i, p in enumerate(prices)]
             ax2.bar(dates, vols, color=bar_colors, alpha=0.65, width=0.8)
@@ -501,21 +494,16 @@ class BRVMReportGenerator:
             ax2.spines[['top','right']].set_visible(False)
             ax2.set_xlabel("Date", fontsize=8)
 
-            fig.patch.set_facecolor('white')
-            plt.tight_layout(pad=0.5)
-
+            fig.subplots_adjust(left=0.09, right=0.97, top=0.88, bottom=0.18, hspace=0.12)
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                        facecolor='white')
+            fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
             buf.seek(0)
             plt.close(fig)
             return buf
         except Exception as e:
             logging.warning(f"⚠️  Graphique {symbol}: {e}")
-            try:
-                plt.close('all')
-            except Exception:
-                pass
+            try: plt.close('all')
+            except Exception: pass
             return None
 
     def _generate_composite_chart(self, df_hist):
@@ -684,10 +672,8 @@ class BRVMReportGenerator:
         if not MATPLOTLIB_OK or hist_df is None or hist_df.empty or len(hist_df) < 5:
             return None
         try:
-            fig = plt.figure(figsize=(9, 4.5))
-            gs  = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
-            ax1 = fig.add_subplot(gs[0])
-            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 4.5),
+                                            gridspec_kw={'height_ratios': [3, 1]})
             dates_r  = pd.to_datetime(hist_df['trade_date'])
             prices_r = hist_df['price'].astype(float)
             vols     = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
@@ -769,7 +755,7 @@ class BRVMReportGenerator:
             ax2.spines[['top','right']].set_visible(False)
             ax2.set_xlabel("Date", fontsize=8)
             fig.patch.set_facecolor('white')
-            plt.tight_layout(pad=0.5)
+            fig.subplots_adjust(left=0.09, right=0.97, top=0.88, bottom=0.18, hspace=0.12)
             buf = io.BytesIO()
             fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
             buf.seek(0)
