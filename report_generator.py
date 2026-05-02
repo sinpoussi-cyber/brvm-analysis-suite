@@ -161,7 +161,8 @@ class BRVMReportGenerator:
                         FROM new_market_indicators
                         WHERE brvm_composite IS NOT NULL
                           AND brvm_composite > 0
-                        ORDER BY id DESC
+                          AND extraction_date >= CURRENT_DATE - INTERVAL '150 days'
+                        ORDER BY extraction_date DESC
                         LIMIT 100;
                         """
                         df_hist = pd.read_sql(query_hist, self.db_conn)
@@ -535,11 +536,11 @@ class BRVMReportGenerator:
             """Style commun pour les deux axes."""
             ax.set_title(title, fontsize=11, fontweight='bold', color=color_title, pad=8)
             ax.set_ylabel(ylabel, fontsize=9)
-            ax.set_xlabel("Date", fontsize=9)
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-            # Environ 8-10 ticks sur l'axe X
-            ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=2))
-            plt.setp(ax.get_xticklabels(), rotation=30, fontsize=8, ha='right')
+            ax.set_xlabel("", fontsize=9)
+            # Format court : 01/25 pour janvier 2025
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%y'))
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0, interval=3))
+            plt.setp(ax.get_xticklabels(), rotation=45, fontsize=8, ha='right')
             ax.grid(True, linestyle='--', alpha=0.35, color='#cccccc')
             ax.spines[['top', 'right']].set_visible(False)
             ax.tick_params(axis='y', labelsize=8)
@@ -556,16 +557,8 @@ class BRVMReportGenerator:
 
             # Courbe principale
             ax1.plot(dates, comp, color='#154360', linewidth=2.0, zorder=3)
-            ax1.fill_between(dates, comp, comp.min() * 0.985,
-                             alpha=0.12, color='#154360')
-
-            # Zone colorée selon tendance (fond léger)
-            ax1.fill_between(dates, comp, comp.mean(),
-                             where=(comp >= comp.mean()),
-                             alpha=0.08, color='#27ae60')
-            ax1.fill_between(dates, comp, comp.mean(),
-                             where=(comp < comp.mean()),
-                             alpha=0.08, color='#c0392b')
+            ax1.fill_between(dates, comp, comp.min() * 0.998,
+                             alpha=0.10, color='#154360')
 
             # Annotations min / max
             i_max = comp.idxmax(); i_min = comp.idxmin()
@@ -587,6 +580,8 @@ class BRVMReportGenerator:
                          xytext=(6, 0), textcoords='offset points', va='center')
 
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.1f}"))
+            y_pad = (comp.max() - comp.min()) * 0.20 if comp.max() != comp.min() else comp.max() * 0.05
+            ax1.set_ylim(comp.min() - y_pad * 0.3, comp.max() + y_pad)
             _style_ax(ax1,
                       f"Indice BRVM Composite — {len(comp)} jours ({sign}{evol:.2f}%)",
                       "Points",
@@ -615,16 +610,8 @@ class BRVMReportGenerator:
 
             # Courbe principale
             ax2.plot(dates, cap, color='#1a5276', linewidth=2.0, zorder=3)
-            ax2.fill_between(dates, cap, cap.min() * 0.985,
-                             alpha=0.12, color='#1a5276')
-
-            # Zone colorée selon tendance
-            ax2.fill_between(dates, cap, cap.mean(),
-                             where=(cap >= cap.mean()),
-                             alpha=0.08, color='#27ae60')
-            ax2.fill_between(dates, cap, cap.mean(),
-                             where=(cap < cap.mean()),
-                             alpha=0.08, color='#c0392b')
+            ax2.fill_between(dates, cap, cap.min() * 0.998,
+                             alpha=0.10, color='#1a5276')
 
             # Annotations min / max
             i_max2 = cap.idxmax(); i_min2 = cap.idxmin()
@@ -646,6 +633,8 @@ class BRVMReportGenerator:
                          xytext=(6, 0), textcoords='offset points', va='center')
 
             ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+            y_pad2 = (cap.max() - cap.min()) * 0.20 if cap.max() != cap.min() else cap.max() * 0.05
+            ax2.set_ylim(cap.min() - y_pad2 * 0.3, cap.max() + y_pad2)
             _style_ax(ax2,
                       f"Capitalisation Boursière BRVM — {len(cap)} jours ({sign_c}{evol_c:.2f}%)",
                       "Mds FCFA",
