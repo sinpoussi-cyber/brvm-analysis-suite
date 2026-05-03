@@ -4844,7 +4844,7 @@ RAPPELS IMPÉRATIFS:
     def generate_all_reports(self, new_fundamental_analyses):
         """Génération du rapport ULTIMATE complet avec toutes les analyses"""
         logging.info("="*80)
-        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V30.2 ULTIMATE)")
+        logging.info("📝 ÉTAPE 5: GÉNÉRATION RAPPORTS (V30.3 — FIX GRAPHS 2025)")
         logging.info("🤖 Multi-AI: DeepSeek → Gemini → Mistral")
         logging.info("📊 Analyses: Sectorielles + Convergence + Liquidité + Divergences + Risque/Horizon")
         logging.info("="*80)
