@@ -459,7 +459,7 @@ class BRVMReportGenerator:
             vols   = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
 
             ax1.plot(dates, prices, color='#1a5276', linewidth=1.8, zorder=3)
-            ax1.fill_between(dates, prices, prices.min()*0.98, alpha=0.08, color='#1a5276')
+            ax1.fill_between(dates, prices, prices.min(), alpha=0.08, color='#1a5276')
 
             idx_max = prices.idxmax(); idx_min = prices.idxmin()
             ax1.annotate(f"{prices[idx_max]:,.0f}",
@@ -557,8 +557,8 @@ class BRVMReportGenerator:
 
             # Courbe principale
             ax1.plot(dates, comp, color='#154360', linewidth=2.0, zorder=3)
-            ax1.fill_between(dates, comp, comp.min() * 0.998,
-                             alpha=0.10, color='#154360')
+            ax1.fill_between(dates, comp, comp.min(),
+                             alpha=0.12, color='#154360')
 
             # Annotations min / max
             i_max = comp.idxmax(); i_min = comp.idxmin()
@@ -610,8 +610,8 @@ class BRVMReportGenerator:
 
             # Courbe principale
             ax2.plot(dates, cap, color='#1a5276', linewidth=2.0, zorder=3)
-            ax2.fill_between(dates, cap, cap.min() * 0.998,
-                             alpha=0.10, color='#1a5276')
+            ax2.fill_between(dates, cap, cap.min(),
+                             alpha=0.12, color='#1a5276')
 
             # Annotations min / max
             i_max2 = cap.idxmax(); i_min2 = cap.idxmin()
@@ -668,7 +668,7 @@ class BRVMReportGenerator:
             vols     = hist_df['volume'].astype(float) if 'volume' in hist_df.columns else pd.Series([0]*len(hist_df))
             # Cours reels
             ax1.plot(dates_r, prices_r, color='#1a5276', linewidth=1.8, zorder=3, label='Cours r\u00e9els')
-            ax1.fill_between(dates_r, prices_r, prices_r.min()*0.97, alpha=0.07, color='#1a5276')
+            ax1.fill_between(dates_r, prices_r, prices_r.min(), alpha=0.07, color='#1a5276')
             idx_max = prices_r.idxmax(); idx_min = prices_r.idxmin()
             ax1.annotate(f"{prices_r[idx_max]:,.0f}", xy=(dates_r[idx_max], prices_r[idx_max]),
                          fontsize=7, color='#27ae60', fontweight='bold', xytext=(0, 6), textcoords='offset points', ha='center')
