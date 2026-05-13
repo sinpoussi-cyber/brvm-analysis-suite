@@ -555,7 +555,10 @@ class BRVMReportGenerator:
             fig1, ax1 = plt.subplots(figsize=(11, 4), dpi=110)
             fig1.patch.set_facecolor('white')
 
-            # Courbe principale (fill APRÈS set_ylim pour éviter le triangle)
+            # Fond gris uniforme (évite le triangle du fill_between)
+            ax1.set_facecolor('#EEF2F7')
+
+            # Courbe principale
             ax1.plot(dates, comp, color='#154360', linewidth=2.0, zorder=3)
 
             # Annotations min / max
@@ -579,10 +582,7 @@ class BRVMReportGenerator:
 
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.1f}"))
             y_pad = (comp.max() - comp.min()) * 0.20 if comp.max() != comp.min() else comp.max() * 0.05
-            y_min = comp.min() - y_pad * 0.3
-            ax1.set_ylim(y_min, comp.max() + y_pad)
-            # fill APRÈS set_ylim — utilise la vraie limite basse de l'axe
-            ax1.fill_between(dates, comp, y_min, alpha=0.12, color='#154360')
+            ax1.set_ylim(comp.min() - y_pad * 0.3, comp.max() + y_pad)
             _style_ax(ax1,
                       f"Indice BRVM Composite — {len(comp)} jours ({sign}{evol:.2f}%)",
                       "Points",
@@ -609,7 +609,10 @@ class BRVMReportGenerator:
             fig2, ax2 = plt.subplots(figsize=(11, 4), dpi=110)
             fig2.patch.set_facecolor('white')
 
-            # Courbe principale (fill APRÈS set_ylim pour éviter le triangle)
+            # Fond gris uniforme (évite le triangle du fill_between)
+            ax2.set_facecolor('#EEF2F7')
+
+            # Courbe principale
             ax2.plot(dates, cap, color='#1a5276', linewidth=2.0, zorder=3)
 
             # Annotations min / max
@@ -633,10 +636,7 @@ class BRVMReportGenerator:
 
             ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
             y_pad2 = (cap.max() - cap.min()) * 0.20 if cap.max() != cap.min() else cap.max() * 0.05
-            y_min2 = cap.min() - y_pad2 * 0.3
-            ax2.set_ylim(y_min2, cap.max() + y_pad2)
-            # fill APRÈS set_ylim — utilise la vraie limite basse de l'axe
-            ax2.fill_between(dates, cap, y_min2, alpha=0.12, color='#1a5276')
+            ax2.set_ylim(cap.min() - y_pad2 * 0.3, cap.max() + y_pad2)
             _style_ax(ax2,
                       f"Capitalisation Boursière BRVM — {len(cap)} jours ({sign_c}{evol_c:.2f}%)",
                       "Mds FCFA",
