@@ -583,6 +583,7 @@ class BRVMReportGenerator:
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.1f}"))
             y_pad = (comp.max() - comp.min()) * 0.20 if comp.max() != comp.min() else comp.max() * 0.05
             ax1.set_ylim(comp.min() - y_pad * 0.3, comp.max() + y_pad)
+            ax1.set_xlim(dates.iloc[0], dates.iloc[-1])
             _style_ax(ax1,
                       f"Indice BRVM Composite — {len(comp)} jours ({sign}{evol:.2f}%)",
                       "Points",
@@ -637,6 +638,7 @@ class BRVMReportGenerator:
             ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
             y_pad2 = (cap.max() - cap.min()) * 0.20 if cap.max() != cap.min() else cap.max() * 0.05
             ax2.set_ylim(cap.min() - y_pad2 * 0.3, cap.max() + y_pad2)
+            ax2.set_xlim(dates.iloc[0], dates.iloc[-1])
             _style_ax(ax2,
                       f"Capitalisation Boursière BRVM — {len(cap)} jours ({sign_c}{evol_c:.2f}%)",
                       "Mds FCFA",
