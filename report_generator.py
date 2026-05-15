@@ -2266,10 +2266,10 @@ RÈGLES IMPÉRATIVES :
 
     def _format_donnees_financieres(self, fin, symbol):
         """
-        Formate les données financières structurées en texte pour le prompt IA.
-        - Détecte automatiquement le secteur (bancaire vs non-bancaire)
-        - Ignore les valeurs NULL ou 0 (données manquantes / non pertinentes)
-        - Adapte les variables et leur interprétation selon le secteur
+        Formate TOUTES les données financières structurées pour le prompt IA.
+        - Affiche toutes les variables disponibles (non nulles, non zéro)
+        - Détecte le secteur (bancaire vs non-bancaire)
+        - Ajoute des annotations contextuelles pour l'IA
         """
         if not fin:
             return ""
@@ -2283,19 +2283,18 @@ RÈGLES IMPÉRATIVES :
                 if f == 0.0:
                     return None
                 if pct:
-                    return f"{f*100:.2f}%"
+                    return f"{f*100:.4f}%"
                 if milliards and abs(f) >= 1_000_000_000:
-                    return f"{f/1_000_000_000:.2f} Mds FCFA"
+                    return f"{f/1_000_000_000:.3f} Mds FCFA"
                 if milliards and abs(f) >= 1_000_000:
-                    return f"{f/1_000_000:.0f} M FCFA"
-                return f"{f:,.0f} FCFA"
+                    return f"{f/1_000_000:.2f} M FCFA"
+                return f"{f:,.2f} FCFA"
             except (TypeError, ValueError):
                 return None
 
         annee = fin.get('annee', 'N/A')
 
-        # ── Détection secteur bancaire ───────────────────────────────────────────
-        # Critère : présence de caisse_banque_centrale OU produit_net_bancaire OU dettes_clientele
+        # ── Détection secteur bancaire ──────────────────────────────────────────
         is_bank = any([
             fin.get('caisse_banque_centrale') and float(fin.get('caisse_banque_centrale') or 0) != 0,
             fin.get('produit_net_bancaire')   and float(fin.get('produit_net_bancaire')   or 0) != 0,
@@ -2305,182 +2304,271 @@ RÈGLES IMPÉRATIVES :
         secteur_label = "BANQUE" if is_bank else "ENTREPRISE NON BANCAIRE"
 
         lines = []
-        lines.append(f"\n{'═'*60}")
-        lines.append(f"📊 DONNÉES FINANCIÈRES STRUCTURÉES — {symbol} ({annee}) [{secteur_label}]")
-        lines.append(f"{'═'*60}")
-        lines.append("(Valeurs 0 ou absentes = données non disponibles ou non pertinentes pour ce secteur)\n")
+        lines.append(f"\n{'═'*70}")
+        lines.append(f"📊 DONNÉES FINANCIÈRES STRUCTURÉES COMPLÈTES — {symbol} (Exercice {annee}) [{secteur_label}]")
+        lines.append(f"{'═'*70}")
+        lines.append("⚠️  Règle : toute valeur absente ou = 0 signifie donnée manquante ou non pertinente pour ce secteur.\n")
 
-        # ── BILAN ACTIF ──────────────────────────────────────────────────────────
-        bilan_actif = []
-        if is_bank:
-            if v(fin.get('caisse_banque_centrale')):
-                bilan_actif.append(f"  • Caisse & Banque Centrale    : {v(fin.get('caisse_banque_centrale'))} [liquidité primaire banque centrale]")
-            if v(fin.get('effets_publics')):
-                bilan_actif.append(f"  • Effets publics              : {v(fin.get('effets_publics'))} [titres d'État détenus]")
-            if v(fin.get('creances_interbancaires')):
-                bilan_actif.append(f"  • Créances interbancaires     : {v(fin.get('creances_interbancaires'))} [prêts aux autres banques]")
-            if v(fin.get('creances_clientele')):
-                bilan_actif.append(f"  • Créances sur la clientèle   : {v(fin.get('creances_clientele'))} [portefeuille de crédits accordés]")
-        else:
-            if v(fin.get('stocks')):
-                bilan_actif.append(f"  • Stocks                      : {v(fin.get('stocks'))}")
-            if v(fin.get('creances_clients')):
-                bilan_actif.append(f"  • Créances clients            : {v(fin.get('creances_clients'))}")
-            if v(fin.get('actif_circulant')):
-                bilan_actif.append(f"  • Actif circulant             : {v(fin.get('actif_circulant'))}")
-        if v(fin.get('tresorerie_actif')):
-            bilan_actif.append(f"  • Trésorerie actif            : {v(fin.get('tresorerie_actif'))}")
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 1 : BILAN — ACTIF
+        # ══════════════════════════════════════════════════════════════════════
+        ba = []
+        # Variables spécifiques banques
+        if v(fin.get('caisse_banque_centrale')):
+            ba.append(f"  • Caisse & Banque Centrale              : {v(fin.get('caisse_banque_centrale'))}"
+                      + (" [🏦 BANQUE: liquidité primaire, réserves obligatoires]" if is_bank else ""))
+        if v(fin.get('effets_publics')):
+            ba.append(f"  • Effets publics & valeurs assimilées   : {v(fin.get('effets_publics'))}"
+                      + (" [🏦 BANQUE: portefeuille de titres d'État]" if is_bank else ""))
+        if v(fin.get('creances_interbancaires')):
+            ba.append(f"  • Créances interbancaires               : {v(fin.get('creances_interbancaires'))}"
+                      + (" [🏦 BANQUE: prêts aux autres établissements bancaires]" if is_bank else ""))
+        if v(fin.get('creances_clientele')):
+            ba.append(f"  • Créances sur la clientèle             : {v(fin.get('creances_clientele'))}"
+                      + (" [🏦 BANQUE: portefeuille total de crédits accordés aux clients]" if is_bank else ""))
+        # Variables spécifiques entreprises
+        if v(fin.get('creances_clients')):
+            ba.append(f"  • Créances clients                      : {v(fin.get('creances_clients'))}"
+                      + (" [🏢 ENTREPRISE: montants dus par les clients]" if not is_bank else ""))
+        if v(fin.get('stocks')):
+            ba.append(f"  • Stocks                                : {v(fin.get('stocks'))}"
+                      + (" [🏢 ENTREPRISE: marchandises, matières premières, produits finis]" if not is_bank else ""))
+        if v(fin.get('actif_circulant')):
+            ba.append(f"  • Actif circulant                       : {v(fin.get('actif_circulant'))}")
+        # Variables communes
+        if v(fin.get('immobilisations_incorporelles')):
+            ba.append(f"  • Immobilisations incorporelles         : {v(fin.get('immobilisations_incorporelles'))}")
+        if v(fin.get('immobilisations_corporelles')):
+            ba.append(f"  • Immobilisations corporelles           : {v(fin.get('immobilisations_corporelles'))}")
         if v(fin.get('actif_immobilise_net')):
-            bilan_actif.append(f"  • Actif immobilisé net        : {v(fin.get('actif_immobilise_net'))}")
+            ba.append(f"  • Actif immobilisé net                  : {v(fin.get('actif_immobilise_net'))}")
+        if v(fin.get('tresorerie_actif')):
+            ba.append(f"  • Trésorerie Actif                      : {v(fin.get('tresorerie_actif'))}")
         if v(fin.get('total_actif')):
-            bilan_actif.append(f"  • Total actif / Bilan         : {v(fin.get('total_actif'))}")
+            ba.append(f"  • Total Actif                           : {v(fin.get('total_actif'))}")
+        if v(fin.get('total_bilan')):
+            ba.append(f"  • Total Bilan                           : {v(fin.get('total_bilan'))}")
+        if ba:
+            lines.append("📌 1. BILAN — ACTIF")
+            lines.extend(ba)
 
-        if bilan_actif:
-            lines.append("📌 BILAN — ACTIF")
-            lines.extend(bilan_actif)
-
-        # ── BILAN PASSIF ─────────────────────────────────────────────────────────
-        bilan_passif = []
-        if v(fin.get('capitaux_propres')):
-            bilan_passif.append(f"  • Capitaux propres            : {v(fin.get('capitaux_propres'))}")
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 2 : BILAN — PASSIF
+        # ══════════════════════════════════════════════════════════════════════
+        bp = []
         if v(fin.get('capital_souscrit')):
-            bilan_passif.append(f"  • Capital souscrit            : {v(fin.get('capital_souscrit'))}")
-        if is_bank:
-            if v(fin.get('dettes_clientele')):
-                bilan_passif.append(f"  • Dettes clientèle (dépôts)   : {v(fin.get('dettes_clientele'))} [ressources collectées auprès des clients]")
-            if v(fin.get('dettes_interbancaires')):
-                bilan_passif.append(f"  • Dettes interbancaires       : {v(fin.get('dettes_interbancaires'))}")
-        else:
-            if v(fin.get('dettes_fournisseurs')):
-                bilan_passif.append(f"  • Dettes fournisseurs         : {v(fin.get('dettes_fournisseurs'))}")
-            if v(fin.get('dettes_financieres_lt_mt')):
-                bilan_passif.append(f"  • Dettes financières LT/MT    : {v(fin.get('dettes_financieres_lt_mt'))}")
+            bp.append(f"  • Capital souscrit                      : {v(fin.get('capital_souscrit'))}")
+        if v(fin.get('reserves')):
+            bp.append(f"  • Réserves                              : {v(fin.get('reserves'))}")
+        if v(fin.get('capitaux_propres')):
+            bp.append(f"  • Capitaux propres                      : {v(fin.get('capitaux_propres'))}")
+        if v(fin.get('capitaux_permanents')):
+            bp.append(f"  • Capitaux permanents                   : {v(fin.get('capitaux_permanents'))}")
+        if v(fin.get('dettes_interbancaires')):
+            bp.append(f"  • Dettes interbancaires                 : {v(fin.get('dettes_interbancaires'))}"
+                      + (" [🏦 BANQUE: emprunts auprès d'autres banques]" if is_bank else ""))
+        if v(fin.get('dettes_clientele')):
+            bp.append(f"  • Dettes clientèle (dépôts)             : {v(fin.get('dettes_clientele'))}"
+                      + (" [🏦 BANQUE: dépôts collectés auprès des clients → principale ressource]" if is_bank else ""))
+        if v(fin.get('dettes_fournisseurs')):
+            bp.append(f"  • Dettes fournisseurs                   : {v(fin.get('dettes_fournisseurs'))}"
+                      + (" [🏢 ENTREPRISE]" if not is_bank else ""))
+        if v(fin.get('dettes_financieres_lt_mt')):
+            bp.append(f"  • Dettes financières LT/MT              : {v(fin.get('dettes_financieres_lt_mt'))}")
+        if v(fin.get('dettes_financieres_totales')):
+            bp.append(f"  • Dettes financières totales            : {v(fin.get('dettes_financieres_totales'))}")
         if v(fin.get('dettes_totales')):
-            bilan_passif.append(f"  • Dettes totales              : {v(fin.get('dettes_totales'))}")
+            bp.append(f"  • Dettes totales                        : {v(fin.get('dettes_totales'))}")
+        if v(fin.get('passif_circulant')):
+            bp.append(f"  • Passif circulant                      : {v(fin.get('passif_circulant'))}")
+        if bp:
+            lines.append("\n📌 2. BILAN — PASSIF")
+            lines.extend(bp)
 
-        if bilan_passif:
-            lines.append("\n📌 BILAN — PASSIF")
-            lines.extend(bilan_passif)
-
-        # ── COMPTE DE RÉSULTAT ───────────────────────────────────────────────────
-        compte = []
-        if is_bank:
-            if v(fin.get('produit_net_bancaire')):
-                compte.append(f"  • Produit Net Bancaire (PNB)  : {v(fin.get('produit_net_bancaire'))} [équivalent CA pour une banque]")
-            if v(fin.get('interets_produits')):
-                compte.append(f"  • Intérêts & produits         : {v(fin.get('interets_produits'))}")
-            if v(fin.get('interets_charges')):
-                compte.append(f"  • Intérêts & charges          : {v(fin.get('interets_charges'))}")
-            if v(fin.get('commissions_produits')):
-                compte.append(f"  • Commissions (produits)      : {v(fin.get('commissions_produits'))}")
-        else:
-            if v(fin.get('chiffre_affaires')):
-                compte.append(f"  • Chiffre d'affaires          : {v(fin.get('chiffre_affaires'))}")
-            if v(fin.get('valeur_ajoutee')):
-                compte.append(f"  • Valeur Ajoutée              : {v(fin.get('valeur_ajoutee'))}")
-            if v(fin.get('ebe')):
-                compte.append(f"  • EBE                         : {v(fin.get('ebe'))}")
-        if v(fin.get('charges_personnel')):
-            compte.append(f"  • Charges du personnel        : {v(fin.get('charges_personnel'))}")
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 3 : COMPTE DE RÉSULTAT
+        # ══════════════════════════════════════════════════════════════════════
+        cr = []
+        if v(fin.get('ca_pnb')):
+            cr.append(f"  • CA / PNB (agrégé)                     : {v(fin.get('ca_pnb'))}")
+        if v(fin.get('produit_net_bancaire')):
+            cr.append(f"  • Produit Net Bancaire (PNB)             : {v(fin.get('produit_net_bancaire'))}"
+                      + " [🏦 BANQUE: équivalent du chiffre d'affaires pour une banque]")
+        if v(fin.get('chiffre_affaires')):
+            cr.append(f"  • Chiffre d'affaires (CA)               : {v(fin.get('chiffre_affaires'))}"
+                      + (" [🏢 ENTREPRISE]" if not is_bank else ""))
+        if v(fin.get('interets_produits')):
+            cr.append(f"  • Intérêts & produits assimilés         : {v(fin.get('interets_produits'))}"
+                      + (" [🏦 BANQUE: revenus des crédits accordés]" if is_bank else ""))
+        if v(fin.get('interets_charges')):
+            cr.append(f"  • Intérêts & charges assimilées         : {v(fin.get('interets_charges'))}"
+                      + (" [🏦 BANQUE: coût de la collecte de dépôts]" if is_bank else ""))
+        if v(fin.get('commissions_produits')):
+            cr.append(f"  • Commissions (produits)                : {v(fin.get('commissions_produits'))}"
+                      + (" [🏦 BANQUE: frais bancaires perçus]" if is_bank else ""))
+        if v(fin.get('commissions_charges')):
+            cr.append(f"  • Commissions (charges)                 : {v(fin.get('commissions_charges'))}")
         if v(fin.get('charges_generales_exploitation')):
-            compte.append(f"  • Charges générales exploit.  : {v(fin.get('charges_generales_exploitation'))}")
+            cr.append(f"  • Charges générales d'exploitation      : {v(fin.get('charges_generales_exploitation'))}")
+        if v(fin.get('dap_immobilisations')):
+            cr.append(f"  • DAP immobilisations                   : {v(fin.get('dap_immobilisations'))}")
+        if v(fin.get('charges_personnel')):
+            cr.append(f"  • Charges du personnel                  : {v(fin.get('charges_personnel'))}")
+        if v(fin.get('charges_financieres')):
+            cr.append(f"  • Charges financières                   : {v(fin.get('charges_financieres'))}")
+        if v(fin.get('valeur_ajoutee')):
+            cr.append(f"  • Valeur Ajoutée (VA)                   : {v(fin.get('valeur_ajoutee'))}")
+        if v(fin.get('ebe')):
+            cr.append(f"  • Excédent Brut d'Exploitation (EBE)    : {v(fin.get('ebe'))}")
+        if v(fin.get('rbe')):
+            cr.append(f"  • Résultat Brut d'Exploitation (RBE)    : {v(fin.get('rbe'))}"
+                      + (" [🏦 BANQUE: PNB - charges générales - DAP]" if is_bank else ""))
         if v(fin.get('resultat_exploitation')):
-            compte.append(f"  • Résultat d'exploitation     : {v(fin.get('resultat_exploitation'))}")
+            cr.append(f"  • Résultat d'exploitation               : {v(fin.get('resultat_exploitation'))}")
+        if v(fin.get('provisions')):
+            cr.append(f"  • Provisions                            : {v(fin.get('provisions'))}")
+        if v(fin.get('impot_benefices')):
+            cr.append(f"  • Impôt sur les bénéfices               : {v(fin.get('impot_benefices'))}")
+        if v(fin.get('resultat_avant_impot')):
+            cr.append(f"  • Résultat avant impôt                  : {v(fin.get('resultat_avant_impot'))}")
         if v(fin.get('resultat_net')):
-            compte.append(f"  • Résultat net                : {v(fin.get('resultat_net'))}")
+            cr.append(f"  • Résultat net                          : {v(fin.get('resultat_net'))}")
+        if cr:
+            lines.append("\n📌 3. COMPTE DE RÉSULTAT")
+            lines.extend(cr)
 
-        if compte:
-            lines.append("\n📌 COMPTE DE RÉSULTAT")
-            lines.extend(compte)
-
-        # ── CASH-FLOWS ───────────────────────────────────────────────────────────
-        cashflow = []
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 4 : CASH-FLOWS & TRÉSORERIE
+        # ══════════════════════════════════════════════════════════════════════
+        cf = []
         if v(fin.get('caf')):
-            cashflow.append(f"  • CAF                         : {v(fin.get('caf'))}")
+            cf.append(f"  • CAF (Capacité d'autofinancement)      : {v(fin.get('caf'))}")
+        if v(fin.get('cafg')):
+            cf.append(f"  • CAFG                                  : {v(fin.get('cafg'))}")
         if v(fin.get('flux_operationnel')):
-            cashflow.append(f"  • Flux opérationnel           : {v(fin.get('flux_operationnel'))}")
+            cf.append(f"  • Flux opérationnel                     : {v(fin.get('flux_operationnel'))}")
+        if v(fin.get('flux_investissement')):
+            cf.append(f"  • Flux d'investissement                 : {v(fin.get('flux_investissement'))}")
+        if v(fin.get('flux_financement')):
+            cf.append(f"  • Flux de financement                   : {v(fin.get('flux_financement'))}")
+        if v(fin.get('cashflow_operationnel')):
+            cf.append(f"  • Cash-flow opérationnel                : {v(fin.get('cashflow_operationnel'))}")
         if v(fin.get('free_cash_flow')):
-            cashflow.append(f"  • Free Cash Flow              : {v(fin.get('free_cash_flow'))}")
+            cf.append(f"  • Free Cash Flow                        : {v(fin.get('free_cash_flow'))}")
+        if v(fin.get('bfr')):
+            cf.append(f"  • BFR (Besoin en Fonds de Roulement)    : {v(fin.get('bfr'))}"
+                      + (" [🏢 ENTREPRISE: BFR négatif = favorable]" if not is_bank else ""))
+        if v(fin.get('fonds_roulement')):
+            cf.append(f"  • Fonds de Roulement                    : {v(fin.get('fonds_roulement'))}")
         if v(fin.get('tresorerie_nette')):
-            cashflow.append(f"  • Trésorerie nette            : {v(fin.get('tresorerie_nette'))}")
+            cf.append(f"  • Trésorerie nette                      : {v(fin.get('tresorerie_nette'))}")
+        if cf:
+            lines.append("\n📌 4. CASH-FLOWS & TRÉSORERIE")
+            lines.extend(cf)
 
-        if cashflow:
-            lines.append("\n📌 CASH-FLOWS")
-            lines.extend(cashflow)
-
-        # ── RATIOS DE RENTABILITÉ ────────────────────────────────────────────────
-        ratios_rent = []
-        if v(fin.get('roe'), pct=True):
-            ratios_rent.append(f"  • ROE (rentabilité fonds propres) : {v(fin.get('roe'), pct=True)}")
-        if v(fin.get('roa'), pct=True):
-            ratios_rent.append(f"  • ROA (rentabilité actifs)        : {v(fin.get('roa'), pct=True)}")
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 5 : RATIOS DE RENTABILITÉ
+        # ══════════════════════════════════════════════════════════════════════
+        rr = []
+        if v(fin.get('marge_brute'), pct=True):
+            rr.append(f"  • Marge brute                           : {v(fin.get('marge_brute'), pct=True)}"
+                      + (" [🏢 ENTREPRISE: (CA - coût des ventes) / CA]" if not is_bank else ""))
         if v(fin.get('marge_nette'), pct=True):
-            ratios_rent.append(f"  • Marge nette                     : {v(fin.get('marge_nette'), pct=True)}")
-        if not is_bank and v(fin.get('marge_brute'), pct=True):
-            ratios_rent.append(f"  • Marge brute                     : {v(fin.get('marge_brute'), pct=True)}")
-        if not is_bank and v(fin.get('marge_operationnelle'), pct=True):
-            ratios_rent.append(f"  • Marge opérationnelle            : {v(fin.get('marge_operationnelle'), pct=True)}")
-        if is_bank and v(fin.get('coefficient_exploitation'), pct=True):
-            ratios_rent.append(f"  • Coefficient d'exploitation      : {v(fin.get('coefficient_exploitation'), pct=True)} [<60% = efficace]")
+            rr.append(f"  • Marge nette                           : {v(fin.get('marge_nette'), pct=True)}"
+                      " [Résultat net / CA ou PNB]")
+        if v(fin.get('marge_operationnelle'), pct=True):
+            rr.append(f"  • Marge opérationnelle                  : {v(fin.get('marge_operationnelle'), pct=True)}")
+        if v(fin.get('roe'), pct=True):
+            rr.append(f"  • ROE (Rentabilité fonds propres)       : {v(fin.get('roe'), pct=True)}"
+                      " [Résultat net / Capitaux propres — >15% = excellent]")
+        if v(fin.get('roa'), pct=True):
+            rr.append(f"  • ROA (Rentabilité des actifs)          : {v(fin.get('roa'), pct=True)}"
+                      " [Résultat net / Total actif]")
+        if v(fin.get('rotation_actifs'), pct=True):
+            rr.append(f"  • Rotation des actifs                   : {v(fin.get('rotation_actifs'), pct=True)}"
+                      " [CA / Total actif]")
+        if v(fin.get('coefficient_exploitation'), pct=True):
+            rr.append(f"  • Coefficient d'exploitation            : {v(fin.get('coefficient_exploitation'), pct=True)}"
+                      + (" [🏦 BANQUE: charges / PNB — <60% = banque efficace, <50% = excellente]" if is_bank else ""))
         if v(fin.get('taux_croissance_ca'), pct=True):
             lbl = "PNB" if is_bank else "CA"
-            ratios_rent.append(f"  • Taux de croissance {lbl}         : {v(fin.get('taux_croissance_ca'), pct=True)}")
-
-        # Coût du risque : UNIQUEMENT pour les banques + interprétation
-        if is_bank and v(fin.get('cout_risque'), pct=True):
-            cr = float(fin.get('cout_risque') or 0)
-            if cr != 0:
-                if cr < 0.01:
-                    interp_cr = "faible (portefeuille sain)"
-                elif cr < 0.03:
-                    interp_cr = "modéré (surveillance requise)"
+            rr.append(f"  • Taux de croissance {lbl}               : {v(fin.get('taux_croissance_ca'), pct=True)}")
+        # Coût du risque — banques uniquement
+        if v(fin.get('cout_risque'), pct=True):
+            cr_val = float(fin.get('cout_risque') or 0)
+            if cr_val != 0:
+                if abs(cr_val) < 0.01:
+                    interp_cr = "faible → portefeuille sain"
+                elif abs(cr_val) < 0.03:
+                    interp_cr = "modéré → surveillance requise"
                 else:
-                    interp_cr = "élevé (risque de crédit significatif)"
-                ratios_rent.append(
-                    f"  • Coût du risque (charges risque/charges fin.) : {v(fin.get('cout_risque'), pct=True)} → {interp_cr}"
-                    f"\n    [Part des provisions dans les charges financières — plus c'est bas, mieux c'est]"
-                )
+                    interp_cr = "élevé → risque de crédit significatif"
+                rr.append(f"  • Coût du risque / charges financières  : {v(fin.get('cout_risque'), pct=True)}"
+                          f" [{interp_cr}]"
+                          + (" [🏦 BANQUE: provisions / charges financières — PLUS c'est bas, MIEUX c'est]" if is_bank else ""))
+        if rr:
+            lines.append("\n📌 5. RATIOS DE RENTABILITÉ")
+            lines.extend(rr)
 
-        if ratios_rent:
-            lines.append("\n📌 RATIOS DE RENTABILITÉ")
-            lines.extend(ratios_rent)
-
-        # ── RATIOS DE STRUCTURE FINANCIÈRE ──────────────────────────────────────
-        ratios_struct = []
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 6 : RATIOS DE STRUCTURE FINANCIÈRE & LIQUIDITÉ
+        # ══════════════════════════════════════════════════════════════════════
+        rs = []
         if v(fin.get('autonomie_financiere'), pct=True):
-            ratios_struct.append(f"  • Autonomie financière            : {v(fin.get('autonomie_financiere'), pct=True)}")
+            rs.append(f"  • Autonomie financière                  : {v(fin.get('autonomie_financiere'), pct=True)}"
+                      " [Capitaux propres / Total bilan — >30% = sain]")
+        if v(fin.get('dependance_financiere'), pct=True):
+            rs.append(f"  • Dépendance financière                 : {v(fin.get('dependance_financiere'), pct=True)}"
+                      " [Dettes financières / Total bilan]")
         if v(fin.get('ratio_endettement'), pct=True):
-            ratios_struct.append(f"  • Ratio d'endettement             : {v(fin.get('ratio_endettement'), pct=True)}")
+            rs.append(f"  • Ratio d'endettement                   : {v(fin.get('ratio_endettement'), pct=True)}"
+                      " [Dettes totales / Capitaux propres]")
         if v(fin.get('solvabilite_generale'), pct=True):
-            ratios_struct.append(f"  • Solvabilité générale            : {v(fin.get('solvabilite_generale'), pct=True)}")
-        if not is_bank:
-            if v(fin.get('liquidite_generale'), pct=True):
-                ratios_struct.append(f"  • Liquidité générale              : {v(fin.get('liquidite_generale'), pct=True)}")
-            if v(fin.get('bfr')):
-                ratios_struct.append(f"  • BFR                             : {v(fin.get('bfr'))}")
-        if v(fin.get('couverture_interets'), pct=True):
-            ratios_struct.append(f"  • Couverture des intérêts         : {v(fin.get('couverture_interets'), pct=True)}")
+            rs.append(f"  • Solvabilité générale                  : {v(fin.get('solvabilite_generale'), pct=True)}"
+                      " [Total actif / Dettes totales — >1 = solvable]")
+        if v(fin.get('liquidite_generale'), pct=True):
+            rs.append(f"  • Liquidité générale                    : {v(fin.get('liquidite_generale'), pct=True)}"
+                      " [Actif circulant / Passif circulant — >1 = bon]")
+        if v(fin.get('liquidite_immediate'), pct=True):
+            rs.append(f"  • Liquidité immédiate                   : {v(fin.get('liquidite_immediate'), pct=True)}"
+                      " [Trésorerie / Passif circulant]")
+        if v(fin.get('liquidite_reduite'), pct=True):
+            rs.append(f"  • Liquidité réduite                     : {v(fin.get('liquidite_reduite'), pct=True)}"
+                      " [(Actif circulant - Stocks) / Passif circulant]")
+        if v(fin.get('financement_immobilisations'), pct=True):
+            rs.append(f"  • Financement des immobilisations       : {v(fin.get('financement_immobilisations'), pct=True)}"
+                      " [Capitaux permanents / Actif immobilisé]")
         if v(fin.get('capacite_remboursement')):
-            ratios_struct.append(f"  • Capacité de remboursement       : {v(fin.get('capacite_remboursement'), milliards=False)}")
+            rs.append(f"  • Capacité de remboursement             : {v(fin.get('capacite_remboursement'), milliards=False)}"
+                      " [Dettes financières / CAF — en années]")
+        if v(fin.get('couverture_interets'), pct=True):
+            rs.append(f"  • Couverture des intérêts               : {v(fin.get('couverture_interets'), pct=True)}"
+                      " [Résultat exploitation / Charges financières]")
+        if v(fin.get('couverture_investissements_caf'), pct=True):
+            rs.append(f"  • Couverture investissements par CAF    : {v(fin.get('couverture_investissements_caf'), pct=True)}"
+                      " [CAF / Flux d'investissement]")
+        if rs:
+            lines.append("\n📌 6. RATIOS DE STRUCTURE FINANCIÈRE & LIQUIDITÉ")
+            lines.extend(rs)
 
-        if ratios_struct:
-            lines.append("\n📌 RATIOS DE STRUCTURE FINANCIÈRE")
-            lines.extend(ratios_struct)
+        # ══════════════════════════════════════════════════════════════════════
+        # SECTION 7 : DÉLAIS D'EXPLOITATION (entreprises non-bancaires)
+        # ══════════════════════════════════════════════════════════════════════
+        dl = []
+        if v(fin.get('delai_clients'), milliards=False):
+            dl.append(f"  • Délai clients (jours)                 : {v(fin.get('delai_clients'), milliards=False)}"
+                      " [🏢 Créances clients × 360 / CA — délai élevé = risque trésorerie]")
+        if v(fin.get('delai_fournisseurs'), milliards=False):
+            dl.append(f"  • Délai fournisseurs (jours)            : {v(fin.get('delai_fournisseurs'), milliards=False)}"
+                      " [🏢 Dettes fourn. × 360 / Achats — délai élevé = bon pour la tréso]")
+        if v(fin.get('duree_stockage'), milliards=False):
+            dl.append(f"  • Durée de stockage (jours)             : {v(fin.get('duree_stockage'), milliards=False)}"
+                      " [🏢 Stocks × 360 / CA — durée élevée = immobilisation de capital]")
+        if dl:
+            lines.append("\n📌 7. DÉLAIS D'EXPLOITATION")
+            lines.extend(dl)
 
-        # ── DÉLAIS (uniquement non-bancaires) ────────────────────────────────────
-        if not is_bank:
-            delais = []
-            if v(fin.get('delai_clients'), milliards=False):
-                delais.append(f"  • Délai clients (jours)           : {v(fin.get('delai_clients'), milliards=False)}")
-            if v(fin.get('delai_fournisseurs'), milliards=False):
-                delais.append(f"  • Délai fournisseurs (jours)      : {v(fin.get('delai_fournisseurs'), milliards=False)}")
-            if v(fin.get('duree_stockage'), milliards=False):
-                delais.append(f"  • Durée de stockage (jours)       : {v(fin.get('duree_stockage'), milliards=False)}")
-            if delais:
-                lines.append("\n📌 DÉLAIS D'EXPLOITATION")
-                lines.extend(delais)
-
-        lines.append(f"{'═'*60}")
+        lines.append(f"\n{'═'*70}")
         return "\n".join(lines)
 
 
