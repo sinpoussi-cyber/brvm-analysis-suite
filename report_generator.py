@@ -187,7 +187,7 @@ class BRVMReportGenerator:
     def _get_historical_data_100days(self, company_id):
         """Récupère les 100 derniers jours de données historiques"""
         query = f"""
-        SELECT trade_date, price, volume
+        SELECT trade_date, price, volume, company_capitalization
         FROM historical_data
         WHERE company_id = {company_id}
         ORDER BY trade_date DESC
@@ -2242,6 +2242,267 @@ RÈGLES IMPÉRATIVES :
 
         return None, None
 
+
+    def _get_donnees_financieres(self, symbol):
+        """
+        Charge les données structurées de brvm_donnees_financieres pour un symbole.
+        Retourne la ligne la plus récente (annee max) ou None si absente.
+        """
+        try:
+            query = f"""
+                SELECT *
+                FROM public.brvm_donnees_financieres
+                WHERE symbol = '{symbol}'
+                ORDER BY annee DESC
+                LIMIT 1;
+            """
+            df = pd.read_sql(query, self.db_conn)
+            if df.empty:
+                return None
+            return df.iloc[0].to_dict()
+        except Exception as e:
+            logging.warning(f"   ⚠️ brvm_donnees_financieres non chargé pour {symbol}: {e}")
+            return None
+
+    def _format_donnees_financieres(self, fin, symbol):
+        """
+        Formate les données financières structurées en texte pour le prompt IA.
+        - Détecte automatiquement le secteur (bancaire vs non-bancaire)
+        - Ignore les valeurs NULL ou 0 (données manquantes / non pertinentes)
+        - Adapte les variables et leur interprétation selon le secteur
+        """
+        if not fin:
+            return ""
+
+        def v(val, pct=False, milliards=True):
+            """Formate une valeur numérique. Retourne None si 0 ou null."""
+            if val is None or val == 0 or str(val).strip() == "":
+                return None
+            try:
+                f = float(val)
+                if f == 0.0:
+                    return None
+                if pct:
+                    return f"{f*100:.2f}%"
+                if milliards and abs(f) >= 1_000_000_000:
+                    return f"{f/1_000_000_000:.2f} Mds FCFA"
+                if milliards and abs(f) >= 1_000_000:
+                    return f"{f/1_000_000:.0f} M FCFA"
+                return f"{f:,.0f} FCFA"
+            except (TypeError, ValueError):
+                return None
+
+        annee = fin.get('annee', 'N/A')
+
+        # ── Détection secteur bancaire ───────────────────────────────────────────
+        # Critère : présence de caisse_banque_centrale OU produit_net_bancaire OU dettes_clientele
+        is_bank = any([
+            fin.get('caisse_banque_centrale') and float(fin.get('caisse_banque_centrale') or 0) != 0,
+            fin.get('produit_net_bancaire')   and float(fin.get('produit_net_bancaire')   or 0) != 0,
+            fin.get('dettes_clientele')       and float(fin.get('dettes_clientele')       or 0) != 0,
+            fin.get('creances_interbancaires')and float(fin.get('creances_interbancaires')or 0) != 0,
+        ])
+        secteur_label = "BANQUE" if is_bank else "ENTREPRISE NON BANCAIRE"
+
+        lines = []
+        lines.append(f"\n{'═'*60}")
+        lines.append(f"📊 DONNÉES FINANCIÈRES STRUCTURÉES — {symbol} ({annee}) [{secteur_label}]")
+        lines.append(f"{'═'*60}")
+        lines.append("(Valeurs 0 ou absentes = données non disponibles ou non pertinentes pour ce secteur)\n")
+
+        # ── BILAN ACTIF ──────────────────────────────────────────────────────────
+        bilan_actif = []
+        if is_bank:
+            if v(fin.get('caisse_banque_centrale')):
+                bilan_actif.append(f"  • Caisse & Banque Centrale    : {v(fin.get('caisse_banque_centrale'))} [liquidité primaire banque centrale]")
+            if v(fin.get('effets_publics')):
+                bilan_actif.append(f"  • Effets publics              : {v(fin.get('effets_publics'))} [titres d'État détenus]")
+            if v(fin.get('creances_interbancaires')):
+                bilan_actif.append(f"  • Créances interbancaires     : {v(fin.get('creances_interbancaires'))} [prêts aux autres banques]")
+            if v(fin.get('creances_clientele')):
+                bilan_actif.append(f"  • Créances sur la clientèle   : {v(fin.get('creances_clientele'))} [portefeuille de crédits accordés]")
+        else:
+            if v(fin.get('stocks')):
+                bilan_actif.append(f"  • Stocks                      : {v(fin.get('stocks'))}")
+            if v(fin.get('creances_clients')):
+                bilan_actif.append(f"  • Créances clients            : {v(fin.get('creances_clients'))}")
+            if v(fin.get('actif_circulant')):
+                bilan_actif.append(f"  • Actif circulant             : {v(fin.get('actif_circulant'))}")
+        if v(fin.get('tresorerie_actif')):
+            bilan_actif.append(f"  • Trésorerie actif            : {v(fin.get('tresorerie_actif'))}")
+        if v(fin.get('actif_immobilise_net')):
+            bilan_actif.append(f"  • Actif immobilisé net        : {v(fin.get('actif_immobilise_net'))}")
+        if v(fin.get('total_actif')):
+            bilan_actif.append(f"  • Total actif / Bilan         : {v(fin.get('total_actif'))}")
+
+        if bilan_actif:
+            lines.append("📌 BILAN — ACTIF")
+            lines.extend(bilan_actif)
+
+        # ── BILAN PASSIF ─────────────────────────────────────────────────────────
+        bilan_passif = []
+        if v(fin.get('capitaux_propres')):
+            bilan_passif.append(f"  • Capitaux propres            : {v(fin.get('capitaux_propres'))}")
+        if v(fin.get('capital_souscrit')):
+            bilan_passif.append(f"  • Capital souscrit            : {v(fin.get('capital_souscrit'))}")
+        if is_bank:
+            if v(fin.get('dettes_clientele')):
+                bilan_passif.append(f"  • Dettes clientèle (dépôts)   : {v(fin.get('dettes_clientele'))} [ressources collectées auprès des clients]")
+            if v(fin.get('dettes_interbancaires')):
+                bilan_passif.append(f"  • Dettes interbancaires       : {v(fin.get('dettes_interbancaires'))}")
+        else:
+            if v(fin.get('dettes_fournisseurs')):
+                bilan_passif.append(f"  • Dettes fournisseurs         : {v(fin.get('dettes_fournisseurs'))}")
+            if v(fin.get('dettes_financieres_lt_mt')):
+                bilan_passif.append(f"  • Dettes financières LT/MT    : {v(fin.get('dettes_financieres_lt_mt'))}")
+        if v(fin.get('dettes_totales')):
+            bilan_passif.append(f"  • Dettes totales              : {v(fin.get('dettes_totales'))}")
+
+        if bilan_passif:
+            lines.append("\n📌 BILAN — PASSIF")
+            lines.extend(bilan_passif)
+
+        # ── COMPTE DE RÉSULTAT ───────────────────────────────────────────────────
+        compte = []
+        if is_bank:
+            if v(fin.get('produit_net_bancaire')):
+                compte.append(f"  • Produit Net Bancaire (PNB)  : {v(fin.get('produit_net_bancaire'))} [équivalent CA pour une banque]")
+            if v(fin.get('interets_produits')):
+                compte.append(f"  • Intérêts & produits         : {v(fin.get('interets_produits'))}")
+            if v(fin.get('interets_charges')):
+                compte.append(f"  • Intérêts & charges          : {v(fin.get('interets_charges'))}")
+            if v(fin.get('commissions_produits')):
+                compte.append(f"  • Commissions (produits)      : {v(fin.get('commissions_produits'))}")
+        else:
+            if v(fin.get('chiffre_affaires')):
+                compte.append(f"  • Chiffre d'affaires          : {v(fin.get('chiffre_affaires'))}")
+            if v(fin.get('valeur_ajoutee')):
+                compte.append(f"  • Valeur Ajoutée              : {v(fin.get('valeur_ajoutee'))}")
+            if v(fin.get('ebe')):
+                compte.append(f"  • EBE                         : {v(fin.get('ebe'))}")
+        if v(fin.get('charges_personnel')):
+            compte.append(f"  • Charges du personnel        : {v(fin.get('charges_personnel'))}")
+        if v(fin.get('charges_generales_exploitation')):
+            compte.append(f"  • Charges générales exploit.  : {v(fin.get('charges_generales_exploitation'))}")
+        if v(fin.get('resultat_exploitation')):
+            compte.append(f"  • Résultat d'exploitation     : {v(fin.get('resultat_exploitation'))}")
+        if v(fin.get('resultat_net')):
+            compte.append(f"  • Résultat net                : {v(fin.get('resultat_net'))}")
+
+        if compte:
+            lines.append("\n📌 COMPTE DE RÉSULTAT")
+            lines.extend(compte)
+
+        # ── CASH-FLOWS ───────────────────────────────────────────────────────────
+        cashflow = []
+        if v(fin.get('caf')):
+            cashflow.append(f"  • CAF                         : {v(fin.get('caf'))}")
+        if v(fin.get('flux_operationnel')):
+            cashflow.append(f"  • Flux opérationnel           : {v(fin.get('flux_operationnel'))}")
+        if v(fin.get('free_cash_flow')):
+            cashflow.append(f"  • Free Cash Flow              : {v(fin.get('free_cash_flow'))}")
+        if v(fin.get('tresorerie_nette')):
+            cashflow.append(f"  • Trésorerie nette            : {v(fin.get('tresorerie_nette'))}")
+
+        if cashflow:
+            lines.append("\n📌 CASH-FLOWS")
+            lines.extend(cashflow)
+
+        # ── RATIOS DE RENTABILITÉ ────────────────────────────────────────────────
+        ratios_rent = []
+        if v(fin.get('roe'), pct=True):
+            ratios_rent.append(f"  • ROE (rentabilité fonds propres) : {v(fin.get('roe'), pct=True)}")
+        if v(fin.get('roa'), pct=True):
+            ratios_rent.append(f"  • ROA (rentabilité actifs)        : {v(fin.get('roa'), pct=True)}")
+        if v(fin.get('marge_nette'), pct=True):
+            ratios_rent.append(f"  • Marge nette                     : {v(fin.get('marge_nette'), pct=True)}")
+        if not is_bank and v(fin.get('marge_brute'), pct=True):
+            ratios_rent.append(f"  • Marge brute                     : {v(fin.get('marge_brute'), pct=True)}")
+        if not is_bank and v(fin.get('marge_operationnelle'), pct=True):
+            ratios_rent.append(f"  • Marge opérationnelle            : {v(fin.get('marge_operationnelle'), pct=True)}")
+        if is_bank and v(fin.get('coefficient_exploitation'), pct=True):
+            ratios_rent.append(f"  • Coefficient d'exploitation      : {v(fin.get('coefficient_exploitation'), pct=True)} [<60% = efficace]")
+        if v(fin.get('taux_croissance_ca'), pct=True):
+            lbl = "PNB" if is_bank else "CA"
+            ratios_rent.append(f"  • Taux de croissance {lbl}         : {v(fin.get('taux_croissance_ca'), pct=True)}")
+
+        # Coût du risque : UNIQUEMENT pour les banques + interprétation
+        if is_bank and v(fin.get('cout_risque'), pct=True):
+            cr = float(fin.get('cout_risque') or 0)
+            if cr != 0:
+                if cr < 0.01:
+                    interp_cr = "faible (portefeuille sain)"
+                elif cr < 0.03:
+                    interp_cr = "modéré (surveillance requise)"
+                else:
+                    interp_cr = "élevé (risque de crédit significatif)"
+                ratios_rent.append(
+                    f"  • Coût du risque (charges risque/charges fin.) : {v(fin.get('cout_risque'), pct=True)} → {interp_cr}"
+                    f"\n    [Part des provisions dans les charges financières — plus c'est bas, mieux c'est]"
+                )
+
+        if ratios_rent:
+            lines.append("\n📌 RATIOS DE RENTABILITÉ")
+            lines.extend(ratios_rent)
+
+        # ── RATIOS DE STRUCTURE FINANCIÈRE ──────────────────────────────────────
+        ratios_struct = []
+        if v(fin.get('autonomie_financiere'), pct=True):
+            ratios_struct.append(f"  • Autonomie financière            : {v(fin.get('autonomie_financiere'), pct=True)}")
+        if v(fin.get('ratio_endettement'), pct=True):
+            ratios_struct.append(f"  • Ratio d'endettement             : {v(fin.get('ratio_endettement'), pct=True)}")
+        if v(fin.get('solvabilite_generale'), pct=True):
+            ratios_struct.append(f"  • Solvabilité générale            : {v(fin.get('solvabilite_generale'), pct=True)}")
+        if not is_bank:
+            if v(fin.get('liquidite_generale'), pct=True):
+                ratios_struct.append(f"  • Liquidité générale              : {v(fin.get('liquidite_generale'), pct=True)}")
+            if v(fin.get('bfr')):
+                ratios_struct.append(f"  • BFR                             : {v(fin.get('bfr'))}")
+        if v(fin.get('couverture_interets'), pct=True):
+            ratios_struct.append(f"  • Couverture des intérêts         : {v(fin.get('couverture_interets'), pct=True)}")
+        if v(fin.get('capacite_remboursement')):
+            ratios_struct.append(f"  • Capacité de remboursement       : {v(fin.get('capacite_remboursement'), milliards=False)}")
+
+        if ratios_struct:
+            lines.append("\n📌 RATIOS DE STRUCTURE FINANCIÈRE")
+            lines.extend(ratios_struct)
+
+        # ── DÉLAIS (uniquement non-bancaires) ────────────────────────────────────
+        if not is_bank:
+            delais = []
+            if v(fin.get('delai_clients'), milliards=False):
+                delais.append(f"  • Délai clients (jours)           : {v(fin.get('delai_clients'), milliards=False)}")
+            if v(fin.get('delai_fournisseurs'), milliards=False):
+                delais.append(f"  • Délai fournisseurs (jours)      : {v(fin.get('delai_fournisseurs'), milliards=False)}")
+            if v(fin.get('duree_stockage'), milliards=False):
+                delais.append(f"  • Durée de stockage (jours)       : {v(fin.get('duree_stockage'), milliards=False)}")
+            if delais:
+                lines.append("\n📌 DÉLAIS D'EXPLOITATION")
+                lines.extend(delais)
+
+        lines.append(f"{'═'*60}")
+        return "\n".join(lines)
+
+
+    def _format_val_ratios_for_prompt(self, val_ratios):
+        """Formate les ratios de valorisation pour le prompt IA."""
+        if not val_ratios:
+            return "Non calculables (données financières structurées manquantes)."
+        lines = []
+        if val_ratios.get('mkt_cap_txt'):
+            lines.append(f"  • Capitalisation boursière : {val_ratios['mkt_cap_txt']}")
+        if val_ratios.get('bpa_txt'):
+            lines.append(f"  • BPA (Bénéfice par action): {val_ratios['bpa_txt']}")
+        if val_ratios.get('per_txt'):
+            lines.append(f"  • PER (Price/Earnings)     : {val_ratios['per_txt']}")
+        if val_ratios.get('pb_txt'):
+            lines.append(f"  • P/B (Price/Book)         : {val_ratios['pb_txt']}")
+        if val_ratios.get('ev_ebitda_txt'):
+            lines.append(f"  • EV/EBITDA                : {val_ratios['ev_ebitda_txt']}")
+        if not lines:
+            return "Ratios non calculables (données insuffisantes)."
+        return "\n".join(lines)
+
     def _generate_professional_analysis(self, symbol, data_dict, attempt=1, max_attempts=3):
         """
         Génération analyse professionnelle avec rotation Multi-AI.
@@ -2258,6 +2519,16 @@ RÈGLES IMPÉRATIVES :
             and fundamental_text.strip()
             and "Aucun rapport" not in fundamental_text
         )
+
+        # ── Charger et formatter les données structurées brvm_donnees_financieres ──
+        fin_data    = self._get_donnees_financieres(symbol)
+        fin_text    = self._format_donnees_financieres(fin_data, symbol) if fin_data else ""
+        has_fin_data = bool(fin_text)
+        if has_fin_data:
+            annee_fin = fin_data.get('annee', 'N/A')
+            logging.info(f"    💰 {symbol}: données financières structurées chargées ({annee_fin})")
+        else:
+            logging.info(f"    ℹ️ {symbol}: aucune donnée dans brvm_donnees_financieres")
         
         if has_fundamental:
             nb_rapports = fundamental_text.count('--- RAPPORT:')
@@ -2266,32 +2537,66 @@ RÈGLES IMPÉRATIVES :
             preview = fundamental_text[:300].replace('\n', ' ') + "..."
             logging.info(f"    📊 {symbol}: {len(fundamental_text)} caractères d'analyses fondamentales ({nb_rapports} rapport(s))")
             logging.info(f"    📋 Extrait: {preview}")
+
+            # Construire l'instruction selon la disponibilité des données structurées
+            fin_instruction = ""
+            if has_fin_data:
+                secteur = "BANQUE" if any([
+                    fin_data.get('caisse_banque_centrale') and float(fin_data.get('caisse_banque_centrale') or 0) != 0,
+                    fin_data.get('produit_net_bancaire')   and float(fin_data.get('produit_net_bancaire')   or 0) != 0,
+                    fin_data.get('dettes_clientele')       and float(fin_data.get('dettes_clientele')       or 0) != 0,
+                ]) else "ENTREPRISE"
+                fin_instruction = f"""
+💰 DONNÉES STRUCTURÉES DISPONIBLES ({fin_data.get('annee', 'N/A')}) — SECTEUR: {secteur}
+Ces données proviennent directement de la base brvm_donnees_financieres et sont fiables.
+RÈGLES D'INTERPRÉTATION OBLIGATOIRES:
+- Toute valeur à 0 ou absente = donnée manquante ou non pertinente pour ce secteur → NE PAS MENTIONNER
+- Si BANQUE: interpréter le PNB comme équivalent du chiffre d'affaires, analyser le coût du risque
+  (coût_risque = charges de risque / charges financières → plus c'est bas, meilleur est le portefeuille)
+  Interpréter le coefficient d'exploitation (< 60% = banque efficace)
+  Analyser les dépôts clientèle vs créances clientèle comme indicateur de transformation
+- Si ENTREPRISE: analyser délais clients/fournisseurs, BFR, stocks
+  Un délai client élevé signifie un risque de trésorerie, un BFR négatif est positif
+- Pour TOUS: ROE = rentabilité des fonds propres (>15% = excellent), ROA = rentabilité des actifs
+  Taux de croissance CA/PNB = dynamique commerciale
+TU DOIS croiser ces données structurées avec les rapports narratifs ci-dessous."""
             
             instruction_fondamentale = f"""
 ⚠️ INSTRUCTION IMPÉRATIVE — ANALYSES FONDAMENTALES DISPONIBLES:
 {len(fundamental_text)} caractères de données financières officielles sont fournis ci-dessous ({nb_rapports} rapport(s)).
+{fin_instruction}
 
 TU DOIS OBLIGATOIREMENT:
 1. UTILISER CES DONNÉES dans la Partie 3 — c'est une instruction ABSOLUE, non optionnelle
-2. Mentionner explicitement la date de CHAQUE rapport utilisé
-3. Citer les chiffres clés: chiffre d'affaires, résultat net, dividendes, ratios
-4. Si plusieurs rapports, montrer l'évolution temporelle des indicateurs
-5. NE JAMAIS écrire que les données sont absentes ou indisponibles — elles sont là
-6. Si les rapports datent d'avant 2025, précise-le mais analyse-les quand même"""
+2. Commencer par les données structurées (chiffres précis) puis enrichir avec les rapports narratifs
+3. Mentionner explicitement la date de CHAQUE rapport utilisé
+4. Citer les chiffres clés: chiffre d'affaires/PNB, résultat net, ratios ROE/ROA
+5. Si plusieurs rapports, montrer l'évolution temporelle des indicateurs
+6. NE JAMAIS mentionner les variables à 0 ou NULL — elles n'existent pas pour cette société
+7. NE JAMAIS écrire que les données sont absentes si elles sont fournies ci-dessus
+8. Si les rapports datent d'avant 2025, précise-le mais analyse-les quand même"""
         else:
             logging.warning(f"    ⚠️ {symbol}: Aucune analyse fondamentale en base")
-            instruction_fondamentale = """
-ℹ️ ABSENCE DE DONNÉES FONDAMENTALES:
-Aucun rapport financier n'a été trouvé en base pour cette société.
-Indique clairement cette absence dans la Partie 3 et base ta conclusion uniquement
-sur les indicateurs techniques et les prédictions."""
+            fin_instruction_fallback = ""
+            if has_fin_data:
+                fin_instruction_fallback = f"""
+💰 DONNÉES STRUCTURÉES DISPONIBLES ({fin_data.get('annee','N/A')}):
+Utilise exclusivement les données structurées fournies ci-dessus pour l'analyse fondamentale.
+Ignore toute variable à 0 ou absente."""
+            instruction_fondamentale = f"""
+ℹ️ ABSENCE DE RAPPORTS NARRATIFS:{fin_instruction_fallback}
+Aucun rapport narratif n'a été trouvé en base pour cette société.
+{'Base ton analyse fondamentale uniquement sur les données structurées fournies.' if has_fin_data else 'Indique clairement cette absence dans la Partie 3 et base ta conclusion uniquement sur les indicateurs techniques et les prédictions.'}"""
         
         prompt = f"""Tu es un analyste financier professionnel spécialisé sur le marché de la BRVM (Bourse Régionale des Valeurs Mobilières, Afrique de l'Ouest). Analyse l'action {symbol} et génère un rapport structuré en 4 parties.
 
 📊 DONNÉES DISPONIBLES:
 
-**Évolution du cours (100 derniers jours):**
+**Évolution du cours (100 derniers jours) + Statistiques descriptives:**
 {data_dict.get('historical_summary', 'Données non disponibles')}
+
+**Ratios de valorisation boursière ({data_dict.get('val_ratios', {}).get('annee_fin', 'N/A')}):**
+{self._format_val_ratios_for_prompt(data_dict.get('val_ratios', {}))}
 
 **Indicateurs techniques:**
 - Moyennes Mobiles: MM20={data_dict.get('mm_20', 'N/A')}, MM50={data_dict.get('mm_50', 'N/A')}, Décision={data_dict.get('mm_decision', 'N/A')}
@@ -2299,6 +2604,9 @@ sur les indicateurs techniques et les prédictions."""
 - MACD: Valeur={data_dict.get('macd_value', 'N/A')}, Signal={data_dict.get('macd_signal', 'N/A')}, Décision={data_dict.get('macd_decision', 'N/A')}
 - RSI: Valeur={data_dict.get('rsi_value', 'N/A')}, Décision={data_dict.get('rsi_decision', 'N/A')}
 - Stochastique: %K={data_dict.get('stochastic_k', 'N/A')}, %D={data_dict.get('stochastic_d', 'N/A')}, Décision={data_dict.get('stochastic_decision', 'N/A')}
+
+**DONNÉES FINANCIÈRES STRUCTURÉES (brvm_donnees_financieres — chiffres officiels):**
+{fin_text if has_fin_data else "Non disponibles dans la base de données structurées."}
 
 **ANALYSES FONDAMENTALES DISPONIBLES (RAPPORTS FINANCIERS OFFICIELS):**
 {fundamental_text if has_fundamental else "Aucun rapport financier enregistré en base pour cette société."}
@@ -2312,14 +2620,26 @@ sur les indicateurs techniques et les prédictions."""
 
 GÉNÈRE UN RAPPORT STRUCTURÉ EN FRANÇAIS AVEC CES 4 PARTIES:
 
-**PARTIE 1 : ANALYSE DE L'ÉVOLUTION DU COURS (100 derniers jours)**
+**PARTIE 0 : INDICATEURS DE VALORISATION BOURSIÈRE**
 
-Rédige un paragraphe de 5-7 lignes analysant:
-- Le pourcentage d'évolution total sur la période
-- Le cours le plus haut et le plus bas atteints
-- La tendance générale (haussière, baissière, stable)
-- Les variations significatives observées
-- Le contexte de volatilité
+Rédige un paragraphe de 4-5 lignes commentant les ratios de valorisation fournis:
+- Capitalisation boursière : son niveau et ce qu'il représente dans le contexte BRVM
+- BPA (Bénéfice Par Action) : ce que chaque action rapporte en bénéfice
+- PER : si les investisseurs paient cher ou pas par rapport aux bénéfices (référence: PER BRVM moyen ~8-12x)
+- P/B : si le marché valorise au-dessus ou en-dessous de la valeur comptable
+- EV/EBITDA : comparer la valeur totale à la capacité opérationnelle
+Si certains ratios sont absents, indique pourquoi (données manquantes) sans insister.
+
+**PARTIE 1 : ANALYSE DU COURS — STATISTIQUES ET ÉVOLUTION (100 derniers jours)**
+
+Rédige un paragraphe de 6-8 lignes analysant:
+- Variation totale sur la période ET variation J-1 (dernière séance)
+- Le cours le plus haut et le plus bas atteints (range de trading)
+- La tendance générale (haussière, baissière, stable) avec contexte
+- **Statistiques descriptives** : commente la moyenne vs médiane (si écart → distribution asymétrique),
+  l'écart-type et le CV% (dispersion du cours), le kurtosis (risque de pics) et le skewness (asymétrie)
+  en utilisant les interprétations fournies dans les données
+- Volatilité annualisée : positionner le titre (faible <15%, modérée 15-30%, élevée >30%)
 
 **PARTIE 2 : ANALYSE TECHNIQUE DÉTAILLÉE**
 
@@ -2334,22 +2654,37 @@ Puis rédige une **conclusion technique** de 3-4 lignes synthétisant tous les i
 
 **PARTIE 3 : ANALYSE FONDAMENTALE (SECTION CRITIQUE)**
 
-Rédige un paragraphe détaillé de 8-10 lignes:
-- UTILISE OBLIGATOIREMENT les analyses fondamentales fournies ci-dessus si elles existent
-- Pour CHAQUE rapport disponible, mentionne sa date et résume ses points clés (CA, résultat net, dividendes)
-- Si plusieurs rapports, montre l'évolution temporelle des chiffres
-- Donne une recommandation fondamentale basée sur CES données
+Rédige un paragraphe détaillé de 8-10 lignes en suivant impérativement cette structure:
+1. **Données structurées (états financiers annuels)** : si disponibles, présente les chiffres clés
+   (CA/PNB, résultat net, ROE, ROA) en précisant OBLIGATOIREMENT l'année concernée (ex: "En 2025...")
+   NE MENTIONNE JAMAIS les variables à 0 ou NULL
+2. **Adapte au secteur détecté** :
+   - BANQUE: PNB, coefficient d'exploitation (< 60% = efficace), coût du risque (faible = bon portefeuille),
+     ratio dépôts/crédits, créances interbancaires
+   - ENTREPRISE: CA, marges, BFR, délais clients/fournisseurs (délai client élevé = risque trésorerie),
+     endettement, rotation stocks
+3. **Estimations basées sur les rapports trimestriels** : si des rapports T1/T2/T3/S1 etc. sont disponibles
+   dans les RAPPORTS NARRATIFS, utilise-les pour ESTIMER les tendances et projections annuelles.
+   Exemple : "Sur la base du rapport T1 2026 (PNB +12%), on peut estimer que l'exercice 2026 devrait..."
+   Distingue clairement les chiffres réels (états financiers annuels) des estimations (rapports trimestriels)
+4. Si **plusieurs années** disponibles: montre l'évolution (croissance, amélioration/dégradation des ratios)
+5. Conclus avec une recommandation fondamentale (solidité, risques, perspectives)
 - NE DIS PAS que les données sont absentes si elles sont fournies ci-dessus
 
 **PARTIE 4 : CONCLUSION D'INVESTISSEMENT**
 
-Rédige un paragraphe de 5-6 lignes:
-- Synthétise les 3 analyses précédentes (cours, technique, fondamental)
-- Donne une recommandation finale claire: **ACHAT FORT**, **ACHAT**, **CONSERVER**, **VENTE**, ou **VENTE FORTE**
-- Justifie par la convergence ou divergence des signaux
+Rédige un paragraphe de 7-9 lignes synthétisant OBLIGATOIREMENT les 4 parties précédentes:
+- **Valorisation (Partie 0)** : les ratios PER/P/B/EV-EBITDA indiquent-ils une sous-évaluation ou surévaluation ?
+- **Comportement du cours (Partie 1)** : la tendance récente, la volatilité, les statistiques (kurtosis, skewness) sont-elles favorables ou préoccupantes ?
+- **Signaux techniques (Partie 2)** : convergence ou divergence des indicateurs (MM, Bollinger, MACD, RSI, Stochastique)
+- **Fondamentaux (Partie 3)** : solidité financière, croissance, estimations issues des rapports trimestriels
+- **Prédictions IA (J+1 à J+10)** : la trajectoire prédite confirme-t-elle ou contredit-elle les autres signaux ?
+Sur la base de cette synthèse globale:
+- Donne une recommandation finale: **ACHAT FORT**, **ACHAT**, **CONSERVER**, **VENTE**, ou **VENTE FORTE**
+- Justifie la convergence (ou divergence) entre valorisation, technique, fondamental et prédiction
 - Indique le niveau de confiance: Élevé, Moyen, ou Faible
-- Mentionne le niveau de risque: Faible, Moyen, ou Élevé
-- Suggère un horizon d'investissement (court, moyen, long terme)
+- Mentionne le niveau de risque global: Faible, Moyen, ou Élevé
+- Suggère un horizon d'investissement optimal (court terme <3 mois, moyen terme 3-12 mois, long terme >1 an)
 
 ═══════════════════════════════════════════════════════════════
 
@@ -2357,11 +2692,18 @@ RAPPELS IMPÉRATIFS:
 - Rédige en français professionnel avec des paragraphes fluides (pas de bullet points)
 - Sois précis avec les chiffres — cite les valeurs exactes des données fournies
 - Si des analyses fondamentales sont fournies, TU DOIS LES UTILISER — instruction OBLIGATOIRE
+- PARTIE 0 : commente tous les ratios de valorisation disponibles avec leur signification pour l'investisseur
+- PARTIE 1 : commente OBLIGATOIREMENT les statistiques descriptives (moyenne, médiane, écart-type, kurtosis, skewness)
+  en utilisant les interprétations fournies — ces statistiques révèlent le comportement du cours
+- PARTIE 3 : précise TOUJOURS l'année des données structurées utilisées
+  Si des rapports trimestriels existent, fais des ESTIMATIONS explicites basées dessus
+  (distingue données réelles vs estimations — ex: "On estime que..." vs "En 2025, le PNB s'établit à...")
 - Mentionne TOUJOURS la date des rapports fondamentaux utilisés
 - Reste factuel et objectif
-- LONGUEUR OBLIGATOIRE : chaque partie doit respecter scrupuleusement le nombre de lignes demandé
-  (Partie 1: 5-7 lignes, Partie 2: 2-3 lignes par indicateur + 3-4 lignes conclusion, 
-   Partie 3: 8-10 lignes, Partie 4: 5-6 lignes). Un rapport trop court est un rapport incomplet."""
+- PARTIE 4 : synthétise OBLIGATOIREMENT les 4 parties + les prédictions IA — c'est la conclusion finale
+- LONGUEUR OBLIGATOIRE :
+  Partie 0: 4-5 lignes | Partie 1: 6-8 lignes | Partie 2: 2-3 lignes/indicateur + 3-4 lignes conclusion
+  Partie 3: 10-12 lignes | Partie 4: 7-9 lignes. Un rapport trop court est un rapport incomplet."""
         
         # ── Rotation Multi-AI: DeepSeek → Claude → Gemini → Mistral ────────────────
         analysis = None
@@ -3202,6 +3544,30 @@ RAPPELS IMPÉRATIFS:
                 date_debut      = df_hist.iloc[0]['extraction_date']
                 date_fin        = df_hist.iloc[-1]['extraction_date']
                 
+                # ── Stats descriptives BRVM Composite ──────────────────
+                import numpy as np
+                from scipy import stats as _sc
+                comp_vals = df_hist['brvm_composite'].dropna().astype(float)
+                c_mean   = float(comp_vals.mean())   if len(comp_vals) > 0 else 0
+                c_median = float(comp_vals.median()) if len(comp_vals) > 0 else 0
+                try:
+                    c_mode = float(comp_vals.mode().iloc[0])
+                except Exception:
+                    c_mode = c_mean
+                c_std    = float(comp_vals.std())    if len(comp_vals) > 1 else 0
+                c_cv     = (c_std / c_mean * 100)    if c_mean > 0 else 0
+                try:
+                    c_kurt = float(_sc.kurtosis(comp_vals, fisher=True))
+                    c_skew = float(_sc.skew(comp_vals))
+                except Exception:
+                    c_kurt = 0.0; c_skew = 0.0
+                c_kurt_lbl = ("leptokurtique — risque de mouvements brusques" if c_kurt > 1
+                              else "platykurtique — fluctuations régulières" if c_kurt < -1
+                              else "distribution normale")
+                c_skew_lbl = ("asymétrie positive — plus de jours sous la moyenne" if c_skew > 0.3
+                              else "asymétrie négative — plus de jours au-dessus de la moyenne" if c_skew < -0.3
+                              else "distribution symétrique")
+                # ── Génération du commentaire composite ────────────────────────
                 p_composite = doc.add_paragraph()
                 p_composite.add_run("BRVM Composite — ").bold = True
                 p_composite.add_run(
@@ -3214,6 +3580,22 @@ RAPPELS IMPÉRATIFS:
                 p_composite.add_run(
                     f", passant de {composite_first:.2f} pts à {composite_last:.2f} pts. "
                     f"Le plus haut atteint est {composite_max:.2f} pts et le plus bas {composite_min:.2f} pts. "
+                    f"Sur l'ensemble de la période, la moyenne de l'indice s'établit à {c_mean:.2f} pts, "
+                    f"la médiane à {c_median:.2f} pts et le mode à {c_mode:.2f} pts"
+                )
+                # Interpréter écart moyenne/médiane
+                ecart_mm = abs(c_mean - c_median)
+                if ecart_mm > c_std * 0.3:
+                    p_composite.add_run(
+                        f" — l'écart entre moyenne et médiane ({ecart_mm:.2f} pts) révèle une distribution asymétrique "
+                        f"({c_skew_lbl}). "
+                    )
+                else:
+                    p_composite.add_run(f" ({c_skew_lbl}). ")
+                p_composite.add_run(
+                    f"L'écart-type de {c_std:.2f} pts (CV={c_cv:.1f}%) traduit une "
+                    f"{'forte' if c_cv > 15 else 'modérée' if c_cv > 7 else 'faible'} dispersion des cotations. "
+                    f"Le kurtosis de {c_kurt:.2f} indique une distribution {c_kurt_lbl}. "
                 )
                 if composite_evol > 2:
                     p_composite.add_run("L'indice affiche une tendance haussière sur la période, témoignant d'un regain de confiance des investisseurs.")
@@ -3253,15 +3635,58 @@ RAPPELS IMPÉRATIFS:
                         dec = round((mds - entier) * 1000)
                         return f"{entier:,}".replace(",", " ") + f",{dec:03d}"
 
+                    # ── Stats descriptives capitalisation ───────────────
+                    cap_mean   = float(cap_vals.mean())   if len(cap_vals) > 0 else 0
+                    cap_median = float(cap_vals.median()) if len(cap_vals) > 0 else 0
+                    try:
+                        cap_mode = float(cap_vals.mode().iloc[0])
+                    except Exception:
+                        cap_mode = cap_mean
+                    cap_std  = float(cap_vals.std()) if len(cap_vals) > 1 else 0
+                    cap_cv   = (cap_std / cap_mean * 100) if cap_mean > 0 else 0
+                    try:
+                        from scipy import stats as _sc2
+                        cap_kurt = float(_sc2.kurtosis(cap_vals, fisher=True))
+                        cap_skew = float(_sc2.skew(cap_vals))
+                    except Exception:
+                        cap_kurt = 0.0; cap_skew = 0.0
+                    cap_kurt_lbl = ("leptokurtique — risque de pics de valorisation" if cap_kurt > 1
+                                    else "platykurtique — valorisation régulière" if cap_kurt < -1
+                                    else "distribution normale")
+                    cap_skew_lbl = ("asymétrie positive" if cap_skew > 0.3
+                                    else "asymétrie négative" if cap_skew < -0.3
+                                    else "distribution symétrique")
+                    # ── Commentaire ─────────────────────────────────────────────
                     p_cap.add_run("La capitalisation boursière totale a évolué de ")
                     cap_run = p_cap.add_run(f"{cap_evol:+.2f}%")
                     cap_run.bold = True
                     cap_run.font.color.rgb = RGBColor(0, 128, 0) if cap_evol >= 0 else RGBColor(192, 0, 0)
                     p_cap.add_run(
                         f" sur la période, passant de {fmt_mds(cap_first)} Mds FCFA à {fmt_mds(cap_last)} Mds FCFA. "
-                        f"Le pic de capitalisation observé sur les 100 jours est de {fmt_mds(cap_max)} Mds FCFA "
-                        f"et le plancher de {fmt_mds(cap_min)} Mds FCFA."
+                        f"Le pic de capitalisation observé est de {fmt_mds(cap_max)} Mds FCFA "
+                        f"et le plancher de {fmt_mds(cap_min)} Mds FCFA. "
+                        f"La moyenne de la capitalisation sur la période s'établit à {fmt_mds(cap_mean)} Mds FCFA, "
+                        f"la médiane à {fmt_mds(cap_median)} Mds FCFA et le mode à {fmt_mds(cap_mode)} Mds FCFA"
                     )
+                    ecart_cap = abs(cap_mean - cap_median)
+                    if ecart_cap > cap_std * 0.3:
+                        p_cap.add_run(
+                            f" — l'écart moyenne/médiane ({fmt_mds(ecart_cap)} Mds) signale une distribution {cap_skew_lbl}. "
+                        )
+                    else:
+                        p_cap.add_run(f" ({cap_skew_lbl}). ")
+                    p_cap.add_run(
+                        f"L'écart-type de {fmt_mds(cap_std)} Mds FCFA (CV={cap_cv:.1f}%) reflète une "
+                        f"{'forte' if cap_cv > 15 else 'modérée' if cap_cv > 7 else 'faible'} variabilité "
+                        f"de la valorisation du marché. "
+                        f"Le kurtosis de {cap_kurt:.2f} indique une distribution {cap_kurt_lbl}."
+                    )
+                    if cap_evol > 3:
+                        p_cap.add_run(" Le marché a globalement capté davantage de richesse sur la période, signe d'une confiance accrue des investisseurs.")
+                    elif cap_evol < -3:
+                        p_cap.add_run(" La contraction de la capitalisation traduit une sortie de capitaux et une pression baissière structurelle.")
+                    else:
+                        p_cap.add_run(" La stabilité relative de la capitalisation reflète un marché en phase de consolidation.")
 
                 # ── Graphique capitalisation (séparé) ───────────────────
                 if buf_cap:
@@ -4929,22 +5354,117 @@ RAPPELS IMPÉRATIFS:
             lowest_price = None
             
             if not hist_df.empty and len(hist_df) > 1:
-                prix_debut = hist_df.iloc[0]['price']
-                prix_fin = hist_df.iloc[-1]['price']
-                prix_max = hist_df['price'].max()
-                prix_min = hist_df['price'].min()
+                import numpy as np
+                from scipy import stats as scipy_stats
+
+                prices_s = hist_df['price'].astype(float)
+                prix_debut = float(hist_df.iloc[0]['price'])
+                prix_fin   = float(hist_df.iloc[-1]['price'])
+                prix_max   = float(prices_s.max())
+                prix_min   = float(prices_s.min())
                 evolution_pct = ((prix_fin - prix_debut) / prix_debut * 100) if prix_debut > 0 else 0
-                
+
                 price_evolution_100d = evolution_pct
-                highest_price = prix_max
-                lowest_price = prix_min
-                
+                highest_price        = prix_max
+                lowest_price         = prix_min
+
+                # ── Variation J-1 (cours actuel vs avant-dernier cours) ──────────
+                var_j1 = None
+                var_j1_txt = "N/A"
+                if len(hist_df) >= 2:
+                    p_curr = float(hist_df.iloc[-1]['price'])
+                    p_prev = float(hist_df.iloc[-2]['price'])
+                    if p_prev > 0:
+                        var_j1 = ((p_curr - p_prev) / p_prev) * 100
+                        sign_j1 = "+" if var_j1 >= 0 else ""
+                        var_j1_txt = f"{sign_j1}{var_j1:.2f}%"
+
+                # ── Capitalisation boursière (dernière valeur disponible) ────────
+                capit = None
+                capit_txt = "N/D"
+                if 'company_capitalization' in hist_df.columns:
+                    cap_series = hist_df['company_capitalization'].dropna()
+                    if not cap_series.empty:
+                        capit = float(cap_series.iloc[-1])
+                        if capit >= 1e9:
+                            capit_txt = f"{capit/1e9:.2f} Mds FCFA"
+                        elif capit >= 1e6:
+                            capit_txt = f"{capit/1e6:.0f} M FCFA"
+                        else:
+                            capit_txt = f"{capit:,.0f} FCFA"
+
+                # ── Statistiques descriptives du cours sur 100j ──────────────────
+                p_mean   = float(prices_s.mean())
+                p_median = float(prices_s.median())
+                p_std    = float(prices_s.std())
+                p_cv     = (p_std / p_mean * 100) if p_mean > 0 else 0
+                try:
+                    p_mode = float(prices_s.mode().iloc[0])
+                except Exception:
+                    p_mode = p_mean
+                try:
+                    p_kurt = float(scipy_stats.kurtosis(prices_s, fisher=True))
+                except Exception:
+                    p_kurt = 0.0
+                try:
+                    p_skew = float(scipy_stats.skew(prices_s))
+                except Exception:
+                    p_skew = 0.0
+
+                # Interprétation kurtosis et skewness
+                if p_kurt > 1:
+                    kurt_interp = "leptokurtique (queues épaisses, risque de pics)"
+                elif p_kurt < -1:
+                    kurt_interp = "platykurtique (distribution aplatie, faible concentration)"
+                else:
+                    kurt_interp = "mésokurtique (proche d'une distribution normale)"
+
+                if p_skew > 0.5:
+                    skew_interp = "asymétrie positive (plus de journées sous la moyenne)"
+                elif p_skew < -0.5:
+                    skew_interp = "asymétrie négative (plus de journées au-dessus de la moyenne)"
+                else:
+                    skew_interp = "distribution symétrique"
+
+                # ── Ratios de valorisation (si fin_data disponible plus tard) ────
+                # Calculés ici, injectés dans data_dict pour usage dans le prompt
+                returns_s  = prices_s.pct_change().dropna()
+                vol_annualisee = float(returns_s.std() * np.sqrt(252) * 100) if len(returns_s) > 1 else 0
+
                 historical_summary = (
-                    f"Sur les 100 derniers jours, le cours a évolué de {evolution_pct:.2f}%, "
-                    f"passant de {prix_debut:.0f} FCFA à {prix_fin:.0f} FCFA. "
-                    f"Le cours le plus haut atteint est de {prix_max:.0f} FCFA et le plus bas de {prix_min:.0f} FCFA. "
-                    f"Volume moyen échangé: {hist_df['volume'].mean():.0f} titres."
+                    f"╔══ ANALYSE DU COURS — 100 DERNIERS JOURS ══╗\n"
+                    f"Variation totale        : {evolution_pct:+.2f}%  |  "
+                    f"Variation J-1           : {var_j1_txt}\n"
+                    f"Cours actuel            : {prix_fin:,.0f} FCFA  |  "
+                    f"Capitalisation boursière: {capit_txt}\n"
+                    f"Plus haut               : {prix_max:,.0f} FCFA  |  "
+                    f"Plus bas                : {prix_min:,.0f} FCFA\n"
+                    f"Volume moyen / jour     : {hist_df['volume'].mean():,.0f} titres\n"
+                    f"\n── Statistiques descriptives du cours (100j) ──\n"
+                    f"Moyenne                 : {p_mean:,.0f} FCFA\n"
+                    f"Médiane                 : {p_median:,.0f} FCFA\n"
+                    f"Mode                    : {p_mode:,.0f} FCFA\n"
+                    f"Écart-type              : {p_std:,.0f} FCFA  (CV={p_cv:.1f}%)\n"
+                    f"Kurtosis (excès)        : {p_kurt:.3f} → {kurt_interp}\n"
+                    f"Skewness                : {p_skew:.3f} → {skew_interp}\n"
+                    f"Volatilité annualisée   : {vol_annualisee:.1f}%\n"
+                    f"╚══════════════════════════════════════════╝"
                 )
+
+                # Sauvegarder les valeurs clés pour ratios de valorisation
+                _hist_stats = {
+                    'prix_actuel':        prix_fin,
+                    'capitalisation':     capit,
+                    'var_j1':             var_j1,
+                    'var_j1_txt':         var_j1_txt,
+                    'p_mean':             p_mean,
+                    'p_std':              p_std,
+                    'p_kurt':             p_kurt,
+                    'p_skew':             p_skew,
+                    'vol_annualisee':     vol_annualisee,
+                    'kurt_interp':        kurt_interp,
+                    'skew_interp':        skew_interp,
+                }
             
             fundamental_text = ""
             raw_summaries = row.get('fundamental_summaries')
@@ -4997,10 +5517,93 @@ RAPPELS IMPÉRATIFS:
                 else:
                     logging.info(f"   ℹ️ {symbol}: Aucune analyse fondamentale en base")
 
+            # ── Ratios de valorisation (PER, P/B, EV/EBITDA, BPA) ─────────────────
+            val_ratios = {}
+            try:
+                fin_d = self._get_donnees_financieres(symbol)
+                hs    = _hist_stats if not hist_df.empty and len(hist_df) > 1 else {}
+                if fin_d and hs:
+                    px       = hs.get('prix_actuel')
+                    mkt_cap  = hs.get('capitalisation')
+                    rn       = float(fin_d.get('resultat_net') or 0)
+                    cp       = float(fin_d.get('capitaux_propres') or 0)
+                    cs       = float(fin_d.get('capital_souscrit') or 0)
+                    ebitda   = float(fin_d.get('ebe') or fin_d.get('rbe') or 0)
+                    dettes   = float(fin_d.get('dettes_financieres_totales') or fin_d.get('dettes_totales') or 0)
+                    tresor   = float(fin_d.get('tresorerie_nette') or fin_d.get('tresorerie_actif') or 0)
+                    annee_v  = fin_d.get('annee', 'N/A')
+
+                    # Nombre d'actions estimé (capital souscrit / valeur nominale estimée)
+                    # Si capital_souscrit et cours connus, nb_actions ~ cap_bours / cours
+                    nb_actions = (mkt_cap / px) if (mkt_cap and px and px > 0) else None
+
+                    # BPA / EPS
+                    if rn and nb_actions and nb_actions > 0:
+                        bpa = rn / nb_actions
+                        val_ratios['bpa'] = bpa
+                        val_ratios['bpa_txt'] = f"{bpa:,.0f} FCFA/action"
+
+                    # PER
+                    if rn and nb_actions and nb_actions > 0 and px:
+                        per = px / (rn / nb_actions)
+                        val_ratios['per'] = per
+                        if per < 0:
+                            per_interp = "négatif (société déficitaire)"
+                        elif per < 10:
+                            per_interp = "faible (potentiellement sous-évalué)"
+                        elif per < 20:
+                            per_interp = "modéré (valorisation raisonnable)"
+                        elif per < 35:
+                            per_interp = "élevé (croissance attendue ou surévaluation)"
+                        else:
+                            per_interp = "très élevé (prudence requise)"
+                        val_ratios['per_txt'] = f"{per:.1f}x → {per_interp}"
+
+                    # P/B (Price-to-Book)
+                    if cp and cp > 0 and mkt_cap:
+                        pb = mkt_cap / cp
+                        val_ratios['pb'] = pb
+                        if pb < 1:
+                            pb_interp = "< 1 (marché valorise sous la valeur comptable — opportunité potentielle)"
+                        elif pb < 2:
+                            pb_interp = "1-2x (valorisation raisonnable)"
+                        elif pb < 4:
+                            pb_interp = "2-4x (prime de croissance accordée)"
+                        else:
+                            pb_interp = f"> 4x (forte prime — valorisation exigeante)"
+                        val_ratios['pb_txt'] = f"{pb:.2f}x → {pb_interp}"
+
+                    # EV/EBITDA
+                    if ebitda and ebitda > 0 and mkt_cap:
+                        ev = mkt_cap + dettes - tresor
+                        ev_ebitda = ev / ebitda
+                        val_ratios['ev_ebitda'] = ev_ebitda
+                        if ev_ebitda < 5:
+                            ev_interp = "< 5x (très bon marché)"
+                        elif ev_ebitda < 10:
+                            ev_interp = "5-10x (raisonnable)"
+                        elif ev_ebitda < 15:
+                            ev_interp = "10-15x (valorisation élevée)"
+                        else:
+                            ev_interp = f"> 15x (très exigeant)"
+                        val_ratios['ev_ebitda_txt'] = f"{ev_ebitda:.1f}x → {ev_interp}"
+                        val_ratios['ev'] = ev
+
+                    val_ratios['annee_fin'] = annee_v
+                    val_ratios['mkt_cap'] = mkt_cap
+                    val_ratios['mkt_cap_txt'] = hs.get('capitalisation') and (
+                        f"{mkt_cap/1e9:.2f} Mds FCFA" if mkt_cap >= 1e9 else f"{mkt_cap/1e6:.0f} M FCFA"
+                    ) or "N/D"
+
+            except Exception as e_val:
+                logging.warning(f"   ⚠️ {symbol}: Calcul ratios valorisation échoué: {e_val}")
+
             data_dict = {
                 'price': row.get('price'),
                 'volume': row.get('volume'),
                 'historical_summary': historical_summary,
+                'hist_stats': _hist_stats if not hist_df.empty and len(hist_df) > 1 else {},
+                'val_ratios': val_ratios,
                 'mm_20': row.get('mm20'),
                 'mm_50': row.get('mm50'),
                 'mm_decision': row.get('mm_decision'),
