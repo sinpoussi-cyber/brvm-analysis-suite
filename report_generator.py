@@ -9,7 +9,7 @@ import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -5033,6 +5033,263 @@ RAPPELS IMPÉRATIFS:
                     "se situer entre la borne basse et la borne haute. ⭐⭐⭐ = confiance élevée."
                 ).runs[0].font.size = Pt(8)
                 doc.add_paragraph()
+
+            # ══════════════════════════════════════════════════════════════════
+            # TABLEAU DONNÉES FINANCIÈRES STRUCTURÉES (brvm_donnees_financieres)
+            # ══════════════════════════════════════════════════════════════════
+            fin_data_word = self._get_donnees_financieres(symbol)
+            if fin_data_word:
+                annee_fin_w = fin_data_word.get('annee', 'N/A')
+                # Détecter secteur
+                is_bank_w = any([
+                    fin_data_word.get('caisse_banque_centrale') and float(fin_data_word.get('caisse_banque_centrale') or 0) != 0,
+                    fin_data_word.get('produit_net_bancaire')   and float(fin_data_word.get('produit_net_bancaire')   or 0) != 0,
+                    fin_data_word.get('dettes_clientele')       and float(fin_data_word.get('dettes_clientele')       or 0) != 0,
+                    fin_data_word.get('creances_interbancaires')and float(fin_data_word.get('creances_interbancaires')or 0) != 0,
+                ])
+                secteur_w = "🏦 BANQUE" if is_bank_w else "🏢 ENTREPRISE"
+
+                def fval(v, pct=False):
+                    """Formate valeur pour le tableau Word."""
+                    if v is None or v == 0 or (isinstance(v, str) and v.strip() == ''):
+                        return None
+                    try:
+                        f = float(v)
+                        if f == 0.0: return None
+                        if pct: return f"{f*100:.2f}%"
+                        if abs(f) >= 1_000_000_000: return f"{f/1_000_000_000:.3f} Mds"
+                        if abs(f) >= 1_000_000:     return f"{f/1_000_000:.2f} M"
+                        return f"{f:,.2f}"
+                    except: return None
+
+                # Construire les 7 sections de données
+                sections_data = []
+
+                # ── 1. BILAN ACTIF ──────────────────────────────────────────
+                ba_rows = []
+                for label, key in [
+                    ("Caisse & Banque Centrale",         "caisse_banque_centrale"),
+                    ("Effets publics & val. assimilées", "effets_publics"),
+                    ("Créances interbancaires",          "creances_interbancaires"),
+                    ("Créances sur la clientèle",        "creances_clientele"),
+                    ("Créances clients",                 "creances_clients"),
+                    ("Stocks",                           "stocks"),
+                    ("Actif circulant",                  "actif_circulant"),
+                    ("Immob. incorporelles",             "immobilisations_incorporelles"),
+                    ("Immob. corporelles",               "immobilisations_corporelles"),
+                    ("Actif immobilisé net",             "actif_immobilise_net"),
+                    ("Trésorerie Actif",                 "tresorerie_actif"),
+                    ("Total Actif",                      "total_actif"),
+                    ("Total Bilan",                      "total_bilan"),
+                ]:
+                    val = fval(fin_data_word.get(key))
+                    if val: ba_rows.append((label, val + " FCFA"))
+                if ba_rows: sections_data.append(("📌 1. BILAN — ACTIF", ba_rows))
+
+                # ── 2. BILAN PASSIF ─────────────────────────────────────────
+                bp_rows = []
+                for label, key in [
+                    ("Capital souscrit",            "capital_souscrit"),
+                    ("Réserves",                    "reserves"),
+                    ("Capitaux propres",            "capitaux_propres"),
+                    ("Capitaux permanents",         "capitaux_permanents"),
+                    ("Dettes interbancaires",       "dettes_interbancaires"),
+                    ("Dettes clientèle (dépôts)",   "dettes_clientele"),
+                    ("Dettes fournisseurs",         "dettes_fournisseurs"),
+                    ("Dettes financières LT/MT",    "dettes_financieres_lt_mt"),
+                    ("Dettes financières totales",  "dettes_financieres_totales"),
+                    ("Dettes totales",              "dettes_totales"),
+                    ("Passif circulant",            "passif_circulant"),
+                ]:
+                    val = fval(fin_data_word.get(key))
+                    if val: bp_rows.append((label, val + " FCFA"))
+                if bp_rows: sections_data.append(("📌 2. BILAN — PASSIF", bp_rows))
+
+                # ── 3. COMPTE DE RÉSULTAT ───────────────────────────────────
+                cr_rows = []
+                for label, key in [
+                    ("CA / PNB (agrégé)",           "ca_pnb"),
+                    ("Produit Net Bancaire (PNB)",   "produit_net_bancaire"),
+                    ("Chiffre d'affaires (CA)",      "chiffre_affaires"),
+                    ("Intérêts & produits assimilés","interets_produits"),
+                    ("Intérêts & charges assimilées","interets_charges"),
+                    ("Commissions (produits)",       "commissions_produits"),
+                    ("Commissions (charges)",        "commissions_charges"),
+                    ("Charges générales exploit.",   "charges_generales_exploitation"),
+                    ("DAP immobilisations",          "dap_immobilisations"),
+                    ("Charges du personnel",         "charges_personnel"),
+                    ("Charges financières",          "charges_financieres"),
+                    ("Valeur Ajoutée (VA)",          "valeur_ajoutee"),
+                    ("EBE",                          "ebe"),
+                    ("RBE",                          "rbe"),
+                    ("Résultat d'exploitation",      "resultat_exploitation"),
+                    ("Provisions",                   "provisions"),
+                    ("Impôt sur les bénéfices",      "impot_benefices"),
+                    ("Résultat avant impôt",         "resultat_avant_impot"),
+                    ("Résultat net",                 "resultat_net"),
+                ]:
+                    val = fval(fin_data_word.get(key))
+                    if val: cr_rows.append((label, val + " FCFA"))
+                if cr_rows: sections_data.append(("📌 3. COMPTE DE RÉSULTAT", cr_rows))
+
+                # ── 4. CASH-FLOWS ───────────────────────────────────────────
+                cf_rows = []
+                for label, key in [
+                    ("CAF",                   "caf"),
+                    ("CAFG",                  "cafg"),
+                    ("Flux opérationnel",     "flux_operationnel"),
+                    ("Flux d'investissement", "flux_investissement"),
+                    ("Flux de financement",   "flux_financement"),
+                    ("Cash-flow opérationnel","cashflow_operationnel"),
+                    ("Free Cash Flow",        "free_cash_flow"),
+                    ("BFR",                   "bfr"),
+                    ("Fonds de Roulement",    "fonds_roulement"),
+                    ("Trésorerie nette",      "tresorerie_nette"),
+                ]:
+                    val = fval(fin_data_word.get(key))
+                    if val: cf_rows.append((label, val + " FCFA"))
+                if cf_rows: sections_data.append(("📌 4. CASH-FLOWS & TRÉSORERIE", cf_rows))
+
+                # ── 5. RATIOS DE RENTABILITÉ ────────────────────────────────
+                rr_rows = []
+                for label, key, is_pct in [
+                    ("Marge brute",             "marge_brute",             True),
+                    ("Marge nette",             "marge_nette",             True),
+                    ("Marge opérationnelle",    "marge_operationnelle",    True),
+                    ("ROE",                     "roe",                     True),
+                    ("ROA",                     "roa",                     True),
+                    ("Rotation des actifs",     "rotation_actifs",         True),
+                    ("Coeff. d'exploitation",   "coefficient_exploitation", True),
+                    ("Coût du risque",          "cout_risque",             True),
+                    ("Taux croissance CA/PNB",  "taux_croissance_ca",      True),
+                ]:
+                    val = fval(fin_data_word.get(key), pct=is_pct)
+                    if val: rr_rows.append((label, val))
+                if rr_rows: sections_data.append(("📌 5. RATIOS DE RENTABILITÉ", rr_rows))
+
+                # ── 6. STRUCTURE & LIQUIDITÉ ────────────────────────────────
+                rs_rows = []
+                for label, key, is_pct in [
+                    ("Autonomie financière",    "autonomie_financiere",         True),
+                    ("Dépendance financière",   "dependance_financiere",        True),
+                    ("Ratio d'endettement",     "ratio_endettement",            True),
+                    ("Solvabilité générale",    "solvabilite_generale",         True),
+                    ("Liquidité générale",      "liquidite_generale",           True),
+                    ("Liquidité immédiate",     "liquidite_immediate",          True),
+                    ("Liquidité réduite",       "liquidite_reduite",            True),
+                    ("Financement immob.",      "financement_immobilisations",  True),
+                    ("Capacité remboursement",  "capacite_remboursement",       False),
+                    ("Couverture des intérêts", "couverture_interets",          True),
+                    ("Couverture invest./CAF",  "couverture_investissements_caf",True),
+                ]:
+                    val = fval(fin_data_word.get(key), pct=is_pct)
+                    if val: rs_rows.append((label, val))
+                if rs_rows: sections_data.append(("📌 6. STRUCTURE & LIQUIDITÉ", rs_rows))
+
+                # ── 7. DÉLAIS D'EXPLOITATION ────────────────────────────────
+                dl_rows = []
+                for label, key in [
+                    ("Délai clients (jours)",        "delai_clients"),
+                    ("Délai fournisseurs (jours)",   "delai_fournisseurs"),
+                    ("Durée de stockage (jours)",    "duree_stockage"),
+                ]:
+                    v = fin_data_word.get(key)
+                    if v is not None and float(v or 0) != 0:
+                        dl_rows.append((label, f"{float(v):.1f} j"))
+                if dl_rows: sections_data.append(("📌 7. DÉLAIS D'EXPLOITATION", dl_rows))
+
+                # ── Générer le tableau Word si des données existent ─────────
+                if sections_data:
+                    doc.add_paragraph()
+                    h_fin = doc.add_heading(
+                        f"📊 DONNÉES FINANCIÈRES STRUCTURÉES — Exercice {annee_fin_w} [{secteur_w}]",
+                        level=3
+                    )
+                    h_fin.runs[0].font.color.rgb = RGBColor(0, 70, 127)
+                    h_fin.runs[0].font.size = Pt(11)
+
+                    note_p = doc.add_paragraph()
+                    note_r = note_p.add_run(
+                        "Source : base brvm_donnees_financieres — chiffres officiels. "
+                        "Valeurs en FCFA (Mds = milliards, M = millions). "
+                        "Valeur absente = donnée non disponible ou non pertinente pour ce secteur."
+                    )
+                    note_r.font.size = Pt(8)
+                    note_r.font.italic = True
+                    note_r.font.color.rgb = RGBColor(100, 100, 100)
+
+                    # Tableau 2 colonnes par section
+                    for section_title, rows in sections_data:
+                        # Titre de section
+                        sec_p = doc.add_paragraph()
+                        sec_p.paragraph_format.space_before = Pt(8)
+                        sec_p.paragraph_format.space_after  = Pt(2)
+                        sec_r = sec_p.add_run(section_title)
+                        sec_r.bold = True
+                        sec_r.font.size = Pt(9.5)
+                        sec_r.font.color.rgb = RGBColor(0, 51, 102)
+
+                        # Tableau 2 lignes × N colonnes : paires (label | valeur)
+                        # On fait 4 colonnes (2 paires côte à côte) pour économiser l'espace
+                        pairs_per_row = 2
+                        n_cols = pairs_per_row * 2  # label + val × 2
+                        # Grouper les rows par paires
+                        tbl_fin = doc.add_table(rows=1, cols=n_cols)
+                        tbl_fin.style = 'Table Grid'
+                        # En-tête invisible : on remplit directement les données
+                        # Supprimer la ligne d'en-tête créée
+                        tbl_fin._tbl.remove(tbl_fin.rows[0]._tr)
+
+                        for i in range(0, len(rows), pairs_per_row):
+                            pair = rows[i:i+pairs_per_row]
+                            tr = tbl_fin.add_row()
+                            # Remplir les cellules disponibles
+                            for j, (lbl, val) in enumerate(pair):
+                                # Cellule label
+                                lbl_cell = tr.cells[j*2]
+                                lbl_cell.text = lbl
+                                lbl_run = lbl_cell.paragraphs[0].runs[0] if lbl_cell.paragraphs[0].runs else lbl_cell.paragraphs[0].add_run(lbl)
+                                lbl_run.font.size = Pt(8)
+                                lbl_run.bold = True
+                                lbl_run.font.color.rgb = RGBColor(50, 50, 80)
+                                # Fond gris clair pour label
+                                shd_lbl = OxmlElement('w:shd')
+                                shd_lbl.set(qn('w:fill'), 'EEF2F7')
+                                shd_lbl.set(qn('w:val'), 'clear')
+                                lbl_cell._element.get_or_add_tcPr().append(shd_lbl)
+                                # Cellule valeur
+                                val_cell = tr.cells[j*2+1]
+                                val_cell.text = val
+                                val_run = val_cell.paragraphs[0].runs[0] if val_cell.paragraphs[0].runs else val_cell.paragraphs[0].add_run(val)
+                                val_run.font.size = Pt(8)
+                                val_run.bold = True
+                                # Coloration valeur selon positif/négatif
+                                try:
+                                    num_check = float(val.replace('%','').replace(' Mds','').replace(' M','').replace(' FCFA','').replace(' j','').replace(',','').strip())
+                                    if num_check > 0:
+                                        val_run.font.color.rgb = RGBColor(0, 100, 0)
+                                    elif num_check < 0:
+                                        val_run.font.color.rgb = RGBColor(180, 0, 0)
+                                    else:
+                                        val_run.font.color.rgb = RGBColor(100, 100, 100)
+                                except:
+                                    val_run.font.color.rgb = RGBColor(0, 0, 0)
+                            # Vider les cellules non utilisées
+                            if len(pair) < pairs_per_row:
+                                for j in range(len(pair), pairs_per_row):
+                                    tr.cells[j*2].text = ""
+                                    tr.cells[j*2+1].text = ""
+
+                        # Largeurs colonnes
+                        try:
+                            col_widths = [Cm(5.5), Cm(3.5), Cm(5.5), Cm(3.5)]
+                            for col_i, col in enumerate(tbl_fin.columns):
+                                for cell in col.cells:
+                                    cell.width = col_widths[col_i]
+                        except:
+                            pass
+
+                    doc.add_paragraph()
 
             paragraphs = analysis.split('\n\n')
             for para_text in paragraphs:
