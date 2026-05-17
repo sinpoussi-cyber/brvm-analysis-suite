@@ -4858,6 +4858,425 @@ RAPPELS IMPÉRATIFS:
         doc.add_page_break()
 
         # ══════════════════════════════════════════════════════════════════════
+        # SYNTHÈSE RÉCAPITULATIVE DES PRÉDICTIONS IA
+        # ══════════════════════════════════════════════════════════════════════
+        doc.add_heading('🔮 SYNTHÈSE RÉCAPITULATIVE DES PRÉDICTIONS IA (J+1 → J+10)', level=1)
+        pred_intro = doc.add_paragraph()
+        pred_intro.add_run(
+            "Cette section synthétise les prédictions des modèles GRU/LSTM/BiGRU pour les 47 sociétés. "
+            "La variation J+10 est calculée entre le cours actuel et le cours prédit à 10 jours ouvrables. "
+            "Le niveau de confiance agrégé reflète la proportion de jours avec confiance Élevée ou Moyenne "
+            "dans la séquence de prédiction. Les prédictions sont données à titre indicatif — "
+            "les marchés peu liquides comme la BRVM peuvent diverger des modèles statistiques."
+        ).font.size = Pt(9)
+        pred_intro.runs[0].font.italic = True
+        pred_intro.runs[0].font.color.rgb = RGBColor(80, 80, 80)
+        doc.add_paragraph()
+
+        # ── Calcul des variations J+10 pour toutes les sociétés ──────────────
+        pred_summary = []
+        for sym, cdata in all_company_data.items():
+            preds   = cdata.get('predictions_full', [])
+            cur_p   = cdata.get('current_price') or 0
+            cname   = cdata.get('company_name', sym)
+            sector  = cdata.get('sector', 'Autre') or 'Autre'
+            conf_lv = cdata.get('confidence_level', 'Moyen')
+
+            if not preds or cur_p == 0:
+                continue
+
+            # Cours J+10 (dernier de la liste)
+            valid_preds = [p for p in preds if p.get('price') is not None]
+            if len(valid_preds) < 2:
+                continue
+
+            p_j1  = valid_preds[0]['price']   # J+1
+            p_j10 = valid_preds[-1]['price']  # J+10
+
+            var_j10 = ((p_j10 - cur_p) / cur_p * 100) if cur_p > 0 else 0
+            var_j1  = ((p_j1  - cur_p) / cur_p * 100) if cur_p > 0 else 0
+
+            # Confiance agrégée sur les 10 jours
+            conf_scores = {'Élevée': 3, 'Moyenne': 2, 'Moyen': 2, 'Faible': 1, '': 1}
+            conf_vals   = [conf_scores.get(p.get('confidence', ''), 1) for p in valid_preds]
+            conf_avg    = sum(conf_vals) / len(conf_vals) if conf_vals else 1
+            if conf_avg >= 2.5:   conf_label = 'Élevée'
+            elif conf_avg >= 1.8: conf_label = 'Moyenne'
+            else:                 conf_label = 'Faible'
+
+            # Tendance de la trajectoire (J+1 → J+10)
+            prix_seq = [p['price'] for p in valid_preds if p.get('price') is not None]
+            hausses  = sum(1 for i in range(1, len(prix_seq)) if prix_seq[i] > prix_seq[i-1])
+            baisses  = sum(1 for i in range(1, len(prix_seq)) if prix_seq[i] < prix_seq[i-1])
+            if hausses > baisses * 2:   traj = "📈 Hausse continue"
+            elif baisses > hausses * 2: traj = "📉 Baisse continue"
+            elif hausses > baisses:     traj = "↗️ Tendance haussière"
+            elif baisses > hausses:     traj = "↘️ Tendance baissière"
+            else:                       traj = "➡️ Consolidation"
+
+            pred_summary.append({
+                'symbol':    sym,
+                'name':      cname,
+                'sector':    sector,
+                'cur_price': cur_p,
+                'p_j1':      p_j1,
+                'p_j10':     p_j10,
+                'var_j1':    var_j1,
+                'var_j10':   var_j10,
+                'conf':      conf_label,
+                'traj':      traj,
+                'n_preds':   len(valid_preds),
+                'conf_avg':  conf_avg,
+            })
+
+        if not pred_summary:
+            doc.add_paragraph("⚠️ Aucune prédiction disponible pour cette analyse.")
+        else:
+            # ── TENDANCE GÉNÉRALE ────────────────────────────────────────────
+            doc.add_heading("📊 1. Tendance générale du marché", level=2)
+
+            nb_hausse  = sum(1 for p in pred_summary if p['var_j10'] > 1)
+            nb_baisse  = sum(1 for p in pred_summary if p['var_j10'] < -1)
+            nb_neutre  = len(pred_summary) - nb_hausse - nb_baisse
+            var_moyenne = sum(p['var_j10'] for p in pred_summary) / len(pred_summary)
+            var_mediane = sorted(p['var_j10'] for p in pred_summary)[len(pred_summary)//2]
+
+            # Confiance globale
+            conf_count  = {'Élevée': 0, 'Moyenne': 0, 'Faible': 0}
+            for p in pred_summary:
+                conf_count[p['conf']] = conf_count.get(p['conf'], 0) + 1
+            conf_dominante = max(conf_count, key=conf_count.get)
+            pct_elevee = (conf_count.get('Élevée', 0) / len(pred_summary)) * 100
+            pct_faible = (conf_count.get('Faible', 0) / len(pred_summary)) * 100
+
+            # Signal marché
+            if var_moyenne > 3 and nb_hausse > nb_baisse * 2:
+                signal_marche  = "🟢 HAUSSIER"
+                signal_color   = RGBColor(0, 128, 0)
+                signal_bg      = 'C6EFCE'
+                signal_detail  = (f"Les modèles anticipent une progression généralisée des cours. "
+                                  f"La majorité des sociétés ({nb_hausse}/{len(pred_summary)}) sont "
+                                  f"orientées à la hausse avec une variation moyenne de +{var_moyenne:.2f}%.")
+            elif var_moyenne < -3 and nb_baisse > nb_hausse * 2:
+                signal_marche  = "🔴 BAISSIER"
+                signal_color   = RGBColor(180, 0, 0)
+                signal_bg      = 'FFC7CE'
+                signal_detail  = (f"Les modèles anticipent une correction généralisée. "
+                                  f"{nb_baisse} sociétés sur {len(pred_summary)} sont orientées à la baisse "
+                                  f"avec une variation moyenne de {var_moyenne:.2f}%.")
+            elif var_moyenne > 1:
+                signal_marche  = "🟡 LÉGÈREMENT HAUSSIER"
+                signal_color   = RGBColor(150, 100, 0)
+                signal_bg      = 'FFEB9C'
+                signal_detail  = (f"Légère tendance haussière mais signal mixte : {nb_hausse} sociétés en hausse "
+                                  f"vs {nb_baisse} en baisse. Variation moyenne : +{var_moyenne:.2f}%.")
+            elif var_moyenne < -1:
+                signal_marche  = "🟡 LÉGÈREMENT BAISSIER"
+                signal_color   = RGBColor(150, 50, 0)
+                signal_bg      = 'FFEB9C'
+                signal_detail  = (f"Légère tendance baissière avec signal mixte : {nb_baisse} sociétés en baisse "
+                                  f"vs {nb_hausse} en hausse. Variation moyenne : {var_moyenne:.2f}%.")
+            else:
+                signal_marche  = "⚪ NEUTRE / CONSOLIDATION"
+                signal_color   = RGBColor(80, 80, 80)
+                signal_bg      = 'F2F2F2'
+                signal_detail  = (f"Les modèles n'anticipent pas de mouvement directionnel clair. "
+                                  f"La variation moyenne est de {var_moyenne:+.2f}% avec {nb_neutre} sociétés "
+                                  f"en zone neutre (±1%).")
+
+            # Tableau synthèse générale
+            tbl_tend = doc.add_table(rows=4, cols=2)
+            tbl_tend.style = 'Table Grid'
+            rows_tend = [
+                ("Signal marché (J+10)",  signal_marche),
+                ("Variation moyenne J+10", f"{var_moyenne:+.2f}%  |  Médiane : {var_mediane:+.2f}%"),
+                ("Répartition",
+                 f"📈 {nb_hausse} sociétés en hausse (>{'+1%'})   "
+                 f"📉 {nb_baisse} en baisse (<{'-1%'})   "
+                 f"➡️ {nb_neutre} neutres"),
+                ("Confiance globale",
+                 f"Élevée : {conf_count.get('Élevée',0)} sociétés ({pct_elevee:.0f}%)   "
+                 f"Moyenne : {conf_count.get('Moyenne',0)}   "
+                 f"Faible : {conf_count.get('Faible',0)} ({pct_faible:.0f}%)   "
+                 f"→ Confiance dominante : {conf_dominante}"),
+            ]
+            for ri, (lbl, val) in enumerate(rows_tend):
+                tr = tbl_tend.rows[ri].cells
+                # Col label
+                tr[0].text = lbl
+                rl = tr[0].paragraphs[0].runs[0] if tr[0].paragraphs[0].runs else tr[0].paragraphs[0].add_run(lbl)
+                rl.bold = True; rl.font.size = Pt(9)
+                shd_l = OxmlElement('w:shd'); shd_l.set(qn('w:fill'), 'DEEAF1'); shd_l.set(qn('w:val'), 'clear')
+                tr[0]._element.get_or_add_tcPr().append(shd_l)
+                # Col valeur
+                tr[1].text = val
+                rv = tr[1].paragraphs[0].runs[0] if tr[1].paragraphs[0].runs else tr[1].paragraphs[0].add_run(val)
+                rv.bold = True; rv.font.size = Pt(9)
+                if ri == 0:
+                    rv.font.color.rgb = signal_color
+                    shd_v = OxmlElement('w:shd'); shd_v.set(qn('w:fill'), signal_bg); shd_v.set(qn('w:val'), 'clear')
+                    tr[1]._element.get_or_add_tcPr().append(shd_v)
+
+            # Largeurs
+            try:
+                for ci_t, col_t in enumerate(tbl_tend.columns):
+                    for cell_t in col_t.cells:
+                        cell_t.width = Cm(5.0) if ci_t == 0 else Cm(13.0)
+            except: pass
+
+            # Commentaire narratif du signal
+            doc.add_paragraph()
+            sig_p = doc.add_paragraph()
+            sig_r = sig_p.add_run(f"📝 Analyse : {signal_detail}")
+            sig_r.font.size = Pt(9); sig_r.font.italic = True
+            sig_r.font.color.rgb = RGBColor(40, 40, 40)
+
+            # Confiance globale commentaire
+            if pct_elevee >= 50:
+                conf_comment = (f"✅ La confiance est globalement ÉLEVÉE ({pct_elevee:.0f}% des sociétés) — "
+                                f"les modèles ont été entraînés sur des données suffisamment régulières pour "
+                                f"produire des prédictions fiables. Les résultats sont exploitables.")
+            elif pct_faible >= 50:
+                conf_comment = (f"⚠️ La confiance est globalement FAIBLE ({pct_faible:.0f}% des sociétés) — "
+                                f"forte volatilité ou données insuffisantes dans les historiques. "
+                                f"Les prédictions sont indicatives et doivent être croisées avec l'analyse technique.")
+            else:
+                conf_comment = (f"🔵 Confiance MIXTE — certains modèles sont robustes, d'autres sont limités "
+                                f"par la faible liquidité ou la volatilité des cours sur la BRVM. "
+                                f"Privilégier les sociétés avec confiance Élevée.")
+            conf_p = doc.add_paragraph()
+            conf_r = conf_p.add_run(f"🎯 Fiabilité : {conf_comment}")
+            conf_r.font.size = Pt(9); conf_r.font.italic = True
+            conf_r.font.color.rgb = RGBColor(40, 40, 40)
+            doc.add_paragraph()
+
+            # ── TOP 5 HAUSSES ────────────────────────────────────────────────
+            doc.add_heading("📈 2. TOP 5 — Cours attendus en HAUSSE à J+10", level=2)
+            top5_hausse = sorted(pred_summary, key=lambda x: x['var_j10'], reverse=True)[:5]
+
+            note_h = doc.add_paragraph()
+            note_h.add_run(
+                "Classement par variation prédite J+10 (cours actuel → cours prédit dans 10 jours ouvrables). "
+                "Sont indiqués : la variation attendue, la trajectoire sur 10 jours et le niveau de confiance du modèle."
+            ).font.size = Pt(8.5)
+            note_h.runs[0].font.italic = True
+            doc.add_paragraph()
+
+            # Tableau Top 5 Hausse
+            tbl_h5 = doc.add_table(rows=1, cols=7)
+            tbl_h5.style = 'Table Grid'
+            hdrs_h5 = ['Rang', 'Symbole / Société', 'Secteur', 'Cours actuel',
+                       'Cours J+10 prédit', 'Variation J+10', 'Confiance']
+            hdr_h5 = tbl_h5.rows[0].cells
+            for ci, ht in enumerate(hdrs_h5):
+                hdr_h5[ci].text = ht
+                rh = hdr_h5[ci].paragraphs[0].runs[0] if hdr_h5[ci].paragraphs[0].runs else hdr_h5[ci].paragraphs[0].add_run(ht)
+                rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+                shd_hh = OxmlElement('w:shd'); shd_hh.set(qn('w:fill'), '375623'); shd_hh.set(qn('w:val'), 'clear')
+                hdr_h5[ci]._element.get_or_add_tcPr().append(shd_hh)
+
+            for rang, p in enumerate(top5_hausse, 1):
+                tr5 = tbl_h5.add_row().cells
+                vals5 = [
+                    f"#{rang}",
+                    f"{p['symbol']} — {p['name'][:35]}{'...' if len(p['name'])>35 else ''}",
+                    p['sector'][:20],
+                    f"{p['cur_price']:,.0f} FCFA",
+                    f"{p['p_j10']:,.0f} FCFA",
+                    f"+{p['var_j10']:.2f}%",
+                    p['conf'],
+                ]
+                bg_conf = 'C6EFCE' if p['conf'] == 'Élevée' else 'FFEB9C' if p['conf'] == 'Moyenne' else 'FFC7CE'
+                bgs = ['FFFFFF', 'C6EFCE', 'FFFFFF', 'FFFFFF', 'FFFFFF', 'C6EFCE', bg_conf]
+                for ci, (val_s, bg_s) in enumerate(zip(vals5, bgs)):
+                    tr5[ci].text = val_s
+                    rc5 = tr5[ci].paragraphs[0].runs[0] if tr5[ci].paragraphs[0].runs else tr5[ci].paragraphs[0].add_run(val_s)
+                    rc5.font.size = Pt(8)
+                    if ci == 5: rc5.bold = True; rc5.font.color.rgb = RGBColor(0, 120, 0)
+                    if ci == 0: rc5.bold = True
+                    shd5 = OxmlElement('w:shd'); shd5.set(qn('w:fill'), bg_s); shd5.set(qn('w:val'), 'clear')
+                    tr5[ci]._element.get_or_add_tcPr().append(shd5)
+            try:
+                widths_h5 = [Cm(1.2), Cm(5.0), Cm(3.0), Cm(2.5), Cm(2.5), Cm(2.0), Cm(1.8)]
+                for ci5, col5 in enumerate(tbl_h5.columns):
+                    for cell5 in col5.cells:
+                        cell5.width = widths_h5[ci5]
+            except: pass
+            doc.add_paragraph()
+
+            # Commentaire analytique Top 5 hausse
+            for rang, p in enumerate(top5_hausse, 1):
+                var_abs = abs(p['var_j10'])
+                if var_abs > 20:
+                    amp_comment = f"hausse très forte (+{p['var_j10']:.1f}%) — signal potentiellement excessif, à croiser avec l'analyse technique"
+                elif var_abs > 10:
+                    amp_comment = f"hausse significative (+{p['var_j10']:.1f}%) — potentiel de revalorisation notable"
+                elif var_abs > 5:
+                    amp_comment = f"hausse modérée (+{p['var_j10']:.1f}%) — signal raisonnable et crédible"
+                else:
+                    amp_comment = f"légère hausse (+{p['var_j10']:.1f}%) — progression graduelle attendue"
+
+                conf_detail = {
+                    'Élevée':  "Le modèle est bien calibré sur cet actif (faible MAPE, R² élevé). Résultat exploitable.",
+                    'Moyenne': "Confiance partielle — les premiers jours sont fiables, les jours lointains moins précis.",
+                    'Faible':  "⚠️ Confiance limitée — volatilité élevée ou données insuffisantes. Résultat indicatif uniquement.",
+                }.get(p['conf'], "Confiance non déterminée.")
+
+                comm_p = doc.add_paragraph(style='List Bullet')
+                comm_r1 = comm_p.add_run(f"#{rang} {p['symbol']} ")
+                comm_r1.bold = True; comm_r1.font.size = Pt(9); comm_r1.font.color.rgb = RGBColor(0, 100, 0)
+                comm_r2 = comm_p.add_run(
+                    f"({p['name'][:40]}) — {amp_comment}. "
+                    f"Trajectoire : {p['traj']}. "
+                    f"Cours actuel : {p['cur_price']:,.0f} FCFA → prédit J+10 : {p['p_j10']:,.0f} FCFA. "
+                    f"{conf_detail}"
+                )
+                comm_r2.font.size = Pt(8.5)
+            doc.add_paragraph()
+
+            # ── TOP 5 BAISSES ────────────────────────────────────────────────
+            doc.add_heading("📉 3. TOP 5 — Cours attendus en BAISSE à J+10", level=2)
+            top5_baisse = sorted(pred_summary, key=lambda x: x['var_j10'])[:5]
+
+            note_b = doc.add_paragraph()
+            note_b.add_run(
+                "Les sociétés présentant les prédictions les plus négatives à J+10. "
+                "Une baisse prédite ne signifie pas nécessairement une recommandation de vente — "
+                "elle doit être croisée avec les fondamentaux et la liquidité du titre."
+            ).font.size = Pt(8.5)
+            note_b.runs[0].font.italic = True
+            doc.add_paragraph()
+
+            # Tableau Top 5 Baisse
+            tbl_b5 = doc.add_table(rows=1, cols=7)
+            tbl_b5.style = 'Table Grid'
+            hdr_b5 = tbl_b5.rows[0].cells
+            hdrs_b5 = ['Rang', 'Symbole / Société', 'Secteur', 'Cours actuel',
+                       'Cours J+10 prédit', 'Variation J+10', 'Confiance']
+            for ci, ht in enumerate(hdrs_b5):
+                hdr_b5[ci].text = ht
+                rh = hdr_b5[ci].paragraphs[0].runs[0] if hdr_b5[ci].paragraphs[0].runs else hdr_b5[ci].paragraphs[0].add_run(ht)
+                rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+                shd_hb = OxmlElement('w:shd'); shd_hb.set(qn('w:fill'), '843C0C'); shd_hb.set(qn('w:val'), 'clear')
+                hdr_b5[ci]._element.get_or_add_tcPr().append(shd_hb)
+
+            for rang, p in enumerate(top5_baisse, 1):
+                tr5b = tbl_b5.add_row().cells
+                vals5b = [
+                    f"#{rang}",
+                    f"{p['symbol']} — {p['name'][:35]}{'...' if len(p['name'])>35 else ''}",
+                    p['sector'][:20],
+                    f"{p['cur_price']:,.0f} FCFA",
+                    f"{p['p_j10']:,.0f} FCFA",
+                    f"{p['var_j10']:.2f}%",
+                    p['conf'],
+                ]
+                bg_conf_b = 'C6EFCE' if p['conf'] == 'Élevée' else 'FFEB9C' if p['conf'] == 'Moyenne' else 'FFC7CE'
+                bgs_b = ['FFFFFF', 'FFC7CE', 'FFFFFF', 'FFFFFF', 'FFFFFF', 'FFC7CE', bg_conf_b]
+                for ci, (val_s, bg_s) in enumerate(zip(vals5b, bgs_b)):
+                    tr5b[ci].text = val_s
+                    rc5b = tr5b[ci].paragraphs[0].runs[0] if tr5b[ci].paragraphs[0].runs else tr5b[ci].paragraphs[0].add_run(val_s)
+                    rc5b.font.size = Pt(8)
+                    if ci == 5: rc5b.bold = True; rc5b.font.color.rgb = RGBColor(180, 0, 0)
+                    if ci == 0: rc5b.bold = True
+                    shd5b = OxmlElement('w:shd'); shd5b.set(qn('w:fill'), bg_s); shd5b.set(qn('w:val'), 'clear')
+                    tr5b[ci]._element.get_or_add_tcPr().append(shd5b)
+            try:
+                for ci5b, col5b in enumerate(tbl_b5.columns):
+                    for cell5b in col5b.cells:
+                        cell5b.width = widths_h5[ci5b]
+            except: pass
+            doc.add_paragraph()
+
+            # Commentaire analytique Top 5 baisse
+            for rang, p in enumerate(top5_baisse, 1):
+                var_abs = abs(p['var_j10'])
+                if var_abs > 30:
+                    amp_b = f"baisse très forte ({p['var_j10']:.1f}%) — amplitude potentiellement surestimée par le modèle"
+                elif var_abs > 15:
+                    amp_b = f"correction importante ({p['var_j10']:.1f}%) — signal de dégradation significative"
+                elif var_abs > 5:
+                    amp_b = f"baisse modérée ({p['var_j10']:.1f}%) — repli technique attendu"
+                else:
+                    amp_b = f"légère baisse ({p['var_j10']:.1f}%) — mouvement de faible amplitude"
+
+                conf_detail_b = {
+                    'Élevée':  "Modèle bien calibré — ce signal de baisse est à prendre au sérieux.",
+                    'Moyenne': "Confiance partielle — surveiller l'évolution réelle des premiers jours.",
+                    'Faible':  "⚠️ Confiance limitée — volatilité élevée. Ne pas agir sur ce seul signal.",
+                }.get(p['conf'], "")
+
+                comm_pb = doc.add_paragraph(style='List Bullet')
+                comm_rb1 = comm_pb.add_run(f"#{rang} {p['symbol']} ")
+                comm_rb1.bold = True; comm_rb1.font.size = Pt(9); comm_rb1.font.color.rgb = RGBColor(180, 0, 0)
+                comm_rb2 = comm_pb.add_run(
+                    f"({p['name'][:40]}) — {amp_b}. "
+                    f"Trajectoire : {p['traj']}. "
+                    f"Cours actuel : {p['cur_price']:,.0f} FCFA → prédit J+10 : {p['p_j10']:,.0f} FCFA. "
+                    f"{conf_detail_b}"
+                )
+                comm_rb2.font.size = Pt(8.5)
+            doc.add_paragraph()
+
+            # ── TABLEAU COMPLET TOUTES SOCIÉTÉS ─────────────────────────────
+            doc.add_heading("📋 4. Tableau complet — Toutes les sociétés", level=2)
+            note_all = doc.add_paragraph()
+            note_all.add_run(
+                "Vue d'ensemble de toutes les sociétés avec prédictions disponibles, "
+                "triées par variation J+10 décroissante."
+            ).font.size = Pt(8.5)
+            note_all.runs[0].font.italic = True
+            doc.add_paragraph()
+
+            tbl_all = doc.add_table(rows=1, cols=6)
+            tbl_all.style = 'Table Grid'
+            hdr_all = tbl_all.rows[0].cells
+            hdrs_all = ['Symbole', 'Société', 'Cours actuel', 'Cours J+10', 'Var. J+10', 'Confiance']
+            for ci, ht in enumerate(hdrs_all):
+                hdr_all[ci].text = ht
+                rh = hdr_all[ci].paragraphs[0].runs[0] if hdr_all[ci].paragraphs[0].runs else hdr_all[ci].paragraphs[0].add_run(ht)
+                rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+                shd_ha = OxmlElement('w:shd'); shd_ha.set(qn('w:fill'), '1F4E79'); shd_ha.set(qn('w:val'), 'clear')
+                hdr_all[ci]._element.get_or_add_tcPr().append(shd_ha)
+
+            sorted_all = sorted(pred_summary, key=lambda x: x['var_j10'], reverse=True)
+            for p in sorted_all:
+                tra = tbl_all.add_row().cells
+                var_str = f"{p['var_j10']:+.2f}%"
+                vals_a = [
+                    p['symbol'],
+                    p['name'][:35] + ('...' if len(p['name'])>35 else ''),
+                    f"{p['cur_price']:,.0f}",
+                    f"{p['p_j10']:,.0f}",
+                    var_str,
+                    p['conf'],
+                ]
+                is_up   = p['var_j10'] > 1
+                is_down = p['var_j10'] < -1
+                bg_var  = 'C6EFCE' if is_up else 'FFC7CE' if is_down else 'FFEB9C'
+                bg_conf_a = 'C6EFCE' if p['conf'] == 'Élevée' else 'FFEB9C' if p['conf'] == 'Moyenne' else 'FFC7CE'
+                bgs_a = ['FFFFFF', 'FFFFFF', 'FFFFFF', 'FFFFFF', bg_var, bg_conf_a]
+                for ci, (val_s, bg_s) in enumerate(zip(vals_a, bgs_a)):
+                    tra[ci].text = val_s
+                    rca = tra[ci].paragraphs[0].runs[0] if tra[ci].paragraphs[0].runs else tra[ci].paragraphs[0].add_run(val_s)
+                    rca.font.size = Pt(8)
+                    if ci == 4:
+                        rca.bold = True
+                        rca.font.color.rgb = RGBColor(0,120,0) if is_up else RGBColor(180,0,0) if is_down else RGBColor(100,100,0)
+                    shd_a = OxmlElement('w:shd'); shd_a.set(qn('w:fill'), bg_s); shd_a.set(qn('w:val'), 'clear')
+                    tra[ci]._element.get_or_add_tcPr().append(shd_a)
+
+            try:
+                widths_a = [Cm(1.8), Cm(6.0), Cm(2.5), Cm(2.5), Cm(2.0), Cm(2.0)]
+                for cia, cola in enumerate(tbl_all.columns):
+                    for cella in cola.cells:
+                        cella.width = widths_a[cia]
+            except: pass
+            doc.add_paragraph()
+
+        doc.add_page_break()
+
+        # ══════════════════════════════════════════════════════════════════════
         # ANALYSE FINANCIÈRE COMPARATIVE PAR SECTEUR (brvm_donnees_financieres)
         # ══════════════════════════════════════════════════════════════════════
         doc.add_heading('💰 ANALYSE FINANCIÈRE COMPARATIVE PAR SECTEUR', level=1)
