@@ -4857,6 +4857,447 @@ RAPPELS IMPÉRATIFS:
 
         doc.add_page_break()
 
+        # ══════════════════════════════════════════════════════════════════════
+        # ANALYSE FINANCIÈRE COMPARATIVE PAR SECTEUR (brvm_donnees_financieres)
+        # ══════════════════════════════════════════════════════════════════════
+        doc.add_heading('💰 ANALYSE FINANCIÈRE COMPARATIVE PAR SECTEUR', level=1)
+        intro_afcs = doc.add_paragraph()
+        intro_afcs.add_run(
+            "Cette section compare les performances financières des sociétés cotées sur la base des données "
+            "structurées annuelles issues de la table brvm_donnees_financieres. Seules les sociétés disposant "
+            "de données renseignées sont analysées. Pour chaque secteur, les meilleures et moins bonnes "
+            "performances sont identifiées sur les indicateurs clés de rentabilité, structure et liquidité."
+        ).font.size = Pt(9)
+        intro_afcs.runs[0].font.italic = True
+        intro_afcs.runs[0].font.color.rgb = RGBColor(80, 80, 80)
+        doc.add_paragraph()
+
+        # ── Charger toutes les données financières disponibles ─────────────────
+        fin_all = {}
+        for sym in all_company_data:
+            fd = self._get_donnees_financieres(sym)
+            if fd:
+                fin_all[sym] = fd
+
+        # ── Mapping secteur → symboles (depuis all_company_data) ──────────────
+        sector_map = {}
+        for sym, cdata in all_company_data.items():
+            sec = cdata.get('sector', 'Autre')
+            if not sec or sec.strip() == '': sec = 'Autre'
+            sector_map.setdefault(sec, []).append(sym)
+
+        # ── Helper : valeur numérique sûre ────────────────────────────────────
+        def _safe(d, key):
+            v = d.get(key)
+            if v is None: return None
+            try:
+                f = float(v)
+                return f if f != 0.0 else None
+            except: return None
+
+        def _fmt_mds(v):
+            if v is None: return 'N/D'
+            if abs(v) >= 1e9: return f"{v/1e9:.3f} Mds FCFA"
+            if abs(v) >= 1e6: return f"{v/1e6:.2f} M FCFA"
+            return f"{v:,.0f} FCFA"
+
+        def _fmt_pct(v):
+            if v is None: return 'N/D'
+            return f"{v*100:.2f}%"
+
+        # ── Indicateurs à comparer (label, clé, format, sens : +1=plus grand=mieux, -1=plus petit=mieux) ──
+        KPI_DEFS = [
+            # Rentabilité
+            ("ROE",                    "roe",                      "pct",  +1),
+            ("ROA",                    "roa",                      "pct",  +1),
+            ("Marge nette",            "marge_nette",              "pct",  +1),
+            ("Résultat net",           "resultat_net",             "mds",  +1),
+            ("Taux croissance CA/PNB", "taux_croissance_ca",       "pct",  +1),
+            # Structure
+            ("Autonomie financière",   "autonomie_financiere",     "pct",  +1),
+            ("Ratio endettement",      "ratio_endettement",        "pct",  -1),
+            ("Solvabilité générale",   "solvabilite_generale",     "pct",  +1),
+            # Liquidité
+            ("Liquidité générale",     "liquidite_generale",       "pct",  +1),
+            ("Free Cash Flow",         "free_cash_flow",           "mds",  +1),
+            # Efficacité
+            ("Coeff. exploitation",    "coefficient_exploitation",  "pct",  -1),  # banques uniquement
+            ("Marge opérationnelle",   "marge_operationnelle",     "pct",  +1),
+            # Délais
+            ("Délai clients",          "delai_clients",            "jours", -1),
+            ("Durée stockage",         "duree_stockage",           "jours", -1),
+        ]
+
+        # Palettes couleur
+        CLR_POS_HDR = '1F4E79'   # bleu foncé
+        CLR_POS     = 'C6EFCE'   # vert
+        CLR_NEG     = 'FFC7CE'   # rouge
+        CLR_MID     = 'FFEB9C'   # orange
+        CLR_SEC_HDR = 'D9E1F2'   # bleu clair (entête secteur)
+        CLR_KPI_HDR = 'EEF2F7'   # gris clair
+
+        def _kpi_interp(key, val, is_bank):
+            """Retourne une interprétation courte et détaillée selon l'indicateur et le secteur."""
+            if val is None: return "Donnée absente"
+            v = val
+            if key == "roe":
+                if v > 0.20: return f"✅ ROE de {v*100:.1f}% — excellente rentabilité pour les actionnaires, bien au-dessus du coût du capital UEMOA (≈10-12%). Création de valeur forte."
+                if v > 0.12: return f"✅ ROE de {v*100:.1f}% — rentabilité satisfaisante, rémunère correctement les capitaux propres."
+                if v > 0.05: return f"⚠️ ROE de {v*100:.1f}% — rentabilité modeste, inférieure au coût du capital. Les actionnaires ne sont pas pleinement rémunérés."
+                if v > 0:    return f"⚠️ ROE de {v*100:.1f}% — très faible rentabilité. Risque de dépréciation de la valeur actionnariale."
+                return f"❌ ROE négatif ({v*100:.1f}%) — la société détruit de la valeur. Perte nette sur les fonds propres."
+            if key == "roa":
+                seuil = 0.01 if is_bank else 0.05
+                bench = "seuil banque UEMOA ≈ 1%" if is_bank else "seuil entreprise ≈ 5%"
+                if v > seuil * 2: return f"✅ ROA de {v*100:.2f}% — très bonne utilisation des actifs ({bench}). Efficacité opérationnelle supérieure à la moyenne sectorielle."
+                if v > seuil:    return f"✅ ROA de {v*100:.2f}% — bonne utilisation des actifs ({bench})."
+                if v > 0:        return f"⚠️ ROA de {v*100:.2f}% — en dessous du seuil sectoriel ({bench}). Les actifs ne génèrent pas assez de résultat."
+                return f"❌ ROA négatif ({v*100:.2f}%) — actifs non rentables."
+            if key == "marge_nette":
+                if v > 0.15: return f"✅ Marge nette de {v*100:.1f}% — excellente profitabilité finale. La société conserve plus de 15 centimes par FCFA de revenu après toutes les charges."
+                if v > 0.05: return f"✅ Marge nette de {v*100:.1f}% — profitabilité satisfaisante."
+                if v > 0.01: return f"⚠️ Marge nette de {v*100:.1f}% — marge très fine, vulnérable aux chocs de coûts ou de revenus."
+                if v > 0:    return f"⚠️ Marge nette quasi-nulle ({v*100:.2f}%) — activité à peine bénéficiaire."
+                return f"❌ Marge nette négative ({v*100:.1f}%) — la société est déficitaire."
+            if key == "resultat_net":
+                if v > 0: return f"✅ Résultat net positif de {_fmt_mds(v)} — société bénéficiaire, capacité à distribuer des dividendes et à renforcer ses fonds propres."
+                return f"❌ Perte nette de {_fmt_mds(abs(v))} — impact négatif sur les fonds propres et impossibilité de distribuer des dividendes."
+            if key == "taux_croissance_ca":
+                if v > 0.15: return f"✅ Croissance de {v*100:.1f}% — forte expansion, bien au-dessus du PIB UEMOA (≈6%). Gain de parts de marché ou hausse de volume significative."
+                if v > 0.05: return f"✅ Croissance de {v*100:.1f}% — dynamisme commercial solide, supérieur à l'inflation régionale."
+                if v > 0:    return f"⚠️ Croissance faible ({v*100:.1f}%) — activité quasi-stagnante. Risque de perte de compétitivité en termes réels."
+                if v > -0.05: return f"⚠️ Légère baisse ({v*100:.1f}%) — contraction modérée du revenu principal."
+                return f"❌ Recul marqué de {abs(v)*100:.1f}% — perte de revenus significative, signal d'alerte fort."
+            if key == "autonomie_financiere":
+                if v > 0.40: return f"✅ Autonomie financière de {v*100:.1f}% — société très peu dépendante des créanciers. Capacité élevée à absorber les chocs."
+                if v > 0.20: return f"✅ Autonomie financière correcte ({v*100:.1f}%) — équilibre sain entre fonds propres et dettes."
+                if v > 0.10: return f"⚠️ Autonomie limitée ({v*100:.1f}%) — dépendance significative aux financeurs externes. Risque accru en cas de resserrement du crédit."
+                return f"❌ Autonomie très faible ({v*100:.1f}%) — quasi-totalité des actifs financée par des dettes. Fragilité structurelle."
+            if key == "ratio_endettement":
+                if v < 0.50: return f"✅ Gearing de {v*100:.0f}% — endettement très modéré par rapport aux fonds propres. Capacité d'emprunt préservée."
+                if v < 1.50: return f"✅ Gearing de {v*100:.0f}% — levier raisonnable, standard pour le secteur."
+                if v < 3.00: return f"⚠️ Gearing de {v*100:.0f}% — levier élevé, la dette dépasse les fonds propres. Sensibilité aux variations de taux."
+                return f"❌ Gearing de {v*100:.0f}% — sur-endettement critique. Risque de défaillance financière si les revenus baissent."
+            if key == "solvabilite_generale":
+                if v > 2.0: return f"✅ Solvabilité de {v*100:.0f}% — actifs très largement supérieurs aux dettes. Confort absolu pour les créanciers."
+                if v > 1.2: return f"✅ Solvabilité satisfaisante ({v*100:.0f}%) — les actifs couvrent bien les dettes."
+                if v > 1.0: return f"⚠️ Solvabilité limite ({v*100:.0f}%) — marge de sécurité faible pour les créanciers."
+                return f"❌ Insolvable ({v*100:.0f}%) — les dettes dépassent la valeur totale des actifs. Situation critique."
+            if key == "liquidite_generale":
+                if v > 2.0: return f"✅ Liquidité générale de {v*100:.0f}x — actif circulant deux fois supérieur aux dettes CT. Trésorerie très confortable."
+                if v > 1.2: return f"✅ Liquidité générale de {v*100:.2f}x — bonne capacité à honorer les obligations CT."
+                if v > 1.0: return f"⚠️ Liquidité générale limite ({v*100:.2f}x) — couverture juste suffisante."
+                return f"❌ Liquidité insuffisante ({v*100:.2f}x) — actif circulant ne couvre pas les dettes CT. Risque de défaut de paiement."
+            if key == "free_cash_flow":
+                if v and v > 0: return f"✅ FCF positif de {_fmt_mds(v)} — la société génère du cash après investissements. Peut rembourser la dette, verser des dividendes ou investir davantage."
+                if v and v > -5e8: return f"⚠️ FCF légèrement négatif ({_fmt_mds(v)}) — investissements supérieurs au cash opérationnel. Phase de développement."
+                return f"❌ FCF négatif significatif ({_fmt_mds(v) if v else 'N/D'}) — la société consomme de la trésorerie. Risque si la situation perdure."
+            if key == "coefficient_exploitation":
+                if v < 0.45: return f"✅ Coeff. d'exploitation de {v*100:.1f}% — banque très efficiente. Moins de 45 centimes de charges par FCFA de PNB. Excellence opérationnelle."
+                if v < 0.60: return f"✅ Coeff. d'exploitation de {v*100:.1f}% — dans la norme UEMOA. Efficience satisfaisante."
+                if v < 0.75: return f"⚠️ Coeff. d'exploitation de {v*100:.1f}% — charges absorbant trop du PNB. Marge de progression nécessaire."
+                return f"❌ Coeff. d'exploitation de {v*100:.1f}% — structure de coûts critique. La banque est peu viable à ce niveau."
+            if key == "marge_operationnelle":
+                if v > 0.20: return f"✅ Marge opérationnelle de {v*100:.1f}% — excellente efficacité de l'exploitation principale."
+                if v > 0.08: return f"✅ Marge opérationnelle correcte ({v*100:.1f}%)."
+                if v > 0:    return f"⚠️ Marge opérationnelle faible ({v*100:.1f}%) — l'exploitation laisse peu de bénéfice avant charges financières."
+                return f"❌ Marge opérationnelle négative ({v*100:.1f}%) — l'activité principale est déficitaire."
+            if key == "delai_clients":
+                if v < 30: return f"✅ Délai clients de {v:.0f} jours — recouvrement rapide. Trésorerie peu sollicitée par les créances clients."
+                if v < 60: return f"✅ Délai standard ({v:.0f} jours) — dans les normes commerciales habituelles."
+                if v < 90: return f"⚠️ Délai long ({v:.0f} jours) — risque d'impayés accru, pression sur la trésorerie CT."
+                return f"❌ Délai critique de {v:.0f} jours — process de recouvrement à revoir. Immobilisation de capital excessive."
+            if key == "duree_stockage":
+                if v < 30: return f"✅ Stock écoulé en {v:.0f} jours — rotation excellente, capital peu immobilisé."
+                if v < 60: return f"✅ Durée de stockage standard ({v:.0f} jours)."
+                if v < 120: return f"⚠️ Stock lent ({v:.0f} jours) — immobilisation de capital importante. Risque d'obsolescence."
+                return f"❌ Stock quasi-bloqué ({v:.0f} jours) — capital fortement immobilisé, risque d'obsolescence élevé."
+            return f"Valeur : {_fmt_pct(v) if isinstance(v, float) and abs(v) < 10 else _fmt_mds(v)}"
+
+        # ── Générer la section par secteur ─────────────────────────────────────
+        sectors_with_data = {}
+        for sec, syms in sorted(sector_map.items()):
+            syms_with_fin = [s for s in syms if s in fin_all]
+            if len(syms_with_fin) >= 1:
+                sectors_with_data[sec] = syms_with_fin
+
+        if not sectors_with_data:
+            doc.add_paragraph("⚠️ Aucune donnée financière structurée disponible pour cette analyse.")
+        else:
+            note_p = doc.add_paragraph()
+            note_r = note_p.add_run(
+                f"Données disponibles pour {len(fin_all)} société(s) sur {len(all_company_data)}. "
+                f"Sociétés sans données ignorées. "
+                f"🟢 = performance positive  🔴 = performance à surveiller."
+            )
+            note_r.font.size = Pt(8.5)
+            note_r.font.italic = True
+            note_r.font.color.rgb = RGBColor(60, 60, 60)
+            doc.add_paragraph()
+
+            for sec_name, syms_fin in sectors_with_data.items():
+                # ── Titre secteur ──────────────────────────────────────────────
+                doc.add_page_break()
+                sec_hdg = doc.add_heading(f"📂 Secteur : {sec_name}", level=2)
+                sec_hdg.runs[0].font.color.rgb = RGBColor(0, 51, 102)
+
+                n_total = len(sector_map.get(sec_name, []))
+                n_data  = len(syms_fin)
+                sub_p = doc.add_paragraph()
+                sub_p.add_run(
+                    f"{n_data} société(s) avec données financières sur {n_total} cotée(s) dans ce secteur. "
+                    f"Exercice(s) analysé(s) : {', '.join(str(fin_all[s].get('annee','?')) for s in syms_fin)}."
+                ).font.size = Pt(9)
+                doc.add_paragraph()
+
+                # ── Tableau récapitulatif KPI par société ─────────────────────
+                doc.add_heading("📊 Tableau comparatif des indicateurs clés", level=3)
+
+                # Sélectionner les KPI pertinents selon le secteur
+                is_bank_sector = any(
+                    any([
+                        fin_all[s].get('caisse_banque_centrale') and float(fin_all[s].get('caisse_banque_centrale') or 0) != 0,
+                        fin_all[s].get('produit_net_bancaire')   and float(fin_all[s].get('produit_net_bancaire')   or 0) != 0,
+                        fin_all[s].get('dettes_clientele')       and float(fin_all[s].get('dettes_clientele')       or 0) != 0,
+                    ])
+                    for s in syms_fin
+                )
+                kpis = [(l, k, f, s) for l, k, f, s in KPI_DEFS
+                        if not (k == "coefficient_exploitation" and not is_bank_sector)
+                        and not (k in ["delai_clients","duree_stockage"] and is_bank_sector)]
+
+                # Tableau : ligne = KPI, colonne = société
+                n_soc = len(syms_fin)
+                tbl_cmp = doc.add_table(rows=1, cols=1 + n_soc)
+                tbl_cmp.style = 'Table Grid'
+                # En-tête
+                hdr_cmp = tbl_cmp.rows[0].cells
+                hdr_cmp[0].text = "Indicateur"
+                r0h = hdr_cmp[0].paragraphs[0].runs[0] if hdr_cmp[0].paragraphs[0].runs else hdr_cmp[0].paragraphs[0].add_run("Indicateur")
+                r0h.bold = True; r0h.font.size = Pt(8); r0h.font.color.rgb = RGBColor(255,255,255)
+                shd0h = OxmlElement('w:shd'); shd0h.set(qn('w:fill'), CLR_POS_HDR); shd0h.set(qn('w:val'), 'clear')
+                hdr_cmp[0]._element.get_or_add_tcPr().append(shd0h)
+                for si, sym in enumerate(syms_fin):
+                    c = hdr_cmp[si+1]
+                    cname = all_company_data.get(sym, {}).get('company_name', sym)
+                    c.text = f"{sym} ({fin_all[sym].get('annee','?')})"
+                    cr = c.paragraphs[0].runs[0] if c.paragraphs[0].runs else c.paragraphs[0].add_run(c.text)
+                    cr.bold = True; cr.font.size = Pt(7.5); cr.font.color.rgb = RGBColor(255,255,255)
+                    shdc = OxmlElement('w:shd'); shdc.set(qn('w:fill'), CLR_POS_HDR); shdc.set(qn('w:val'), 'clear')
+                    c._element.get_or_add_tcPr().append(shdc)
+
+                # Lignes KPI
+                for kpi_lbl, kpi_key, kpi_fmt, kpi_sens in kpis:
+                    vals = {s: _safe(fin_all[s], kpi_key) for s in syms_fin}
+                    valid_vals = {s: v for s, v in vals.items() if v is not None}
+                    if not valid_vals:
+                        continue  # Sauter ce KPI si aucune donnée
+
+                    # Trouver meilleur et pire
+                    best_sym = max(valid_vals, key=lambda s: valid_vals[s] * kpi_sens)
+                    worst_sym = min(valid_vals, key=lambda s: valid_vals[s] * kpi_sens)
+                    best_val = valid_vals[best_sym]
+                    worst_val = valid_vals[worst_sym]
+
+                    tr = tbl_cmp.add_row().cells
+                    # Col 0 : label KPI
+                    tr[0].text = kpi_lbl
+                    rl = tr[0].paragraphs[0].runs[0] if tr[0].paragraphs[0].runs else tr[0].paragraphs[0].add_run(kpi_lbl)
+                    rl.bold = True; rl.font.size = Pt(7.5)
+                    shd_lbl = OxmlElement('w:shd'); shd_lbl.set(qn('w:fill'), CLR_KPI_HDR); shd_lbl.set(qn('w:val'), 'clear')
+                    tr[0]._element.get_or_add_tcPr().append(shd_lbl)
+
+                    for si, sym in enumerate(syms_fin):
+                        v = vals.get(sym)
+                        if kpi_fmt == "pct":
+                            vstr = _fmt_pct(v) if v is not None else "N/D"
+                        elif kpi_fmt == "mds":
+                            vstr = _fmt_mds(v) if v is not None else "N/D"
+                        else:
+                            vstr = f"{v:.1f} j" if v is not None else "N/D"
+
+                        c = tr[si+1]
+                        c.text = vstr
+                        rc = c.paragraphs[0].runs[0] if c.paragraphs[0].runs else c.paragraphs[0].add_run(vstr)
+                        rc.font.size = Pt(8); rc.bold = True
+
+                        # Colorier fond selon rang
+                        if v is None:
+                            bg = 'F2F2F2'
+                        elif sym == best_sym and len(valid_vals) > 1:
+                            bg = CLR_POS
+                        elif sym == worst_sym and len(valid_vals) > 1:
+                            bg = CLR_NEG
+                        else:
+                            bg = 'FFFFFF'
+                        shd_c = OxmlElement('w:shd'); shd_c.set(qn('w:fill'), bg); shd_c.set(qn('w:val'), 'clear')
+                        c._element.get_or_add_tcPr().append(shd_c)
+
+                        # Couleur texte
+                        if v is not None and v != 0:
+                            rc.font.color.rgb = RGBColor(0,100,0) if sym == best_sym and len(valid_vals) > 1 else (
+                                RGBColor(180,0,0) if sym == worst_sym and len(valid_vals) > 1 else RGBColor(0,0,0))
+
+                # Largeurs colonnes
+                try:
+                    total_w = Cm(17.5)
+                    lbl_w   = Cm(4.5)
+                    val_w   = Cm((17.5 - 4.5) / max(n_soc, 1))
+                    for ci, col in enumerate(tbl_cmp.columns):
+                        for cell in col.cells:
+                            cell.width = lbl_w if ci == 0 else val_w
+                except: pass
+                doc.add_paragraph()
+
+                # ── Analyse narrative par société ──────────────────────────────
+                doc.add_heading("🔍 Analyse détaillée par société", level=3)
+
+                for sym in syms_fin:
+                    fd = fin_all[sym]
+                    annee_fd = fd.get('annee', '?')
+                    cname = all_company_data.get(sym, {}).get('company_name', sym)
+                    is_bank_s = any([
+                        fd.get('caisse_banque_centrale') and float(fd.get('caisse_banque_centrale') or 0) != 0,
+                        fd.get('produit_net_bancaire')   and float(fd.get('produit_net_bancaire')   or 0) != 0,
+                        fd.get('dettes_clientele')       and float(fd.get('dettes_clientele')       or 0) != 0,
+                    ])
+                    secteur_lbl = "🏦 Banque" if is_bank_s else "🏢 Entreprise"
+
+                    # Titre société
+                    soc_p = doc.add_paragraph()
+                    soc_p.paragraph_format.space_before = Pt(8)
+                    soc_r1 = soc_p.add_run(f"▶ {sym} — {cname} ")
+                    soc_r1.bold = True; soc_r1.font.size = Pt(10)
+                    soc_r1.font.color.rgb = RGBColor(0, 51, 102)
+                    soc_r2 = soc_p.add_run(f"[{secteur_lbl} — Exercice {annee_fd}]")
+                    soc_r2.font.size = Pt(8.5); soc_r2.font.italic = True
+                    soc_r2.font.color.rgb = RGBColor(80, 80, 80)
+
+                    # Tableau interprétation : Indicateur | Valeur | Interprétation détaillée
+                    tbl_soc = doc.add_table(rows=1, cols=3)
+                    tbl_soc.style = 'Table Grid'
+                    hdr_s = tbl_soc.rows[0].cells
+                    for ci_s, ht in enumerate(['Indicateur', 'Valeur', 'Interprétation détaillée']):
+                        hdr_s[ci_s].text = ht
+                        rh = hdr_s[ci_s].paragraphs[0].runs[0] if hdr_s[ci_s].paragraphs[0].runs else hdr_s[ci_s].paragraphs[0].add_run(ht)
+                        rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+                        shd_h = OxmlElement('w:shd'); shd_h.set(qn('w:fill'), '2F5496'); shd_h.set(qn('w:val'), 'clear')
+                        hdr_s[ci_s]._element.get_or_add_tcPr().append(shd_h)
+
+                    for kpi_lbl, kpi_key, kpi_fmt, kpi_sens in kpis:
+                        v = _safe(fd, kpi_key)
+                        if v is None: continue
+                        if kpi_fmt == "pct":  vstr = _fmt_pct(v)
+                        elif kpi_fmt == "mds": vstr = _fmt_mds(v)
+                        else:                  vstr = f"{v:.1f} j"
+
+                        interp_txt = _kpi_interp(kpi_key, v, is_bank_s)
+                        # Couleur fond selon signal
+                        if "✅" in interp_txt:    bg_s = CLR_POS
+                        elif "❌" in interp_txt:  bg_s = CLR_NEG
+                        elif "⚠️" in interp_txt: bg_s = CLR_MID
+                        else:                     bg_s = 'FFFFFF'
+
+                        tr_s = tbl_soc.add_row().cells
+                        tr_s[0].text = kpi_lbl
+                        r_lbl = tr_s[0].paragraphs[0].runs[0] if tr_s[0].paragraphs[0].runs else tr_s[0].paragraphs[0].add_run(kpi_lbl)
+                        r_lbl.bold = True; r_lbl.font.size = Pt(7.5)
+                        shd_l = OxmlElement('w:shd'); shd_l.set(qn('w:fill'), CLR_KPI_HDR); shd_l.set(qn('w:val'), 'clear')
+                        tr_s[0]._element.get_or_add_tcPr().append(shd_l)
+
+                        tr_s[1].text = vstr
+                        r_val = tr_s[1].paragraphs[0].runs[0] if tr_s[1].paragraphs[0].runs else tr_s[1].paragraphs[0].add_run(vstr)
+                        r_val.bold = True; r_val.font.size = Pt(8.5)
+                        try:
+                            nv = float(vstr.replace('%','').replace(' Mds FCFA','').replace(' M FCFA','').replace(' FCFA','').replace(' j','').replace(',','').strip())
+                            r_val.font.color.rgb = RGBColor(0,120,0) if nv > 0 else RGBColor(180,0,0) if nv < 0 else RGBColor(80,80,80)
+                        except: r_val.font.color.rgb = RGBColor(0,0,0)
+                        shd_v = OxmlElement('w:shd'); shd_v.set(qn('w:fill'), bg_s); shd_v.set(qn('w:val'), 'clear')
+                        tr_s[1]._element.get_or_add_tcPr().append(shd_v)
+
+                        tr_s[2].text = interp_txt
+                        r_int = tr_s[2].paragraphs[0].runs[0] if tr_s[2].paragraphs[0].runs else tr_s[2].paragraphs[0].add_run(interp_txt)
+                        r_int.font.size = Pt(7.5)
+                        shd_i = OxmlElement('w:shd'); shd_i.set(qn('w:fill'), 'FFFFFF'); shd_i.set(qn('w:val'), 'clear')
+                        tr_s[2]._element.get_or_add_tcPr().append(shd_i)
+
+                    # Largeurs
+                    try:
+                        for ci_s, col_s in enumerate(tbl_soc.columns):
+                            for cell_s in col_s.cells:
+                                cell_s.width = [Cm(4.0), Cm(3.5), Cm(10.0)][ci_s]
+                    except: pass
+                    doc.add_paragraph()
+
+                # ── Synthèse du secteur : TOP / BOTTOM ────────────────────────
+                doc.add_heading("🏆 Synthèse sectorielle — Points forts et points faibles", level=3)
+
+                podium_rows = []
+                # Pour chaque KPI clé, identifier le meilleur et le moins bon
+                kpis_synthese = [
+                    ("ROE",             "roe",              "pct", +1),
+                    ("Marge nette",     "marge_nette",      "pct", +1),
+                    ("Croissance CA/PNB","taux_croissance_ca","pct",+1),
+                    ("Autonomie fin.",  "autonomie_financiere","pct",+1),
+                    ("Liquidité gén.",  "liquidite_generale","pct", +1),
+                    ("FCF",            "free_cash_flow",    "mds", +1),
+                ]
+                if is_bank_sector:
+                    kpis_synthese.append(("Coeff. exploit.", "coefficient_exploitation","pct",-1))
+
+                for k_lbl, k_key, k_fmt, k_sens in kpis_synthese:
+                    vals_syn = {s: _safe(fin_all[s], k_key) for s in syms_fin if _safe(fin_all[s], k_key) is not None}
+                    if len(vals_syn) < 2: continue
+                    best  = max(vals_syn, key=lambda s: vals_syn[s] * k_sens)
+                    worst = min(vals_syn, key=lambda s: vals_syn[s] * k_sens)
+                    bv = vals_syn[best]; wv = vals_syn[worst]
+                    bstr = _fmt_pct(bv) if k_fmt == "pct" else _fmt_mds(bv)
+                    wstr = _fmt_pct(wv) if k_fmt == "pct" else _fmt_mds(wv)
+                    podium_rows.append((k_lbl, best, bstr, worst, wstr))
+
+                if podium_rows:
+                    tbl_pod = doc.add_table(rows=1, cols=5)
+                    tbl_pod.style = 'Table Grid'
+                    hdr_pod = tbl_pod.rows[0].cells
+                    for ci_p, ht_p in enumerate(['Indicateur','🥇 Meilleure','Valeur','🔻 À surveiller','Valeur']):
+                        hdr_pod[ci_p].text = ht_p
+                        rh_p = hdr_pod[ci_p].paragraphs[0].runs[0] if hdr_pod[ci_p].paragraphs[0].runs else hdr_pod[ci_p].paragraphs[0].add_run(ht_p)
+                        rh_p.bold = True; rh_p.font.size = Pt(8); rh_p.font.color.rgb = RGBColor(255,255,255)
+                        shd_ph = OxmlElement('w:shd'); shd_ph.set(qn('w:fill'), '375623' if ci_p == 1 else '843C0C' if ci_p == 3 else '1F4E79'); shd_ph.set(qn('w:val'), 'clear')
+                        hdr_pod[ci_p]._element.get_or_add_tcPr().append(shd_ph)
+                    for k_lbl, best, bstr, worst, wstr in podium_rows:
+                        tr_p = tbl_pod.add_row().cells
+                        tr_p[0].text = k_lbl
+                        r0p = tr_p[0].paragraphs[0].runs[0] if tr_p[0].paragraphs[0].runs else tr_p[0].paragraphs[0].add_run(k_lbl)
+                        r0p.bold = True; r0p.font.size = Pt(8)
+                        shd_0p = OxmlElement('w:shd'); shd_0p.set(qn('w:fill'), CLR_KPI_HDR); shd_0p.set(qn('w:val'), 'clear')
+                        tr_p[0]._element.get_or_add_tcPr().append(shd_0p)
+                        # Meilleur
+                        tr_p[1].text = best
+                        r1p = tr_p[1].paragraphs[0].runs[0] if tr_p[1].paragraphs[0].runs else tr_p[1].paragraphs[0].add_run(best)
+                        r1p.bold = True; r1p.font.size = Pt(8); r1p.font.color.rgb = RGBColor(0,100,0)
+                        shd_1p = OxmlElement('w:shd'); shd_1p.set(qn('w:fill'), CLR_POS); shd_1p.set(qn('w:val'), 'clear')
+                        tr_p[1]._element.get_or_add_tcPr().append(shd_1p)
+                        tr_p[2].text = bstr
+                        r2p = tr_p[2].paragraphs[0].runs[0] if tr_p[2].paragraphs[0].runs else tr_p[2].paragraphs[0].add_run(bstr)
+                        r2p.font.size = Pt(8); r2p.font.color.rgb = RGBColor(0,100,0)
+                        shd_2p = OxmlElement('w:shd'); shd_2p.set(qn('w:fill'), CLR_POS); shd_2p.set(qn('w:val'), 'clear')
+                        tr_p[2]._element.get_or_add_tcPr().append(shd_2p)
+                        # Moins bon
+                        tr_p[3].text = worst
+                        r3p = tr_p[3].paragraphs[0].runs[0] if tr_p[3].paragraphs[0].runs else tr_p[3].paragraphs[0].add_run(worst)
+                        r3p.bold = True; r3p.font.size = Pt(8); r3p.font.color.rgb = RGBColor(180,0,0)
+                        shd_3p = OxmlElement('w:shd'); shd_3p.set(qn('w:fill'), CLR_NEG); shd_3p.set(qn('w:val'), 'clear')
+                        tr_p[3]._element.get_or_add_tcPr().append(shd_3p)
+                        tr_p[4].text = wstr
+                        r4p = tr_p[4].paragraphs[0].runs[0] if tr_p[4].paragraphs[0].runs else tr_p[4].paragraphs[0].add_run(wstr)
+                        r4p.font.size = Pt(8); r4p.font.color.rgb = RGBColor(180,0,0)
+                        shd_4p = OxmlElement('w:shd'); shd_4p.set(qn('w:fill'), CLR_NEG); shd_4p.set(qn('w:val'), 'clear')
+                        tr_p[4]._element.get_or_add_tcPr().append(shd_4p)
+                    doc.add_paragraph()
+
+        doc.add_page_break()
+
         # ========== TABLE DES MATIÈRES ==========
         doc.add_heading('TABLE DES MATIÈRES - ANALYSES DÉTAILLÉES', level=1)
         for idx, (symbol, data) in enumerate(sorted(all_company_data.items()), 1):
@@ -5040,7 +5481,8 @@ RAPPELS IMPÉRATIFS:
             fin_data_word = self._get_donnees_financieres(symbol)
             if fin_data_word:
                 annee_fin_w = fin_data_word.get('annee', 'N/A')
-                # Détecter secteur
+
+                # ── Détection secteur ────────────────────────────────────────
                 is_bank_w = any([
                     fin_data_word.get('caisse_banque_centrale') and float(fin_data_word.get('caisse_banque_centrale') or 0) != 0,
                     fin_data_word.get('produit_net_bancaire')   and float(fin_data_word.get('produit_net_bancaire')   or 0) != 0,
@@ -5049,160 +5491,708 @@ RAPPELS IMPÉRATIFS:
                 ])
                 secteur_w = "🏦 BANQUE" if is_bank_w else "🏢 ENTREPRISE"
 
-                def fval(v, pct=False):
-                    """Formate valeur pour le tableau Word."""
-                    if v is None or v == 0 or (isinstance(v, str) and v.strip() == ''):
-                        return None
+                # ── Helpers ──────────────────────────────────────────────────
+                def _fv(v):
+                    """Retourne (float_val, str_formaté) ou (None, None) si absent/zéro."""
+                    if v is None or (isinstance(v, str) and v.strip() == ''):
+                        return None, None
                     try:
                         f = float(v)
-                        if f == 0.0: return None
-                        if pct: return f"{f*100:.2f}%"
-                        if abs(f) >= 1_000_000_000: return f"{f/1_000_000_000:.3f} Mds"
-                        if abs(f) >= 1_000_000:     return f"{f/1_000_000:.2f} M"
-                        return f"{f:,.2f}"
-                    except: return None
+                        if f == 0.0: return None, None
+                        s = (f"{f*100:.2f}%" if False  # placeholder
+                             else f"{f/1_000_000_000:.3f} Mds FCFA" if abs(f) >= 1_000_000_000
+                             else f"{f/1_000_000:.2f} M FCFA"       if abs(f) >= 1_000_000
+                             else f"{f:,.2f} FCFA")
+                        return f, s
+                    except: return None, None
 
-                # Construire les 7 sections de données
+                def _fp(v):
+                    """Retourne (float_val, str_pct) ou (None, None)."""
+                    if v is None or (isinstance(v, str) and v.strip() == ''):
+                        return None, None
+                    try:
+                        f = float(v)
+                        if f == 0.0: return None, None
+                        return f, f"{f*100:.2f}%"
+                    except: return None, None
+
+                def _fj(v):
+                    """Retourne (float_val, str_jours) ou (None, None)."""
+                    if v is None: return None, None
+                    try:
+                        f = float(v)
+                        if f == 0.0: return None, None
+                        return f, f"{f:.1f} j"
+                    except: return None, None
+
+                # Couleurs interprétation
+                CLR_OK   = 'C6EFCE'  # vert clair — positif
+                CLR_WARN = 'FFEB9C'  # orange clair — attention
+                CLR_BAD  = 'FFC7CE'  # rouge clair — négatif
+                CLR_INFO = 'DEEAF1'  # bleu clair — informatif
+                CLR_HDR  = '1F4E79'  # bleu foncé — entête section
+
+                # ── Construire les sections (label, valeur_str, interprétation, couleur_bg) ──
                 sections_data = []
 
-                # ── 1. BILAN ACTIF ──────────────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 1 : BILAN — ACTIF
+                # ══════════════════════════════════════════════════════════
                 ba_rows = []
-                for label, key in [
-                    ("Caisse & Banque Centrale",         "caisse_banque_centrale"),
-                    ("Effets publics & val. assimilées", "effets_publics"),
-                    ("Créances interbancaires",          "creances_interbancaires"),
-                    ("Créances sur la clientèle",        "creances_clientele"),
-                    ("Créances clients",                 "creances_clients"),
-                    ("Stocks",                           "stocks"),
-                    ("Actif circulant",                  "actif_circulant"),
-                    ("Immob. incorporelles",             "immobilisations_incorporelles"),
-                    ("Immob. corporelles",               "immobilisations_corporelles"),
-                    ("Actif immobilisé net",             "actif_immobilise_net"),
-                    ("Trésorerie Actif",                 "tresorerie_actif"),
-                    ("Total Actif",                      "total_actif"),
-                    ("Total Bilan",                      "total_bilan"),
-                ]:
-                    val = fval(fin_data_word.get(key))
-                    if val: ba_rows.append((label, val + " FCFA"))
+
+                fv, fs = _fv(fin_data_word.get('caisse_banque_centrale'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct_ta = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Représente {pct_ta:.1f}% du bilan. " +
+                              ("✅ Réserves confortables, bonne capacité à honorer les réserves obligatoires." if pct_ta > 10
+                               else "⚠️ Part faible — vérifier la conformité aux réserves obligatoires BCEAO."))
+                    ba_rows.append(('Caisse & Banque Centrale', fs, interp, CLR_OK if pct_ta > 10 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('effets_publics'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = f"Titres d'État détenus ({pct:.1f}% du bilan). Actif très sécurisé, source de liquidité secondaire."
+                    ba_rows.append(('Effets publics & val. assimilées', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('creances_interbancaires'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Prêts aux autres banques ({pct:.1f}% du bilan). " +
+                              ("✅ Exposition modérée au risque interbancaire." if pct < 15
+                               else "⚠️ Exposition significative — risque de contagion en cas de crise bancaire."))
+                    ba_rows.append(('Créances interbancaires', fs, interp, CLR_OK if pct < 15 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('creances_clientele'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Portefeuille crédits ({pct:.1f}% du bilan). " +
+                              ("✅ Concentration saine sur le métier de crédit." if 30 <= pct <= 70
+                               else "⚠️ Concentration excessive (risque crédit élevé)." if pct > 70
+                               else "ℹ️ Part faible — modèle orienté autres produits."))
+                    ba_rows.append(('Créances sur la clientèle', fs, interp,
+                                    CLR_OK if 30 <= pct <= 70 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('creances_clients'))
+                if fv:
+                    ca_f = float(fin_data_word.get('chiffre_affaires') or 0)
+                    pct = (fv / ca_f * 100) if ca_f else 0
+                    interp = (f"Créances clients = {pct:.1f}% du CA. " +
+                              ("✅ Délais de paiement bien maîtrisés." if pct < 25
+                               else "⚠️ Risque de retard de paiement significatif." if pct < 50
+                               else "❌ Niveau critique — risque trésorerie élevé."))
+                    ba_rows.append(('Créances clients', fs, interp,
+                                    CLR_OK if pct < 25 else CLR_WARN if pct < 50 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('stocks'))
+                if fv:
+                    ca_f = float(fin_data_word.get('chiffre_affaires') or 0)
+                    rot = (ca_f / fv) if fv else 0
+                    interp = (f"Rotation stocks = {rot:.1f}x/an. " +
+                              ("✅ Bonne rotation, stock bien dimensionné." if rot > 4
+                               else "⚠️ Rotation lente — risque d'immobilisation de capital." if rot > 1
+                               else "❌ Stock potentiellement obsolète ou surdimensionné."))
+                    ba_rows.append(('Stocks', fs, interp,
+                                    CLR_OK if rot > 4 else CLR_WARN if rot > 1 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('actif_circulant'))
+                if fv:
+                    pc_f = float(fin_data_word.get('passif_circulant') or 0)
+                    ratio = (fv / pc_f) if pc_f else 0
+                    interp = (f"Ratio actif circ./passif circ. = {ratio:.2f}x. " +
+                              ("✅ Couverture satisfaisante des dettes court terme." if ratio >= 1.2
+                               else "⚠️ Couverture limite." if ratio >= 1
+                               else "❌ Actif circulant insuffisant pour couvrir les dettes CT."))
+                    ba_rows.append(('Actif circulant', fs, interp,
+                                    CLR_OK if ratio >= 1.2 else CLR_WARN if ratio >= 1 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('immobilisations_incorporelles'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = f"Brevets, logiciels, fonds commercial ({pct:.1f}% du bilan). Actif intangible à surveiller (risque dépréciation)."
+                    ba_rows.append(('Immob. incorporelles', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('immobilisations_corporelles'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Outil industriel ({pct:.1f}% du bilan). " +
+                              ("✅ Base productive solide." if pct > 20
+                               else "ℹ️ Société à faible intensité capitalistique."))
+                    ba_rows.append(('Immob. corporelles', fs, interp, CLR_OK if pct > 20 else CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('actif_immobilise_net'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = f"Actif immobilisé = {pct:.1f}% du total. Après amortissements — reflète la valeur nette comptable des actifs durables."
+                    ba_rows.append(('Actif immobilisé net', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('tresorerie_actif'))
+                if fv:
+                    ta_f = float(fin_data_word.get('total_actif') or 0)
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Liquidités disponibles ({pct:.1f}% du bilan). " +
+                              ("✅ Trésorerie confortable." if pct > 5
+                               else "⚠️ Trésorerie tendue — surveiller les besoins CT."))
+                    ba_rows.append(('Trésorerie Actif', fs, interp, CLR_OK if pct > 5 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('total_actif'))
+                if fv:
+                    interp = "Taille totale du bilan. Indicateur de la puissance financière de l'entreprise."
+                    ba_rows.append(('Total Actif / Bilan', fs, interp, CLR_INFO))
+
                 if ba_rows: sections_data.append(("📌 1. BILAN — ACTIF", ba_rows))
 
-                # ── 2. BILAN PASSIF ─────────────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 2 : BILAN — PASSIF
+                # ══════════════════════════════════════════════════════════
                 bp_rows = []
-                for label, key in [
-                    ("Capital souscrit",            "capital_souscrit"),
-                    ("Réserves",                    "reserves"),
-                    ("Capitaux propres",            "capitaux_propres"),
-                    ("Capitaux permanents",         "capitaux_permanents"),
-                    ("Dettes interbancaires",       "dettes_interbancaires"),
-                    ("Dettes clientèle (dépôts)",   "dettes_clientele"),
-                    ("Dettes fournisseurs",         "dettes_fournisseurs"),
-                    ("Dettes financières LT/MT",    "dettes_financieres_lt_mt"),
-                    ("Dettes financières totales",  "dettes_financieres_totales"),
-                    ("Dettes totales",              "dettes_totales"),
-                    ("Passif circulant",            "passif_circulant"),
-                ]:
-                    val = fval(fin_data_word.get(key))
-                    if val: bp_rows.append((label, val + " FCFA"))
+                ta_f = float(fin_data_word.get('total_actif') or 0)
+                cp_f = float(fin_data_word.get('capitaux_propres') or 0)
+
+                fv, fs = _fv(fin_data_word.get('capital_souscrit'))
+                if fv:
+                    interp = "Capital apporté par les actionnaires à la création ou lors d'augmentations de capital."
+                    bp_rows.append(('Capital souscrit', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('reserves'))
+                if fv:
+                    interp = ("✅ Réserves accumulées significatives — capacité d'autofinancement historique." if fv > 0
+                              else "⚠️ Réserves nulles ou négatives — capacité de résistance limitée.")
+                    bp_rows.append(('Réserves', fs, interp, CLR_OK if fv > 0 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('capitaux_propres'))
+                if fv:
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Fonds propres = {pct:.1f}% du bilan. " +
+                              ("✅ Solidité financière satisfaisante." if pct > 20
+                               else "⚠️ Fonds propres limités — levier financier élevé." if pct > 8
+                               else "❌ Sous-capitalisation critique — risque de solvabilité."))
+                    bp_rows.append(('Capitaux propres', fs, interp,
+                                    CLR_OK if pct > 20 else CLR_WARN if pct > 8 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('capitaux_permanents'))
+                if fv:
+                    ai_f = float(fin_data_word.get('actif_immobilise_net') or 0)
+                    ratio = (fv / ai_f) if ai_f else 0
+                    interp = (f"Capitaux permanents / Actif immobilisé = {ratio:.2f}x. " +
+                              ("✅ Les investissements LT sont bien financés par des ressources stables." if ratio >= 1
+                               else "⚠️ Une partie des actifs LT est financée par des dettes CT — risque de liquidité."))
+                    bp_rows.append(('Capitaux permanents', fs, interp, CLR_OK if ratio >= 1 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('dettes_interbancaires'))
+                if fv:
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Refinancement interbancaire ({pct:.1f}% du bilan). " +
+                              ("✅ Dépendance modérée au marché monétaire." if pct < 15
+                               else "⚠️ Forte dépendance — risque de refinancement en cas de crise."))
+                    bp_rows.append(('Dettes interbancaires', fs, interp, CLR_OK if pct < 15 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('dettes_clientele'))
+                if fv:
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Dépôts clients = {pct:.1f}% du bilan. " +
+                              ("✅ Base de dépôts solide — financement stable et peu coûteux." if pct > 50
+                               else "ℹ️ Dépôts modérés — compléter par d'autres ressources."))
+                    bp_rows.append(('Dettes clientèle (dépôts)', fs, interp, CLR_OK if pct > 50 else CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('dettes_fournisseurs'))
+                if fv:
+                    ca_f = float(fin_data_word.get('chiffre_affaires') or 0)
+                    delai = (fv / ca_f * 365) if ca_f else 0
+                    interp = (f"Délai fournisseurs implicite ≈ {delai:.0f} j. " +
+                              ("✅ Bon pouvoir de négociation." if delai > 45
+                               else "ℹ️ Délais standards de paiement."))
+                    bp_rows.append(('Dettes fournisseurs', fs, interp, CLR_OK if delai > 45 else CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('dettes_financieres_lt_mt'))
+                if fv:
+                    pct = (fv / cp_f * 100) if cp_f else 0
+                    interp = (f"Dette LT/MT = {pct:.0f}% des fonds propres. " +
+                              ("✅ Endettement LT maîtrisé." if pct < 100
+                               else "⚠️ Levier financier élevé — surveiller la capacité de remboursement."))
+                    bp_rows.append(('Dettes financières LT/MT', fs, interp, CLR_OK if pct < 100 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('dettes_financieres_totales'))
+                if fv:
+                    pct = (fv / cp_f * 100) if cp_f else 0
+                    interp = (f"Dette financière totale = {pct:.0f}% des fonds propres (gearing). " +
+                              ("✅ Structure financière saine." if pct < 150
+                               else "⚠️ Gearing élevé — risque financier accru." if pct < 300
+                               else "❌ Sur-endettement — risque de défaillance."))
+                    bp_rows.append(('Dettes financières totales', fs, interp,
+                                    CLR_OK if pct < 150 else CLR_WARN if pct < 300 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('dettes_totales'))
+                if fv:
+                    pct = (fv / ta_f * 100) if ta_f else 0
+                    interp = (f"Dettes totales = {pct:.1f}% du bilan. " +
+                              ("✅ Taux d'endettement raisonnable." if pct < 70
+                               else "⚠️ Endettement dominant — levier élevé." if pct < 85
+                               else "❌ Très faible marge de sécurité pour les créanciers."))
+                    bp_rows.append(('Dettes totales', fs, interp,
+                                    CLR_OK if pct < 70 else CLR_WARN if pct < 85 else CLR_BAD))
+
                 if bp_rows: sections_data.append(("📌 2. BILAN — PASSIF", bp_rows))
 
-                # ── 3. COMPTE DE RÉSULTAT ───────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 3 : COMPTE DE RÉSULTAT
+                # ══════════════════════════════════════════════════════════
                 cr_rows = []
-                for label, key in [
-                    ("CA / PNB (agrégé)",           "ca_pnb"),
-                    ("Produit Net Bancaire (PNB)",   "produit_net_bancaire"),
-                    ("Chiffre d'affaires (CA)",      "chiffre_affaires"),
-                    ("Intérêts & produits assimilés","interets_produits"),
-                    ("Intérêts & charges assimilées","interets_charges"),
-                    ("Commissions (produits)",       "commissions_produits"),
-                    ("Commissions (charges)",        "commissions_charges"),
-                    ("Charges générales exploit.",   "charges_generales_exploitation"),
-                    ("DAP immobilisations",          "dap_immobilisations"),
-                    ("Charges du personnel",         "charges_personnel"),
-                    ("Charges financières",          "charges_financieres"),
-                    ("Valeur Ajoutée (VA)",          "valeur_ajoutee"),
-                    ("EBE",                          "ebe"),
-                    ("RBE",                          "rbe"),
-                    ("Résultat d'exploitation",      "resultat_exploitation"),
-                    ("Provisions",                   "provisions"),
-                    ("Impôt sur les bénéfices",      "impot_benefices"),
-                    ("Résultat avant impôt",         "resultat_avant_impot"),
-                    ("Résultat net",                 "resultat_net"),
-                ]:
-                    val = fval(fin_data_word.get(key))
-                    if val: cr_rows.append((label, val + " FCFA"))
+                rn_f = float(fin_data_word.get('resultat_net') or 0)
+
+                fv_pnb, fs_pnb = _fv(fin_data_word.get('produit_net_bancaire'))
+                fv_ca,  fs_ca  = _fv(fin_data_word.get('chiffre_affaires'))
+                rev_f = fv_pnb or fv_ca or 0
+
+                fv, fs = _fv(fin_data_word.get('ca_pnb'))
+                if fv:
+                    cr_rows.append(('CA / PNB (agrégé)', fs, "Revenu principal de l'activité — base de tous les calculs de marge.", CLR_INFO))
+
+                if fv_pnb:
+                    tx_c = float(fin_data_word.get('taux_croissance_ca') or 0)
+                    interp = (f"Revenu bancaire central (≡ CA). Croissance: {tx_c*100:.1f}%. " +
+                              ("✅ PNB en progression — dynamisme commercial." if tx_c > 0.05
+                               else "⚠️ Croissance faible ou nulle." if tx_c >= 0
+                               else "❌ PNB en recul — pression sur la rentabilité."))
+                    cr_rows.append(('Produit Net Bancaire (PNB)', fs_pnb, interp,
+                                    CLR_OK if tx_c > 0.05 else CLR_WARN if tx_c >= 0 else CLR_BAD))
+
+                if fv_ca:
+                    tx_c = float(fin_data_word.get('taux_croissance_ca') or 0)
+                    interp = (f"Chiffre d'affaires. Croissance: {tx_c*100:.1f}%. " +
+                              ("✅ CA en hausse — bonne dynamique commerciale." if tx_c > 0.05
+                               else "⚠️ Croissance limitée." if tx_c >= 0
+                               else "❌ CA en baisse — perte de parts de marché ou demande en recul."))
+                    cr_rows.append(("Chiffre d'affaires (CA)", fs_ca, interp,
+                                    CLR_OK if tx_c > 0.05 else CLR_WARN if tx_c >= 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('interets_produits'))
+                if fv and is_bank_w:
+                    pct = (fv / (fv_pnb or 1)) * 100
+                    interp = f"Revenus d'intérêts sur crédits ({pct:.0f}% du PNB). Principal moteur de revenus de la banque."
+                    cr_rows.append(('Intérêts & produits assimilés', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('interets_charges'))
+                if fv and is_bank_w:
+                    pct = (fv / (fv_pnb or 1)) * 100
+                    interp = (f"Coût des dépôts collectés ({pct:.0f}% du PNB). " +
+                              ("✅ Coût de ressources maîtrisé." if pct < 40
+                               else "⚠️ Charges d'intérêts élevées — pression sur les marges."))
+                    cr_rows.append(('Intérêts & charges assimilées', fs, interp, CLR_OK if pct < 40 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('commissions_produits'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = f"Revenus de commissions ({pct:.1f}% des revenus). Diversification bienvenue du modèle."
+                    cr_rows.append(('Commissions (produits)', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('charges_generales_exploitation'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = (f"{pct:.1f}% des revenus. " +
+                              ("✅ Frais généraux maîtrisés." if pct < 30
+                               else "⚠️ Frais généraux significatifs." if pct < 50
+                               else "❌ Structure de coûts lourde — inefficacité opérationnelle."))
+                    cr_rows.append(("Charges générales d'exploit.", fs, interp,
+                                    CLR_OK if pct < 30 else CLR_WARN if pct < 50 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('dap_immobilisations'))
+                if fv:
+                    interp = "Dotations aux amortissements — charge non décaissée reflétant l'usure des actifs."
+                    cr_rows.append(('DAP immobilisations', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('charges_personnel'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = (f"Masse salariale = {pct:.1f}% des revenus. " +
+                              ("✅ Productivité par employé satisfaisante." if pct < 25
+                               else "⚠️ Masse salariale importante." if pct < 45
+                               else "❌ Charges salariales très élevées — pression sur la rentabilité."))
+                    cr_rows.append(('Charges du personnel', fs, interp,
+                                    CLR_OK if pct < 25 else CLR_WARN if pct < 45 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('valeur_ajoutee'))
+                if fv:
+                    pct = (fv / (fv_ca or 1)) * 100
+                    interp = (f"VA = {pct:.1f}% du CA. " +
+                              ("✅ Forte valeur ajoutée — activité à haute marge brute." if pct > 40
+                               else "ℹ️ VA standard pour le secteur." if pct > 20
+                               else "⚠️ Faible VA — modèle à faible marge (distribution, négoce)."))
+                    cr_rows.append(('Valeur Ajoutée (VA)', fs, interp,
+                                    CLR_OK if pct > 40 else CLR_INFO if pct > 20 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('ebe'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = (f"EBE = {pct:.1f}% des revenus (marge opérationnelle brute). " +
+                              ("✅ Excellente capacité bénéficiaire avant amort." if pct > 25
+                               else "✅ Bonne rentabilité opérationnelle." if pct > 10
+                               else "⚠️ Marge opérationnelle faible." if pct > 0
+                               else "❌ EBE négatif — activité structurellement déficitaire."))
+                    cr_rows.append(('EBE', fs, interp,
+                                    CLR_OK if pct > 10 else CLR_WARN if pct > 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('rbe'))
+                if fv and is_bank_w:
+                    pct = (fv / (fv_pnb or 1)) * 100
+                    interp = (f"RBE = {pct:.1f}% du PNB (PNB - CGE - DAP). " +
+                              ("✅ Efficacité opérationnelle bancaire solide." if pct > 50
+                               else "⚠️ Efficacité limitée — charges absorb. une large part du PNB."))
+                    cr_rows.append(('RBE (Résultat Brut Exploit.)', fs, interp, CLR_OK if pct > 50 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('resultat_exploitation'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = (f"Profit d'exploitation = {pct:.1f}% des revenus. " +
+                              ("✅ Rentabilité opérationnelle solide." if fv > 0 and pct > 5
+                               else "⚠️ Bénéfice d'exploitation limité." if fv > 0
+                               else "❌ Perte d'exploitation — l'activité principale ne couvre pas ses coûts."))
+                    cr_rows.append(("Résultat d'exploitation", fs, interp,
+                                    CLR_OK if fv > 0 and pct > 5 else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('provisions'))
+                if fv:
+                    interp = ("Provisions pour risques/créances douteuses. Charge précautionnelle qui réduit le bénéfice imposable." +
+                              (" Surveiller la tendance — hausse = dégradation du risque." if is_bank_w else ""))
+                    cr_rows.append(('Provisions', fs, interp, CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('resultat_net'))
+                if fv:
+                    pct = (fv / (rev_f or 1)) * 100
+                    interp = (f"Marge nette = {pct:.1f}%. " +
+                              ("✅ Excellente rentabilité finale." if fv > 0 and pct > 10
+                               else "✅ Bénéficiaire." if fv > 0
+                               else "❌ Perte nette — impact négatif sur les fonds propres et les dividendes."))
+                    cr_rows.append(('Résultat net', fs, interp,
+                                    CLR_OK if fv > 0 and pct > 10 else CLR_WARN if fv > 0 else CLR_BAD))
+
                 if cr_rows: sections_data.append(("📌 3. COMPTE DE RÉSULTAT", cr_rows))
 
-                # ── 4. CASH-FLOWS ───────────────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 4 : CASH-FLOWS & TRÉSORERIE
+                # ══════════════════════════════════════════════════════════
                 cf_rows = []
-                for label, key in [
-                    ("CAF",                   "caf"),
-                    ("CAFG",                  "cafg"),
-                    ("Flux opérationnel",     "flux_operationnel"),
-                    ("Flux d'investissement", "flux_investissement"),
-                    ("Flux de financement",   "flux_financement"),
-                    ("Cash-flow opérationnel","cashflow_operationnel"),
-                    ("Free Cash Flow",        "free_cash_flow"),
-                    ("BFR",                   "bfr"),
-                    ("Fonds de Roulement",    "fonds_roulement"),
-                    ("Trésorerie nette",      "tresorerie_nette"),
-                ]:
-                    val = fval(fin_data_word.get(key))
-                    if val: cf_rows.append((label, val + " FCFA"))
+                rn_f2 = float(fin_data_word.get('resultat_net') or 0)
+
+                fv, fs = _fv(fin_data_word.get('caf'))
+                if fv:
+                    ratio = (fv / rn_f2) if rn_f2 else 0
+                    interp = (f"CAF = {fv/1e9:.2f} Mds FCFA (résultat + amort.). " +
+                              ("✅ Forte capacité à financer les investissements et rembourser les dettes." if fv > 0
+                               else "❌ CAF négative — la société consomme des liquidités sans en générer."))
+                    cf_rows.append(('CAF', fs, interp, CLR_OK if fv > 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('flux_operationnel'))
+                if fv:
+                    interp = (f"Cash généré par l'activité courante. " +
+                              ("✅ Activité génératrice de cash — bonne santé opérationnelle." if fv > 0
+                               else "❌ Activité consommatrice de cash — modèle sous pression."))
+                    cf_rows.append(('Flux opérationnel', fs, interp, CLR_OK if fv > 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('flux_investissement'))
+                if fv:
+                    interp = (f"Sorties nettes pour investissements. " +
+                              ("✅ Investissement actif — développement de l'outil productif." if fv < 0
+                               else "ℹ️ Cessions nettes — désinvestissement ou rééquilibrage du portefeuille."))
+                    cf_rows.append(("Flux d'investissement", fs, interp, CLR_OK if fv < 0 else CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('flux_financement'))
+                if fv:
+                    interp = (f"Flux liés à la dette et aux dividendes. " +
+                              ("✅ Remboursements nets — désendettement en cours." if fv < 0
+                               else "ℹ️ Nouveaux financements levés — augmentation de capital ou emprunt."))
+                    cf_rows.append(("Flux de financement", fs, interp, CLR_OK if fv < 0 else CLR_INFO))
+
+                fv, fs = _fv(fin_data_word.get('free_cash_flow'))
+                if fv:
+                    interp = (f"FCF = flux opé. - capex. " +
+                              ("✅ FCF positif — la société dégage du cash après ses investissements." if fv > 0
+                               else "⚠️ FCF négatif — investissements supérieurs au cash opérationnel."))
+                    cf_rows.append(('Free Cash Flow', fs, interp, CLR_OK if fv > 0 else CLR_WARN))
+
+                fv, fs = _fv(fin_data_word.get('bfr'))
+                if fv:
+                    rev_ref = float(fin_data_word.get('chiffre_affaires') or 0)
+                    pct = (fv / rev_ref * 100) if rev_ref else 0
+                    interp = (f"BFR = {pct:.1f}% du CA. " +
+                              ("✅ BFR négatif = la société se finance sur ses clients (modèle distributeur)." if fv < 0
+                               else "✅ BFR modéré — cycle d'exploitation bien financé." if pct < 15
+                               else "⚠️ BFR élevé — besoin de financement CT important." if pct < 30
+                               else "❌ BFR critique — risque de tension de trésorerie."))
+                    cf_rows.append(('BFR', fs, interp,
+                                    CLR_OK if fv < 0 or pct < 15 else CLR_WARN if pct < 30 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('fonds_roulement'))
+                if fv:
+                    interp = (f"FR = capitaux permanents - actif immobilisé. " +
+                              ("✅ Fonds de roulement positif — les ressources LT financent l'actif LT avec marge." if fv > 0
+                               else "❌ FR négatif — une partie des immobilisations est financée par des dettes CT."))
+                    cf_rows.append(('Fonds de Roulement', fs, interp, CLR_OK if fv > 0 else CLR_BAD))
+
+                fv, fs = _fv(fin_data_word.get('tresorerie_nette'))
+                if fv:
+                    interp = (f"Trésorerie nette = FR - BFR. " +
+                              ("✅ Position de trésorerie nette excédentaire." if fv > 0
+                               else "⚠️ Trésorerie nette négative — recours aux concours bancaires." if fv > -1e9
+                               else "❌ Trésorerie structurellement déficitaire — risque de liquidité."))
+                    cf_rows.append(('Trésorerie nette', fs, interp,
+                                    CLR_OK if fv > 0 else CLR_WARN if fv > -1e9 else CLR_BAD))
+
                 if cf_rows: sections_data.append(("📌 4. CASH-FLOWS & TRÉSORERIE", cf_rows))
 
-                # ── 5. RATIOS DE RENTABILITÉ ────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 5 : RATIOS DE RENTABILITÉ
+                # ══════════════════════════════════════════════════════════
                 rr_rows = []
-                for label, key, is_pct in [
-                    ("Marge brute",             "marge_brute",             True),
-                    ("Marge nette",             "marge_nette",             True),
-                    ("Marge opérationnelle",    "marge_operationnelle",    True),
-                    ("ROE",                     "roe",                     True),
-                    ("ROA",                     "roa",                     True),
-                    ("Rotation des actifs",     "rotation_actifs",         True),
-                    ("Coeff. d'exploitation",   "coefficient_exploitation", True),
-                    ("Coût du risque",          "cout_risque",             True),
-                    ("Taux croissance CA/PNB",  "taux_croissance_ca",      True),
-                ]:
-                    val = fval(fin_data_word.get(key), pct=is_pct)
-                    if val: rr_rows.append((label, val))
+
+                fv, fs = _fp(fin_data_word.get('marge_brute'))
+                if fv:
+                    interp = (f"(CA - coûts directs) / CA. " +
+                              ("✅ Excellente marge brute." if fv > 0.40
+                               else "✅ Marge brute correcte." if fv > 0.20
+                               else "⚠️ Marge brute limitée — activité à faible valeur ajoutée." if fv > 0
+                               else "❌ Marge brute négative — coût de revient supérieur au prix de vente."))
+                    rr_rows.append(('Marge brute', fs, interp,
+                                    CLR_OK if fv > 0.20 else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('marge_nette'))
+                if fv:
+                    interp = (f"Résultat net / revenus = {fv*100:.2f}%. " +
+                              ("✅ Excellente profitabilité finale." if fv > 0.10
+                               else "✅ Profitabilité satisfaisante." if fv > 0.03
+                               else "⚠️ Marge nette très fine — sensible aux aléas." if fv > 0
+                               else "❌ Déficitaire — la société détruit de la valeur."))
+                    rr_rows.append(('Marge nette', fs, interp,
+                                    CLR_OK if fv > 0.03 else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('marge_operationnelle'))
+                if fv:
+                    interp = (f"Rentabilité de l'exploitation pure. " +
+                              ("✅ Excellente marge opérationnelle." if fv > 0.15
+                               else "✅ Marge opérationnelle correcte." if fv > 0.05
+                               else "⚠️ Marge opérationnelle faible." if fv > 0
+                               else "❌ Exploitation déficitaire."))
+                    rr_rows.append(('Marge opérationnelle', fs, interp,
+                                    CLR_OK if fv > 0.05 else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('roe'))
+                if fv:
+                    interp = (f"Résultat net / capitaux propres = {fv*100:.2f}%. " +
+                              ("✅ Excellent — au-dessus du coût du capital UEMOA." if fv > 0.15
+                               else "✅ Satisfaisant." if fv > 0.08
+                               else "⚠️ Faible rémunération des actionnaires." if fv > 0
+                               else "❌ ROE négatif — destruction de valeur actionnaire."))
+                    rr_rows.append(('ROE (Rentabilité fonds propres)', fs, interp,
+                                    CLR_OK if fv > 0.08 else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('roa'))
+                if fv:
+                    bench = "banque: seuil >1%" if is_bank_w else "entreprise: seuil >5%"
+                    seuil = 0.01 if is_bank_w else 0.05
+                    interp = (f"Résultat net / total actif = {fv*100:.2f}% ({bench}). " +
+                              ("✅ Bonne utilisation des actifs." if fv > seuil
+                               else "⚠️ Rentabilité des actifs en deçà du seuil sectoriel." if fv > 0
+                               else "❌ ROA négatif — actifs non rentables."))
+                    rr_rows.append(('ROA (Rentabilité des actifs)', fs, interp,
+                                    CLR_OK if fv > seuil else CLR_WARN if fv > 0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('rotation_actifs'))
+                if fv:
+                    interp = (f"CA / total actif = {fv*100:.2f}x. " +
+                              ("✅ Bonne efficience des actifs." if fv > 0.50
+                               else "⚠️ Actifs peu utilisés." if fv > 0.20
+                               else "ℹ️ Faible rotation — secteur à forte intensité capitalistique (normal)."))
+                    rr_rows.append(('Rotation des actifs', fs, interp,
+                                    CLR_OK if fv > 0.50 else CLR_INFO if fv > 0.20 else CLR_WARN))
+
+                fv, fs = _fp(fin_data_word.get('coefficient_exploitation'))
+                if fv and is_bank_w:
+                    interp = (f"Charges / PNB = {fv*100:.2f}% (cost-to-income). " +
+                              ("✅ Excellent — banque très efficiente." if fv < 0.50
+                               else "✅ Efficiente (standard UEMOA)." if fv < 0.60
+                               else "⚠️ Efficience limitée — charges absorbent trop du PNB." if fv < 0.75
+                               else "❌ Coeff. critique — structure de coûts non viable."))
+                    rr_rows.append(("Coeff. d'exploitation (banque)", fs, interp,
+                                    CLR_OK if fv < 0.60 else CLR_WARN if fv < 0.75 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('cout_risque'))
+                if fv is not None:
+                    afv = abs(fv)
+                    interp = (f"Provisions / charges financières. " +
+                              ("✅ Coût du risque sain — portefeuille de qualité." if afv < 0.01
+                               else "⚠️ Coût du risque modéré — surveillance requise." if afv < 0.03
+                               else "❌ Coût du risque élevé — dégradation significative du portefeuille."))
+                    rr_rows.append(('Coût du risque', fs, interp,
+                                    CLR_OK if afv < 0.01 else CLR_WARN if afv < 0.03 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('taux_croissance_ca'))
+                if fv is not None:
+                    lbl = "PNB" if is_bank_w else "CA"
+                    interp = (f"Croissance {lbl} vs exercice précédent = {fv*100:.2f}%. " +
+                              ("✅ Forte croissance — expansion commerciale." if fv > 0.10
+                               else "✅ Croissance positive." if fv > 0
+                               else "⚠️ Activité stagnante." if fv > -0.05
+                               else "❌ Recul significatif du revenu principal."))
+                    rr_rows.append((f'Taux croissance {lbl}', fs, interp,
+                                    CLR_OK if fv > 0 else CLR_WARN if fv > -0.05 else CLR_BAD))
+
                 if rr_rows: sections_data.append(("📌 5. RATIOS DE RENTABILITÉ", rr_rows))
 
-                # ── 6. STRUCTURE & LIQUIDITÉ ────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 6 : STRUCTURE & LIQUIDITÉ
+                # ══════════════════════════════════════════════════════════
                 rs_rows = []
-                for label, key, is_pct in [
-                    ("Autonomie financière",    "autonomie_financiere",         True),
-                    ("Dépendance financière",   "dependance_financiere",        True),
-                    ("Ratio d'endettement",     "ratio_endettement",            True),
-                    ("Solvabilité générale",    "solvabilite_generale",         True),
-                    ("Liquidité générale",      "liquidite_generale",           True),
-                    ("Liquidité immédiate",     "liquidite_immediate",          True),
-                    ("Liquidité réduite",       "liquidite_reduite",            True),
-                    ("Financement immob.",      "financement_immobilisations",  True),
-                    ("Capacité remboursement",  "capacite_remboursement",       False),
-                    ("Couverture des intérêts", "couverture_interets",          True),
-                    ("Couverture invest./CAF",  "couverture_investissements_caf",True),
-                ]:
-                    val = fval(fin_data_word.get(key), pct=is_pct)
-                    if val: rs_rows.append((label, val))
+
+                fv, fs = _fp(fin_data_word.get('autonomie_financiere'))
+                if fv:
+                    interp = (f"Fonds propres / total bilan = {fv*100:.2f}%. " +
+                              ("✅ Solide indépendance financière." if fv > 0.30
+                               else "✅ Autonomie correcte." if fv > 0.15
+                               else "⚠️ Dépendance aux tiers significative." if fv > 0.08
+                               else "❌ Quasi-totalité des actifs financée par des dettes."))
+                    rs_rows.append(('Autonomie financière', fs, interp,
+                                    CLR_OK if fv > 0.15 else CLR_WARN if fv > 0.08 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('dependance_financiere'))
+                if fv:
+                    interp = (f"Dettes financières / total bilan = {fv*100:.2f}%. " +
+                              ("✅ Dépendance faible." if fv < 0.30
+                               else "⚠️ Dépendance notable aux financeurs externes." if fv < 0.60
+                               else "❌ Structure très endettée — vulnérable aux chocs de taux."))
+                    rs_rows.append(('Dépendance financière', fs, interp,
+                                    CLR_OK if fv < 0.30 else CLR_WARN if fv < 0.60 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('ratio_endettement'))
+                if fv:
+                    interp = (f"Dettes totales / fonds propres = {fv*100:.2f}% (gearing). " +
+                              ("✅ Levier financier sain." if fv < 1.0
+                               else "⚠️ Levier modéré — à surveiller." if fv < 2.5
+                               else "❌ Surendettement — risque financier élevé."))
+                    rs_rows.append(("Ratio d'endettement (gearing)", fs, interp,
+                                    CLR_OK if fv < 1.0 else CLR_WARN if fv < 2.5 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('solvabilite_generale'))
+                if fv:
+                    interp = (f"Total actif / dettes totales = {fv*100:.2f}x. " +
+                              ("✅ Excellente solvabilité — actifs largement supérieurs aux dettes." if fv > 1.5
+                               else "✅ Solvable." if fv > 1.0
+                               else "❌ Insolvable — dettes supérieures aux actifs."))
+                    rs_rows.append(('Solvabilité générale', fs, interp,
+                                    CLR_OK if fv > 1.0 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('liquidite_generale'))
+                if fv:
+                    interp = (f"Actif circulant / passif circulant = {fv*100:.2f}x. " +
+                              ("✅ Excellente liquidité court terme." if fv > 1.5
+                               else "✅ Liquidité satisfaisante." if fv > 1.0
+                               else "⚠️ Liquidité tendue — risque si remboursement simultané exigé." if fv > 0.7
+                               else "❌ Liquidité critique — incapacité probable à honorer les dettes CT."))
+                    rs_rows.append(('Liquidité générale', fs, interp,
+                                    CLR_OK if fv > 1.0 else CLR_WARN if fv > 0.7 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('liquidite_immediate'))
+                if fv:
+                    interp = (f"Trésorerie / passif circulant = {fv*100:.2f}x. " +
+                              ("✅ Trésorerie immédiate confortable." if fv > 0.30
+                               else "⚠️ Trésorerie immédiate limitée." if fv > 0.10
+                               else "❌ Cash quasi inexistant face aux dettes CT."))
+                    rs_rows.append(('Liquidité immédiate', fs, interp,
+                                    CLR_OK if fv > 0.30 else CLR_WARN if fv > 0.10 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('liquidite_reduite'))
+                if fv:
+                    interp = (f"(Actif circ. - stocks) / passif circ. = {fv*100:.2f}x. " +
+                              ("✅ Liquidité réduite solide." if fv > 1.0
+                               else "⚠️ Liquidité réduite limite." if fv > 0.7
+                               else "❌ Dépendance aux stocks pour couvrir les dettes CT."))
+                    rs_rows.append(('Liquidité réduite', fs, interp,
+                                    CLR_OK if fv > 1.0 else CLR_WARN if fv > 0.7 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('financement_immobilisations'))
+                if fv:
+                    interp = (f"Capitaux permanents / actif immobilisé = {fv*100:.2f}x. " +
+                              ("✅ Les actifs LT sont intégralement financés par des ressources stables." if fv >= 1.0
+                               else "❌ Partie des actifs LT financée par des ressources CT — risque de liquidité."))
+                    rs_rows.append(('Financement des immob.', fs, interp, CLR_OK if fv >= 1.0 else CLR_BAD))
+
+                fv, fs = _fj(fin_data_word.get('capacite_remboursement'))
+                if fv:
+                    interp = (f"Dettes financières / CAF = {fv:.1f} ans. " +
+                              ("✅ Dette remboursable rapidement." if fv < 3
+                               else "✅ Délai raisonnable." if fv < 5
+                               else "⚠️ Remboursement long — endettement fort par rapport au cash." if fv < 8
+                               else "❌ Capacité de remboursement très dégradée."))
+                    rs_rows.append(('Capacité de remboursement', f"{fv:.1f} ans", interp,
+                                    CLR_OK if fv < 5 else CLR_WARN if fv < 8 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('couverture_interets'))
+                if fv:
+                    interp = (f"Résultat exploit. / charges financières = {fv*100:.2f}x. " +
+                              ("✅ Excellente couverture des intérêts." if fv > 3
+                               else "✅ Couverture satisfaisante." if fv > 1.5
+                               else "⚠️ Couverture limite — sensible aux hausses de taux." if fv > 1
+                               else "❌ L'exploitation ne couvre pas les charges financières."))
+                    rs_rows.append(("Couverture des intérêts", fs, interp,
+                                    CLR_OK if fv > 1.5 else CLR_WARN if fv > 1 else CLR_BAD))
+
+                fv, fs = _fp(fin_data_word.get('couverture_investissements_caf'))
+                if fv:
+                    interp = (f"CAF / investissements = {fv*100:.2f}x. " +
+                              ("✅ La CAF finance largement les investissements." if fv > 1
+                               else "⚠️ Financement externe nécessaire pour les investissements."))
+                    rs_rows.append(('Couverture invest./CAF', fs, interp, CLR_OK if fv > 1 else CLR_WARN))
+
                 if rs_rows: sections_data.append(("📌 6. STRUCTURE & LIQUIDITÉ", rs_rows))
 
-                # ── 7. DÉLAIS D'EXPLOITATION ────────────────────────────────
+                # ══════════════════════════════════════════════════════════
+                # SECTION 7 : DÉLAIS D'EXPLOITATION
+                # ══════════════════════════════════════════════════════════
                 dl_rows = []
-                for label, key in [
-                    ("Délai clients (jours)",        "delai_clients"),
-                    ("Délai fournisseurs (jours)",   "delai_fournisseurs"),
-                    ("Durée de stockage (jours)",    "duree_stockage"),
-                ]:
-                    v = fin_data_word.get(key)
-                    if v is not None and float(v or 0) != 0:
-                        dl_rows.append((label, f"{float(v):.1f} j"))
+
+                fv, fs = _fj(fin_data_word.get('delai_clients'))
+                if fv:
+                    interp = (f"Les clients paient en moyenne en {fv:.0f} jours. " +
+                              ("✅ Recouvrement rapide — trésorerie favorisée." if fv < 30
+                               else "✅ Délai standard." if fv < 60
+                               else "⚠️ Délai long — risque d'impayés et tension de trésorerie." if fv < 90
+                               else "❌ Délai critique — process de recouvrement à revoir."))
+                    dl_rows.append(('Délai clients (jours)', fs, interp,
+                                    CLR_OK if fv < 60 else CLR_WARN if fv < 90 else CLR_BAD))
+
+                fv, fs = _fj(fin_data_word.get('delai_fournisseurs'))
+                if fv:
+                    interp = (f"Paiement des fournisseurs en {fv:.0f} jours. " +
+                              ("✅ Délai favorable — la société conserve sa trésorerie." if fv > 60
+                               else "✅ Délai standard." if fv > 30
+                               else "⚠️ Paiement rapide — pouvoir de négociation limité."))
+                    dl_rows.append(('Délai fournisseurs (jours)', fs, interp,
+                                    CLR_OK if fv > 30 else CLR_WARN))
+
+                fv, fs = _fj(fin_data_word.get('duree_stockage'))
+                if fv:
+                    interp = (f"Stock écoulé en {fv:.0f} jours. " +
+                              ("✅ Rotation rapide — faible immobilisation de capital." if fv < 30
+                               else "✅ Stockage standard." if fv < 60
+                               else "⚠️ Durée de stockage longue — capital immobilisé." if fv < 120
+                               else "❌ Stock quasi-bloqué — risque d'obsolescence ou de surstock."))
+                    dl_rows.append(('Durée de stockage (jours)', fs, interp,
+                                    CLR_OK if fv < 60 else CLR_WARN if fv < 120 else CLR_BAD))
+
                 if dl_rows: sections_data.append(("📌 7. DÉLAIS D'EXPLOITATION", dl_rows))
 
-                # ── Générer le tableau Word si des données existent ─────────
+                # ══════════════════════════════════════════════════════════
+                # GÉNÉRATION DU TABLEAU WORD À 3 COLONNES
+                # ══════════════════════════════════════════════════════════
                 if sections_data:
                     doc.add_paragraph()
                     h_fin = doc.add_heading(
-                        f"📊 DONNÉES FINANCIÈRES STRUCTURÉES — Exercice {annee_fin_w} [{secteur_w}]",
+                        f"📊 DONNÉES FINANCIÈRES STRUCTURÉES & INTERPRÉTÉES — Exercice {annee_fin_w} [{secteur_w}]",
                         level=3
                     )
                     h_fin.runs[0].font.color.rgb = RGBColor(0, 70, 127)
@@ -5210,84 +6200,88 @@ RAPPELS IMPÉRATIFS:
 
                     note_p = doc.add_paragraph()
                     note_r = note_p.add_run(
-                        "Source : base brvm_donnees_financieres — chiffres officiels. "
-                        "Valeurs en FCFA (Mds = milliards, M = millions). "
-                        "Valeur absente = donnée non disponible ou non pertinente pour ce secteur."
+                        "Source : brvm_donnees_financieres — chiffres officiels. "
+                        "🟢 = signal positif  🟡 = vigilance  🔴 = signal négatif  🔵 = informatif."
                     )
                     note_r.font.size = Pt(8)
                     note_r.font.italic = True
-                    note_r.font.color.rgb = RGBColor(100, 100, 100)
+                    note_r.font.color.rgb = RGBColor(80, 80, 80)
 
-                    # Tableau 2 colonnes par section
                     for section_title, rows in sections_data:
                         # Titre de section
                         sec_p = doc.add_paragraph()
-                        sec_p.paragraph_format.space_before = Pt(8)
+                        sec_p.paragraph_format.space_before = Pt(10)
                         sec_p.paragraph_format.space_after  = Pt(2)
                         sec_r = sec_p.add_run(section_title)
                         sec_r.bold = True
-                        sec_r.font.size = Pt(9.5)
+                        sec_r.font.size = Pt(10)
                         sec_r.font.color.rgb = RGBColor(0, 51, 102)
 
-                        # Tableau 2 lignes × N colonnes : paires (label | valeur)
-                        # On fait 4 colonnes (2 paires côte à côte) pour économiser l'espace
-                        pairs_per_row = 2
-                        n_cols = pairs_per_row * 2  # label + val × 2
-                        # Grouper les rows par paires
-                        tbl_fin = doc.add_table(rows=1, cols=n_cols)
+                        # Tableau 3 colonnes : Indicateur | Valeur | Interprétation
+                        tbl_fin = doc.add_table(rows=1, cols=3)
                         tbl_fin.style = 'Table Grid'
-                        # En-tête invisible : on remplit directement les données
-                        # Supprimer la ligne d'en-tête créée
-                        tbl_fin._tbl.remove(tbl_fin.rows[0]._tr)
 
-                        for i in range(0, len(rows), pairs_per_row):
-                            pair = rows[i:i+pairs_per_row]
-                            tr = tbl_fin.add_row()
-                            # Remplir les cellules disponibles
-                            for j, (lbl, val) in enumerate(pair):
-                                # Cellule label
-                                lbl_cell = tr.cells[j*2]
-                                lbl_cell.text = lbl
-                                lbl_run = lbl_cell.paragraphs[0].runs[0] if lbl_cell.paragraphs[0].runs else lbl_cell.paragraphs[0].add_run(lbl)
-                                lbl_run.font.size = Pt(8)
-                                lbl_run.bold = True
-                                lbl_run.font.color.rgb = RGBColor(50, 50, 80)
-                                # Fond gris clair pour label
-                                shd_lbl = OxmlElement('w:shd')
-                                shd_lbl.set(qn('w:fill'), 'EEF2F7')
-                                shd_lbl.set(qn('w:val'), 'clear')
-                                lbl_cell._element.get_or_add_tcPr().append(shd_lbl)
-                                # Cellule valeur
-                                val_cell = tr.cells[j*2+1]
-                                val_cell.text = val
-                                val_run = val_cell.paragraphs[0].runs[0] if val_cell.paragraphs[0].runs else val_cell.paragraphs[0].add_run(val)
-                                val_run.font.size = Pt(8)
-                                val_run.bold = True
-                                # Coloration valeur selon positif/négatif
-                                try:
-                                    num_check = float(val.replace('%','').replace(' Mds','').replace(' M','').replace(' FCFA','').replace(' j','').replace(',','').strip())
-                                    if num_check > 0:
-                                        val_run.font.color.rgb = RGBColor(0, 100, 0)
-                                    elif num_check < 0:
-                                        val_run.font.color.rgb = RGBColor(180, 0, 0)
-                                    else:
-                                        val_run.font.color.rgb = RGBColor(100, 100, 100)
-                                except:
-                                    val_run.font.color.rgb = RGBColor(0, 0, 0)
-                            # Vider les cellules non utilisées
-                            if len(pair) < pairs_per_row:
-                                for j in range(len(pair), pairs_per_row):
-                                    tr.cells[j*2].text = ""
-                                    tr.cells[j*2+1].text = ""
+                        # En-tête
+                        hdr = tbl_fin.rows[0].cells
+                        for ci, htxt in enumerate(['Indicateur', 'Valeur', 'Interprétation']):
+                            hdr[ci].text = htxt
+                            r = hdr[ci].paragraphs[0].runs[0] if hdr[ci].paragraphs[0].runs else hdr[ci].paragraphs[0].add_run(htxt)
+                            r.bold = True
+                            r.font.size = Pt(8.5)
+                            r.font.color.rgb = RGBColor(255, 255, 255)
+                            shd = OxmlElement('w:shd')
+                            shd.set(qn('w:fill'), CLR_HDR)
+                            shd.set(qn('w:val'), 'clear')
+                            hdr[ci]._element.get_or_add_tcPr().append(shd)
 
-                        # Largeurs colonnes
+                        # Lignes de données
+                        for lbl, val_s, interp_s, bg_color in rows:
+                            tr = tbl_fin.add_row().cells
+
+                            # Col 0 : Indicateur
+                            tr[0].text = lbl
+                            r0 = tr[0].paragraphs[0].runs[0] if tr[0].paragraphs[0].runs else tr[0].paragraphs[0].add_run(lbl)
+                            r0.font.size = Pt(8)
+                            r0.bold = True
+                            r0.font.color.rgb = RGBColor(30, 30, 60)
+                            shd0 = OxmlElement('w:shd')
+                            shd0.set(qn('w:fill'), 'EEF2F7')
+                            shd0.set(qn('w:val'), 'clear')
+                            tr[0]._element.get_or_add_tcPr().append(shd0)
+
+                            # Col 1 : Valeur — fond coloré selon signal
+                            tr[1].text = val_s
+                            r1 = tr[1].paragraphs[0].runs[0] if tr[1].paragraphs[0].runs else tr[1].paragraphs[0].add_run(val_s)
+                            r1.font.size = Pt(8.5)
+                            r1.bold = True
+                            # Couleur texte valeur
+                            try:
+                                num_chk = float(val_s.replace('%','').replace(' Mds FCFA','').replace(' M FCFA','').replace(' FCFA','').replace(' j','').replace(' ans','').replace(',','').strip())
+                                r1.font.color.rgb = RGBColor(0,100,0) if num_chk > 0 else RGBColor(180,0,0) if num_chk < 0 else RGBColor(80,80,80)
+                            except:
+                                r1.font.color.rgb = RGBColor(0,0,0)
+                            shd1 = OxmlElement('w:shd')
+                            shd1.set(qn('w:fill'), bg_color)
+                            shd1.set(qn('w:val'), 'clear')
+                            tr[1]._element.get_or_add_tcPr().append(shd1)
+
+                            # Col 2 : Interprétation
+                            tr[2].text = interp_s
+                            r2 = tr[2].paragraphs[0].runs[0] if tr[2].paragraphs[0].runs else tr[2].paragraphs[0].add_run(interp_s)
+                            r2.font.size = Pt(7.5)
+                            r2.font.color.rgb = RGBColor(40, 40, 40)
+                            shd2 = OxmlElement('w:shd')
+                            shd2.set(qn('w:fill'), 'FFFFFF')
+                            shd2.set(qn('w:val'), 'clear')
+                            tr[2]._element.get_or_add_tcPr().append(shd2)
+
+                        # Largeurs colonnes : 4cm | 3.5cm | 10cm
                         try:
-                            col_widths = [Cm(5.5), Cm(3.5), Cm(5.5), Cm(3.5)]
+                            col_widths = [Cm(4.0), Cm(3.5), Cm(10.0)]
                             for col_i, col in enumerate(tbl_fin.columns):
                                 for cell in col.cells:
                                     cell.width = col_widths[col_i]
-                        except:
-                            pass
+                        except: pass
 
                     doc.add_paragraph()
 
