@@ -5739,7 +5739,167 @@ RAPPELS IMPÉRATIFS:
             company_heading_run.font.color.rgb = RGBColor(0, 102, 204)
             
             doc.add_paragraph("─" * 80)
-            
+
+            # ══════════════════════════════════════════════════════════════════
+            # CARTE D'IDENTITÉ DE LA SOCIÉTÉ
+            # ══════════════════════════════════════════════════════════════════
+            sector_raw      = company_data.get('sector') or 'Non classifié'
+            cap_txt_raw     = company_data.get('capitalisation_txt', 'N/D')
+            cap_val_raw     = company_data.get('capitalisation')
+            cur_price_raw   = company_data.get('current_price')
+            evol_100d_raw   = company_data.get('price_evolution_100d')
+            hi_100d_raw     = company_data.get('highest_price_100d')
+            lo_100d_raw     = company_data.get('lowest_price_100d')
+            vol_moy_raw     = company_data.get('volume_moyen_jour')
+            vol_ann_raw     = company_data.get('vol_annualisee')
+            reco_raw        = company_data.get('recommendation', 'N/A')
+            risk_lv_raw     = company_data.get('risk_level', 'N/A')
+            conf_lv_raw     = company_data.get('confidence_level', 'N/A')
+            inv_lbl_raw     = company_data.get('investment_label', 'N/A')
+
+            # ── Couleur recommandation ─────────────────────────────────────────
+            reco_up = str(reco_raw).upper()
+            if   'ACHAT FORT' in reco_up: reco_col, reco_bg = RGBColor(0,120,0),  '00B050'
+            elif 'ACHAT'      in reco_up: reco_col, reco_bg = RGBColor(0,150,0),  'C6EFCE'
+            elif 'VENTE FORT' in reco_up: reco_col, reco_bg = RGBColor(180,0,0),  'FF0000'
+            elif 'VENTE'      in reco_up: reco_col, reco_bg = RGBColor(200,0,0),  'FFC7CE'
+            else:                         reco_col, reco_bg = RGBColor(100,100,0), 'FFEB9C'
+
+            # ── Couleur capitalisation ─────────────────────────────────────────
+            if cap_val_raw:
+                if cap_val_raw >= 500e9:   cap_label = "Grande cap (≥500 Mds)"
+                elif cap_val_raw >= 100e9: cap_label = "Moyenne cap (100-500 Mds)"
+                elif cap_val_raw >= 10e9:  cap_label = "Petite cap (10-100 Mds)"
+                else:                      cap_label = "Micro cap (<10 Mds)"
+            else:
+                cap_label = "N/D"
+
+            # ── Variation 100j couleur ─────────────────────────────────────────
+            if evol_100d_raw is not None:
+                evol_str = f"{evol_100d_raw:+.2f}%"
+                evol_col = RGBColor(0,120,0) if evol_100d_raw >= 0 else RGBColor(180,0,0)
+            else:
+                evol_str = "N/D"; evol_col = RGBColor(80,80,80)
+
+            # ── Construction du tableau carte d'identité ─────────────────────
+            id_card = doc.add_table(rows=1, cols=4)
+            id_card.style = 'Table Grid'
+
+            # Ligne 1 : en-têtes grandes catégories
+            hdr_id = id_card.rows[0].cells
+            id_sections = [
+                ('🏢 IDENTITÉ',       '1F4E79'),
+                ('💰 CAPITALISATION', '375623'),
+                ('📈 COURS & MARCHÉ', '833C00'),
+                ('🎯 RECOMMANDATION', reco_bg if len(reco_bg) == 6 else '595959'),
+            ]
+            for ci_id, (lbl_id, bg_id) in enumerate(id_sections):
+                c = hdr_id[ci_id]
+                c.text = lbl_id
+                r = c.paragraphs[0].runs[0] if c.paragraphs[0].runs else c.paragraphs[0].add_run(lbl_id)
+                r.bold = True; r.font.size = Pt(8.5); r.font.color.rgb = RGBColor(255,255,255)
+                shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), bg_id); shd.set(qn('w:val'), 'clear')
+                c._element.get_or_add_tcPr().append(shd)
+
+            # Ligne 2 : valeurs
+            tr_id = id_card.add_row().cells
+
+            # Col 0 : Identité
+            id_lines = [
+                ("Symbole",  symbol),
+                ("Société",  company_name[:40] + ('...' if len(company_name) > 40 else '')),
+                ("Secteur",  sector_raw),
+            ]
+            id_para = tr_id[0].paragraphs[0]
+            for li_lbl, li_val in id_lines:
+                if id_para.runs:
+                    id_para = tr_id[0].add_paragraph()
+                r_lbl = id_para.add_run(f"{li_lbl} : ")
+                r_lbl.bold = True; r_lbl.font.size = Pt(8)
+                r_lbl.font.color.rgb = RGBColor(50, 50, 80)
+                r_val = id_para.add_run(li_val)
+                r_val.font.size = Pt(8)
+                r_val.font.color.rgb = RGBColor(0, 0, 0)
+            shd0_id = OxmlElement('w:shd'); shd0_id.set(qn('w:fill'), 'DEEAF1'); shd0_id.set(qn('w:val'), 'clear')
+            tr_id[0]._element.get_or_add_tcPr().append(shd0_id)
+
+            # Col 1 : Capitalisation
+            cap_lines = [
+                ("Capitalisation", cap_txt_raw),
+                ("Catégorie",      cap_label),
+                ("Vol. moy/jour",  f"{vol_moy_raw:,.0f} titres" if vol_moy_raw else "N/D"),
+            ]
+            cap_para = tr_id[1].paragraphs[0]
+            for li_lbl, li_val in cap_lines:
+                if cap_para.runs:
+                    cap_para = tr_id[1].add_paragraph()
+                r_lbl = cap_para.add_run(f"{li_lbl} : ")
+                r_lbl.bold = True; r_lbl.font.size = Pt(8)
+                r_lbl.font.color.rgb = RGBColor(30, 70, 30)
+                r_val = cap_para.add_run(li_val)
+                r_val.font.size = Pt(8.5); r_val.bold = True
+                r_val.font.color.rgb = RGBColor(0, 100, 0)
+            shd1_id = OxmlElement('w:shd'); shd1_id.set(qn('w:fill'), 'E2EFDA'); shd1_id.set(qn('w:val'), 'clear')
+            tr_id[1]._element.get_or_add_tcPr().append(shd1_id)
+
+            # Col 2 : Cours & Marché
+            cours_lines = [
+                ("Cours actuel",   f"{cur_price_raw:,.0f} FCFA" if cur_price_raw else "N/D"),
+                ("Var. 100 jours", evol_str),
+                ("Plus haut 100j", f"{hi_100d_raw:,.0f} FCFA" if hi_100d_raw else "N/D"),
+                ("Plus bas 100j",  f"{lo_100d_raw:,.0f} FCFA"  if lo_100d_raw  else "N/D"),
+                ("Volatilité ann.", f"{vol_ann_raw:.1f}%" if vol_ann_raw else "N/D"),
+            ]
+            cours_para = tr_id[2].paragraphs[0]
+            for li_i, (li_lbl, li_val) in enumerate(cours_lines):
+                if cours_para.runs:
+                    cours_para = tr_id[2].add_paragraph()
+                r_lbl = cours_para.add_run(f"{li_lbl} : ")
+                r_lbl.bold = True; r_lbl.font.size = Pt(8)
+                r_lbl.font.color.rgb = RGBColor(80, 50, 0)
+                r_val = cours_para.add_run(li_val)
+                r_val.font.size = Pt(8.5)
+                if li_i == 1:  # Variation : colorer
+                    r_val.bold = True; r_val.font.color.rgb = evol_col
+                else:
+                    r_val.font.color.rgb = RGBColor(0, 0, 0)
+            shd2_id = OxmlElement('w:shd'); shd2_id.set(qn('w:fill'), 'FFF2CC'); shd2_id.set(qn('w:val'), 'clear')
+            tr_id[2]._element.get_or_add_tcPr().append(shd2_id)
+
+            # Col 3 : Recommandation
+            reco_lines = [
+                ("Recommandation", reco_raw),
+                ("Confiance",      conf_lv_raw),
+                ("Risque",         risk_lv_raw),
+                ("Horizon",        company_data.get('investment_horizon', 'Moyen terme')),
+                ("Score invest.",  inv_lbl_raw),
+            ]
+            reco_para = tr_id[3].paragraphs[0]
+            for li_i, (li_lbl, li_val) in enumerate(reco_lines):
+                if reco_para.runs:
+                    reco_para = tr_id[3].add_paragraph()
+                r_lbl = reco_para.add_run(f"{li_lbl} : ")
+                r_lbl.bold = True; r_lbl.font.size = Pt(8)
+                r_lbl.font.color.rgb = RGBColor(80, 0, 0)
+                r_val = reco_para.add_run(str(li_val))
+                r_val.font.size = Pt(8.5)
+                if li_i == 0:  # Recommandation en gros
+                    r_val.bold = True; r_val.font.size = Pt(9.5)
+                    r_val.font.color.rgb = reco_col
+                else:
+                    r_val.font.color.rgb = RGBColor(0, 0, 0)
+            shd3_id = OxmlElement('w:shd'); shd3_id.set(qn('w:fill'), 'FCE4D6'); shd3_id.set(qn('w:val'), 'clear')
+            tr_id[3]._element.get_or_add_tcPr().append(shd3_id)
+
+            # Largeurs colonnes : identité=4.5cm, capi=4cm, cours=4cm, reco=5cm
+            try:
+                widths_id = [Cm(4.5), Cm(4.0), Cm(4.0), Cm(5.0)]
+                for ci_id2, col_id in enumerate(id_card.columns):
+                    for cell_id in col_id.cells:
+                        cell_id.width = widths_id[ci_id2]
+            except: pass
+            doc.add_paragraph()
+
             # ✅ Tableau des métriques de risque (risk_details)
             risk_details_raw = company_data.get('risk_details', '{}')
             try:
@@ -7507,6 +7667,10 @@ RAPPELS IMPÉRATIFS:
                 'company_name': company_name,
                 'sector': row.get('sector'),
                 'current_price': float(row.get('price', 0)) if pd.notna(row.get('price')) else None,
+                'capitalisation':     capit      if capit is not None else None,
+                'capitalisation_txt': capit_txt,
+                'volume_moyen_jour':  float(hist_df['volume'].mean()) if not hist_df.empty and 'volume' in hist_df.columns else None,
+                'vol_annualisee':     vol_annualisee if 'vol_annualisee' in dir() else None,
                 'price_evolution_100d': price_evolution_100d,
                 'highest_price_100d': highest_price,
                 'lowest_price_100d': lowest_price,
