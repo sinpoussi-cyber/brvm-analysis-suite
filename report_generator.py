@@ -3200,136 +3200,280 @@ RAPPELS IMPÉRATIFS:
         
         return matrix
 
-    def _calculate_risk_score(self, data):
+    def _calculate_risk_score(self, data, market_indicators=None):
         """
-        ✅ V30: Calcul du score de risque chiffré (0-100) avec 5 critères
-        
-        Critères:
-        - Volatilité (30%)
-        - Beta vs marché (20%)  
-        - Liquidité (20%)
-        - Divergence signaux (15%)
-        - Performance historique (15%)
+        Score de risque chiffré (0-100) — 5 critères pondérés
+        ─────────────────────────────────────────────────────
+        1. Volatilité des prix        30 %  (CV = σ_prix / μ_prix)
+        2. Bêta réel vs BRVM Composite 20 %  (Cov / Var — régression OLS)
+        3. Liquidité (volume moyen)   20 %
+        4. Divergence des signaux     15 %  (CORRIGÉ : divergence = risque)
+        5. Stabilité des rendements   15 %  (σ des rendements journaliers)
         """
         import numpy as np
-        
+
         risk_score = 0
-        details = {}
-        
-        # 1. Volatilité (30%) - écart-type des prix / moyenne
-        hist_df = self._get_historical_data_100days(data.get('company_id'))
-        volatility = 0
-        
+        details    = {}
+
+        # ── Données historiques de la société ────────────────────────────────
+        hist_df   = self._get_historical_data_100days(data.get('company_id'))
+        vol_coeff = 0.0   # coefficient de variation (utilisé aussi pour bêta de secours)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITÈRE 1 — VOLATILITÉ DES PRIX (30 %)
+        # CV = écart-type(prix) / moyenne(prix)
+        # Mesure la dispersion relative des cours autour de leur moyenne.
+        # Un CV élevé = fortes oscillations = titre risqué.
+        # ═══════════════════════════════════════════════════════════════════
         if not hist_df.empty and len(hist_df) > 1:
-            prices = hist_df['price'].values
-            mean_price = np.mean(prices)
+            prices     = hist_df['price'].dropna().astype(float).values
+            mean_price = float(np.mean(prices))
             if mean_price > 0:
-                volatility = np.std(prices) / mean_price
-            
-            if volatility < 0.05:  # < 5%
+                vol_coeff = float(np.std(prices)) / mean_price
+
+            if vol_coeff < 0.05:
                 vol_score = 10
-                details['volatilite'] = f"{volatility*100:.1f}% (Faible)"
-            elif volatility < 0.15:  # 5-15%
+                vol_label = "Faible"
+            elif vol_coeff < 0.15:
                 vol_score = 30
-                details['volatilite'] = f"{volatility*100:.1f}% (Moyenne)"
-            else:  # > 15%
+                vol_label = "Moyenne"
+            else:
                 vol_score = 60
-                details['volatilite'] = f"{volatility*100:.1f}% (Élevée)"
-            
+                vol_label = "Élevée"
+
+            details['volatilite'] = (
+                f"{vol_coeff*100:.2f}% ({vol_label}) — "
+                f"μ={mean_price:,.0f} FCFA, σ={np.std(prices):,.0f} FCFA"
+            )
             risk_score += vol_score * 0.30
         else:
             details['volatilite'] = "Données insuffisantes"
-            risk_score += 30 * 0.30  # Score moyen par défaut
-        
-        # 2. Beta vs marché (20%) - approximation basée sur volatilité
-        beta = volatility / 0.10 if volatility > 0 else 1.0
-        
-        if beta < 0.8:
-            beta_score = 10
-            details['beta'] = f"{beta:.2f} (Défensif)"
-        elif beta < 1.2:
-            beta_score = 20
-            details['beta'] = f"{beta:.2f} (Neutre)"
-        else:
-            beta_score = 40
-            details['beta'] = f"{beta:.2f} (Agressif)"
-        
+            risk_score += 30 * 0.30   # score moyen par défaut
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITÈRE 2 — BÊTA RÉEL vs BRVM COMPOSITE (20 %)
+        #
+        # β = Cov(r_société, r_indice) / Var(r_indice)
+        #
+        # Méthode :
+        #   • Charger les rendements journaliers du titre (hist_df)
+        #   • Joindre avec les rendements journaliers du BRVM Composite
+        #     (new_market_indicators.brvm_composite) sur la date commune
+        #   • Calculer β par régression des moindres carrés (np.polyfit ou
+        #     formule directe Cov/Var)
+        #
+        # Interprétation :
+        #   β < 0.8  → titre défensif, moins volatile que le marché
+        #   β ≈ 1.0  → titre évolue comme le marché
+        #   β > 1.2  → titre amplifie les mouvements du marché (agressif)
+        #   β < 0    → titre contre-cyclique (rare sur la BRVM)
+        # ═══════════════════════════════════════════════════════════════════
+        beta       = None
+        beta_label = "N/D"
+        beta_score = 20   # neutre par défaut
+
+        try:
+            # Charger l'historique BRVM Composite sur 100 jours
+            query_idx = """
+                SELECT extraction_date::date AS trade_date,
+                       brvm_composite
+                FROM   new_market_indicators
+                WHERE  brvm_composite IS NOT NULL
+                  AND  brvm_composite > 0
+                  AND  extraction_date >= CURRENT_DATE - INTERVAL '150 days'
+                ORDER  BY extraction_date ASC
+                LIMIT  100;
+            """
+            import pandas as pd
+            df_idx = pd.read_sql(query_idx, self.db_conn)
+
+            if not hist_df.empty and not df_idx.empty:
+                # Préparer les rendements du titre
+                df_titre = hist_df[['trade_date', 'price']].copy()
+                df_titre['trade_date'] = pd.to_datetime(df_titre['trade_date']).dt.date
+                df_titre = df_titre.sort_values('trade_date').drop_duplicates('trade_date')
+                df_titre['r_titre'] = df_titre['price'].astype(float).pct_change()
+
+                # Préparer les rendements de l'indice
+                df_idx['trade_date'] = pd.to_datetime(df_idx['trade_date']).dt.date
+                df_idx = df_idx.sort_values('trade_date').drop_duplicates('trade_date')
+                df_idx['r_idx'] = df_idx['brvm_composite'].astype(float).pct_change()
+
+                # Jointure sur date commune
+                merged = pd.merge(
+                    df_titre[['trade_date','r_titre']],
+                    df_idx[['trade_date','r_idx']],
+                    on='trade_date', how='inner'
+                ).dropna()
+
+                if len(merged) >= 10:
+                    r_titre = merged['r_titre'].values
+                    r_idx   = merged['r_idx'].values
+
+                    # β = Cov(r_titre, r_idx) / Var(r_idx)
+                    cov_matrix = np.cov(r_titre, r_idx, ddof=1)
+                    cov_ti     = float(cov_matrix[0, 1])
+                    var_idx    = float(cov_matrix[1, 1])
+
+                    if var_idx > 1e-12:   # éviter division par zéro
+                        beta = cov_ti / var_idx
+
+                        # Corrélation R pour contexte
+                        corr = np.corrcoef(r_titre, r_idx)[0, 1]
+
+                        # Scoring du bêta
+                        if beta < 0:
+                            beta_score = 25
+                            beta_label = "Contre-cyclique"
+                        elif beta < 0.8:
+                            beta_score = 10
+                            beta_label = "Défensif"
+                        elif beta <= 1.2:
+                            beta_score = 20
+                            beta_label = "Neutre (suit le marché)"
+                        elif beta <= 1.8:
+                            beta_score = 35
+                            beta_label = "Agressif"
+                        else:
+                            beta_score = 50
+                            beta_label = "Très agressif"
+
+                        details['beta'] = (
+                            f"β={beta:.4f} ({beta_label}) — "
+                            f"Cov={cov_ti:.6f}, Var(idx)={var_idx:.6f}, "
+                            f"ρ={corr:.3f}, n={len(merged)} obs"
+                        )
+                    else:
+                        details['beta'] = "Var(indice)≈0 — indice sans mouvement sur la période"
+                else:
+                    # Pas assez de dates communes — fallback sur proxy volatilité
+                    beta_fallback = vol_coeff / 0.10 if vol_coeff > 0 else 1.0
+                    beta_score = 10 if beta_fallback < 0.8 else (20 if beta_fallback < 1.2 else 40)
+                    details['beta'] = (
+                        f"β≈{beta_fallback:.2f} (proxy, <10 obs communes) — "
+                        f"Données BRVM insuffisantes pour le bêta réel"
+                    )
+            else:
+                details['beta'] = "Données indisponibles (titre ou indice)"
+        except Exception as _e_beta:
+            # Fallback sans plantage
+            beta_fallback = vol_coeff / 0.10 if vol_coeff > 0 else 1.0
+            beta_score    = 10 if beta_fallback < 0.8 else (20 if beta_fallback < 1.2 else 40)
+            details['beta'] = f"β≈{beta_fallback:.2f} (proxy — erreur calcul : {str(_e_beta)[:60]})"
+
         risk_score += beta_score * 0.20
-        
-        # 3. Liquidité (20%) - volume moyen
-        # Calculer le volume moyen depuis historical_data
-        company_id = data.get('company_id')
-        avg_volume = 0
-        
-        if company_id and not hist_df.empty:
-            avg_volume = hist_df['volume'].mean() if 'volume' in hist_df.columns else 0
-        
-        if avg_volume > 10000:
-            liq_score = 5
-            details['liquidite'] = f"{avg_volume:.0f} titres/j (Excellente)"
-        elif avg_volume > 1000:
-            liq_score = 15
-            details['liquidite'] = f"{avg_volume:.0f} titres/j (Bonne)"
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITÈRE 3 — LIQUIDITÉ (20 %)
+        # Volume moyen journalier sur 100 jours.
+        # Un titre peu liquide est risqué : difficile à sortir en cas de
+        # mauvaise nouvelle. Sur la BRVM, beaucoup de titres ont <500 titres/j.
+        # ═══════════════════════════════════════════════════════════════════
+        avg_volume = 0.0
+        if not hist_df.empty and 'volume' in hist_df.columns:
+            avg_volume = float(hist_df['volume'].dropna().mean())
+
+        if avg_volume > 10_000:
+            liq_score  = 5
+            liq_label  = "Excellente"
+        elif avg_volume > 1_000:
+            liq_score  = 15
+            liq_label  = "Bonne"
+        elif avg_volume > 100:
+            liq_score  = 30
+            liq_label  = "Faible"
         elif avg_volume > 0:
-            liq_score = 40
-            details['liquidite'] = f"{avg_volume:.0f} titres/j (Faible - RISQUE)"
+            liq_score  = 45
+            liq_label  = "Très faible"
         else:
-            liq_score = 30
-            details['liquidite'] = "Non calculable"
-        
+            liq_score  = 30
+            liq_label  = "Non calculable"
+
+        details['liquidite'] = f"{avg_volume:,.0f} titres/j ({liq_label})"
         risk_score += liq_score * 0.20
-        
-        # 4. Divergence signaux (15%)
-        # Calculer le score de divergence
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITÈRE 4 — DIVERGENCE DES SIGNAUX TECHNIQUES (15 %)  [CORRIGÉ]
+        #
+        # LOGIQUE CORRIGÉE :
+        #   • Divergence forte (signaux contradictoires) = incertitude = RISQUE ÉLEVÉ
+        #   • Convergence forte (tous dans le même sens) = clarté = RISQUE FAIBLE
+        #
+        # Score de divergence = min(buy, sell) / max(1, total_signaux)
+        #   → 0.0 = convergence totale (pas de risque sur ce critère)
+        #   → 0.5 = parfaite divergence (50% Achat / 50% Vente) = risque max
+        # ═══════════════════════════════════════════════════════════════════
         tech_signals = []
-        for key in ['mm_decision', 'bollinger_decision', 'macd_decision', 'rsi_decision', 'stochastic_decision']:
+        for key in ['mm_decision', 'bollinger_decision', 'macd_decision',
+                    'rsi_decision', 'stochastic_decision']:
             val = data.get(key)
-            if val:
+            if val and str(val).strip():
                 tech_signals.append(str(val))
-        
-        buy_signals = [s for s in tech_signals if 'Achat' in s]
-        sell_signals = [s for s in tech_signals if 'Vente' in s]
-        divergence_score = abs(len(buy_signals) - len(sell_signals))
-        
-        div_score = min(divergence_score * 5, 30)
-        details['divergence'] = f"{divergence_score}/{len(tech_signals)} signaux"
-        
+
+        n_sig  = len(tech_signals)
+        n_buy  = sum(1 for s in tech_signals if 'Achat' in s)
+        n_sell = sum(1 for s in tech_signals if 'Vente' in s)
+
+        # Taux de divergence entre 0 (convergence totale) et 1 (max opposition)
+        if n_sig > 0:
+            div_rate  = min(n_buy, n_sell) / n_sig   # 0→convergent, 0.5→parfaitement partagé
+            div_score = int(div_rate * 60)            # 0–30 points (max 60 × 0.5)
+        else:
+            div_rate  = 0.0
+            div_score = 15   # score moyen si pas de signaux
+
+        details['divergence'] = (
+            f"Achat={n_buy} / Vente={n_sell} / Total={n_sig} "
+            f"— taux divergence={div_rate*100:.0f}% "
+            f"({'Convergent ✅' if div_rate < 0.2 else 'Mixte ⚠️' if div_rate < 0.4 else 'Très divergent ❌'})"
+        )
         risk_score += div_score * 0.15
-        
-        # 5. Performance historique (15%) - stabilité des rendements
-        if not hist_df.empty and len(hist_df) > 1:
-            returns = hist_df['price'].pct_change().dropna()
-            if len(returns) > 0:
-                perf_volatility = returns.std() * 100
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITÈRE 5 — STABILITÉ DES RENDEMENTS (15 %)
+        # σ des rendements journaliers × 100 (= volatilité journalière %)
+        # Différent de la volatilité des prix (critère 1) :
+        #   • Critère 1 = CV des niveaux de prix (dispersion long terme)
+        #   • Critère 5 = σ des variations quotidiennes (chocs journaliers)
+        # ═══════════════════════════════════════════════════════════════════
+        if not hist_df.empty and len(hist_df) > 2:
+            returns          = hist_df['price'].astype(float).pct_change().dropna()
+            daily_vol        = float(returns.std() * 100) if len(returns) > 0 else 10.0
+            annualized_vol   = daily_vol * (252 ** 0.5)
+
+            if daily_vol < 1.0:
+                perf_score  = 5
+                stab_label  = "Très stable"
+            elif daily_vol < 3.0:
+                perf_score  = 10
+                stab_label  = "Stable"
+            elif daily_vol < 5.0:
+                perf_score  = 20
+                stab_label  = "Modérée"
             else:
-                perf_volatility = 10
-            
-            if perf_volatility < 5:
-                perf_score = 5
-                details['stabilite'] = f"{perf_volatility:.1f}% (Excellente)"
-            elif perf_volatility < 15:
-                perf_score = 15
-                details['stabilite'] = f"{perf_volatility:.1f}% (Moyenne)"
-            else:
-                perf_score = 30
-                details['stabilite'] = f"{perf_volatility:.1f}% (Instable)"
-            
+                perf_score  = 35
+                stab_label  = "Instable"
+
+            details['stabilite'] = (
+                f"σ_j={daily_vol:.2f}%/j ({stab_label}) — "
+                f"Vol. annualisée≈{annualized_vol:.1f}%"
+            )
             risk_score += perf_score * 0.15
         else:
             details['stabilite'] = "Données insuffisantes"
             risk_score += 15 * 0.15
-        
-        # Classification finale
-        if risk_score < 20:
-            risk_level = "Faible"
-        elif risk_score < 50:
-            risk_level = "Moyen"
-        else:
-            risk_level = "Élevé"
-        
+
+        # ── Classification finale du risque ─────────────────────────────────
+        risk_score = max(0.0, min(100.0, risk_score))
+
+        if   risk_score < 20: risk_level = "Faible"
+        elif risk_score < 45: risk_level = "Moyen"
+        elif risk_score < 70: risk_level = "Élevé"
+        else:                 risk_level = "Très élevé"
+
         return {
-            'score': round(risk_score, 2),
-            'level': risk_level,
+            'score':   round(risk_score, 2),
+            'level':   risk_level,
             'details': details
         }
 
@@ -5900,41 +6044,171 @@ RAPPELS IMPÉRATIFS:
             except: pass
             doc.add_paragraph()
 
-            # ✅ Tableau des métriques de risque (risk_details)
+            # ══════════════════════════════════════════════════════════════
+            # TABLEAU DU SCORE DE RISQUE DÉTAILLÉ
+            # ══════════════════════════════════════════════════════════════
             risk_details_raw = company_data.get('risk_details', '{}')
             try:
                 risk_details = json.loads(risk_details_raw) if isinstance(risk_details_raw, str) else risk_details_raw
             except Exception:
                 risk_details = {}
-            
+
+            risk_score_val  = company_data.get('risk_score', 0)
+            risk_level_val  = company_data.get('risk_level', 'N/A')
+
+            # Couleur selon niveau de risque
+            if   risk_level_val == "Faible":     rs_bg, rs_txt = 'C6EFCE', RGBColor(0, 100, 0)
+            elif risk_level_val == "Moyen":       rs_bg, rs_txt = 'FFEB9C', RGBColor(130, 90, 0)
+            elif risk_level_val == "Élevé":       rs_bg, rs_txt = 'FFC7CE', RGBColor(180, 0, 0)
+            elif risk_level_val == "Très élevé":  rs_bg, rs_txt = 'FF0000', RGBColor(255, 255, 255)
+            else:                                 rs_bg, rs_txt = 'F2F2F2', RGBColor(80, 80, 80)
+
+            # ── Titre de la section ──────────────────────────────────────
+            risk_hdg_p = doc.add_paragraph()
+            risk_hdg_p.paragraph_format.space_before = Pt(6)
+            risk_hdg_p.paragraph_format.space_after  = Pt(2)
+            rh1 = risk_hdg_p.add_run("⚠️ SCORE DE RISQUE — ")
+            rh1.bold = True; rh1.font.size = Pt(10); rh1.font.color.rgb = RGBColor(0, 51, 102)
+            rh2 = risk_hdg_p.add_run(f"{risk_score_val:.1f}/100 → {risk_level_val}")
+            rh2.bold = True; rh2.font.size = Pt(11); rh2.font.color.rgb = rs_txt
+
+            # ── Barre de progression visuelle ───────────────────────────
+            bar_p = doc.add_paragraph()
+            bar_p.paragraph_format.space_before = Pt(2)
+            bar_p.paragraph_format.space_after  = Pt(4)
+            filled = int(risk_score_val / 5)   # 20 blocs max
+            empty  = 20 - filled
+            bar_r  = bar_p.add_run("█" * filled + "░" * empty + f"  {risk_score_val:.1f}/100")
+            bar_r.font.size  = Pt(9)
+            bar_r.font.color.rgb = rs_txt
+            bar_r.font.name  = 'Courier New'
+
+            # ── Tableau 5 critères ───────────────────────────────────────
             if risk_details:
-                risk_label_map = {
-                    'volatilite': 'Volatilité',
-                    'beta': 'Bêta',
-                    'liquidite': 'Liquidité',
-                    'divergence': 'Divergence signaux',
-                    'stabilite': 'Stabilité des rendements'
+                CRITERIA_META = {
+                    'volatilite': {
+                        'label':  '📊 Volatilité des prix (30%)',
+                        'formule':'CV = σ(prix) / μ(prix)',
+                        'interp': {
+                            'Faible':  ('C6EFCE', '✅ Faible dispersion — titre stable'),
+                            'Moyenne': ('FFEB9C', '⚠️ Dispersion modérée'),
+                            'Élevée':  ('FFC7CE', '❌ Forte dispersion — titre très volatile'),
+                        }
+                    },
+                    'beta': {
+                        'label':  '📐 Bêta vs BRVM Composite (20%)',
+                        'formule':'β = Cov(r_titre, r_indice) / Var(r_indice)',
+                        'interp': {
+                            'Défensif':             ('C6EFCE', '✅ β<0.8 — titre amplifie moins que le marché'),
+                            'Neutre':               ('DEEAF1', '🔵 β≈1.0 — suit le marché'),
+                            'Neutre (suit le marché)': ('DEEAF1', '🔵 β≈1.0 — suit le marché'),
+                            'Agressif':             ('FFEB9C', '⚠️ β>1.2 — amplifie les hausses ET les baisses'),
+                            'Très agressif':        ('FFC7CE', '❌ β>1.8 — très sensible aux chocs de marché'),
+                            'Contre-cyclique':      ('E2EFDA', 'ℹ️ β<0 — évolue en sens inverse du marché'),
+                        }
+                    },
+                    'liquidite': {
+                        'label':  '💧 Liquidité du titre (20%)',
+                        'formule':'Volume moyen journalier (100 jours)',
+                        'interp': {
+                            'Excellente': ('C6EFCE', '✅ >10 000 titres/j — sortie rapide possible'),
+                            'Bonne':      ('DEEAF1', '🔵 1 000–10 000 titres/j — liquidité correcte'),
+                            'Faible':     ('FFEB9C', '⚠️ 100–1 000 titres/j — risque de blocage'),
+                            'Très faible':('FFC7CE', '❌ <100 titres/j — titre quasi-illiquide'),
+                        }
+                    },
+                    'divergence': {
+                        'label':  '🔀 Divergence signaux techniques (15%)',
+                        'formule':'min(Achat,Vente) / Total signaux',
+                        'interp': {
+                            'Convergent': ('C6EFCE', '✅ Signaux alignés — clarté directionnelle'),
+                            'Mixte':      ('FFEB9C', '⚠️ Signaux mixtes — incertitude modérée'),
+                            'Très divergent': ('FFC7CE', '❌ Signaux contradictoires — forte incertitude'),
+                        }
+                    },
+                    'stabilite': {
+                        'label':  '📉 Stabilité des rendements (15%)',
+                        'formule':'σ des rendements journaliers × 100',
+                        'interp': {
+                            'Très stable': ('C6EFCE', '✅ <1%/j — rendements très réguliers'),
+                            'Stable':      ('DEEAF1', '🔵 1-3%/j — quelques variations normales'),
+                            'Modérée':     ('FFEB9C', '⚠️ 3-5%/j — pics occasionnels'),
+                            'Instable':    ('FFC7CE', '❌ >5%/j — forte agitation journalière'),
+                        }
+                    },
                 }
-                risk_tbl = doc.add_table(rows=1, cols=len(risk_details))
-                risk_tbl.style = 'Light Grid Accent 1'
-                hdr_row = risk_tbl.rows[0].cells
+
+                # Construction du tableau 4 colonnes
+                risk_tbl = doc.add_table(rows=1, cols=4)
+                risk_tbl.style = 'Table Grid'
+                hdr_r = risk_tbl.rows[0].cells
+                for ci_r, ht_r in enumerate(['Critère (poids)', 'Valeur mesurée', 'Formule', 'Interprétation']):
+                    hdr_r[ci_r].text = ht_r
+                    rhr = hdr_r[ci_r].paragraphs[0].runs[0] if hdr_r[ci_r].paragraphs[0].runs else hdr_r[ci_r].paragraphs[0].add_run(ht_r)
+                    rhr.bold = True; rhr.font.size = Pt(8); rhr.font.color.rgb = RGBColor(255,255,255)
+                    shd_rh = OxmlElement('w:shd'); shd_rh.set(qn('w:fill'), '243F60'); shd_rh.set(qn('w:val'), 'clear')
+                    hdr_r[ci_r]._element.get_or_add_tcPr().append(shd_rh)
+
                 metrics_order = ['volatilite', 'beta', 'liquidite', 'divergence', 'stabilite']
-                ordered_keys = [k for k in metrics_order if k in risk_details] + \
-                               [k for k in risk_details if k not in metrics_order]
-                for col_i, key in enumerate(ordered_keys[:len(hdr_row)]):
-                    shd = OxmlElement('w:shd')
-                    shd.set(qn('w:fill'), 'BDD7EE')
-                    hdr_row[col_i]._element.get_or_add_tcPr().append(shd)
-                    hdr_row[col_i].text = risk_label_map.get(key, key.capitalize())
-                    hdr_row[col_i].paragraphs[0].runs[0].font.bold = True
-                    hdr_row[col_i].paragraphs[0].runs[0].font.size = Pt(8)
-                
-                val_row = risk_tbl.add_row().cells
-                for col_i, key in enumerate(ordered_keys[:len(val_row)]):
-                    val_row[col_i].text = str(risk_details.get(key, '—'))
-                    val_row[col_i].paragraphs[0].runs[0].font.size = Pt(8)
-                
-                doc.add_paragraph()
+                for key in metrics_order:
+                    raw_val = risk_details.get(key, '—')
+                    if not raw_val or raw_val == '—':
+                        continue
+                    meta = CRITERIA_META.get(key, {})
+                    lbl_col   = meta.get('label', key.capitalize())
+                    formule   = meta.get('formule', '—')
+                    raw_str   = str(raw_val)
+
+                    # Déduire le niveau pour choisir la couleur
+                    interp_map = meta.get('interp', {})
+                    row_bg  = 'FFFFFF'
+                    interp_txt = raw_str
+                    for kw, (bg, txt) in interp_map.items():
+                        if kw.lower() in raw_str.lower():
+                            row_bg    = bg
+                            interp_txt = txt
+                            break
+
+                    tr_r = risk_tbl.add_row().cells
+
+                    # Col 0 : Critère
+                    tr_r[0].text = lbl_col
+                    r0r = tr_r[0].paragraphs[0].runs[0] if tr_r[0].paragraphs[0].runs else tr_r[0].paragraphs[0].add_run(lbl_col)
+                    r0r.bold = True; r0r.font.size = Pt(7.5)
+                    shd_r0 = OxmlElement('w:shd'); shd_r0.set(qn('w:fill'), 'EEF2F7'); shd_r0.set(qn('w:val'), 'clear')
+                    tr_r[0]._element.get_or_add_tcPr().append(shd_r0)
+
+                    # Col 1 : Valeur mesurée
+                    tr_r[1].text = raw_str
+                    r1r = tr_r[1].paragraphs[0].runs[0] if tr_r[1].paragraphs[0].runs else tr_r[1].paragraphs[0].add_run(raw_str)
+                    r1r.font.size = Pt(7.5); r1r.bold = True
+                    shd_r1 = OxmlElement('w:shd'); shd_r1.set(qn('w:fill'), row_bg); shd_r1.set(qn('w:val'), 'clear')
+                    tr_r[1]._element.get_or_add_tcPr().append(shd_r1)
+
+                    # Col 2 : Formule
+                    tr_r[2].text = formule
+                    r2r = tr_r[2].paragraphs[0].runs[0] if tr_r[2].paragraphs[0].runs else tr_r[2].paragraphs[0].add_run(formule)
+                    r2r.font.size = Pt(7); r2r.font.italic = True
+                    r2r.font.color.rgb = RGBColor(80, 80, 120)
+                    shd_r2 = OxmlElement('w:shd'); shd_r2.set(qn('w:fill'), 'F7F7F7'); shd_r2.set(qn('w:val'), 'clear')
+                    tr_r[2]._element.get_or_add_tcPr().append(shd_r2)
+
+                    # Col 3 : Interprétation
+                    tr_r[3].text = interp_txt
+                    r3r = tr_r[3].paragraphs[0].runs[0] if tr_r[3].paragraphs[0].runs else tr_r[3].paragraphs[0].add_run(interp_txt)
+                    r3r.font.size = Pt(7.5)
+                    shd_r3 = OxmlElement('w:shd'); shd_r3.set(qn('w:fill'), row_bg); shd_r3.set(qn('w:val'), 'clear')
+                    tr_r[3]._element.get_or_add_tcPr().append(shd_r3)
+
+                # Largeurs : 5cm | 5.5cm | 3.5cm | 3.5cm
+                try:
+                    wds_r = [Cm(5.0), Cm(5.5), Cm(3.5), Cm(3.5)]
+                    for cir2, colr in enumerate(risk_tbl.columns):
+                        for cellr in colr.cells:
+                            cellr.width = wds_r[cir2]
+                except: pass
+
+            doc.add_paragraph()
 
             # ── Feux tricolores indicateurs techniques ──────────────────────────
             tech_indicators = [
