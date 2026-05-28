@@ -5002,6 +5002,348 @@ RAPPELS IMPÉRATIFS:
         doc.add_page_break()
 
         # ══════════════════════════════════════════════════════════════════════
+        # RÉCAPITULATIF DES RISQUES — TOUTES LES SOCIÉTÉS
+        # ══════════════════════════════════════════════════════════════════════
+        doc.add_heading('🛡️ RÉCAPITULATIF DES RISQUES — TOUTES LES SOCIÉTÉS', level=1)
+        risk_intro = doc.add_paragraph()
+        risk_intro.add_run(
+            "Synthèse comparative des scores de risque calculés pour chaque société. "
+            "Le score de risque (0–100) agrège 5 critères : volatilité des prix (30%), "
+            "bêta réel vs BRVM Composite (20%), liquidité du titre (20%), "
+            "divergence des signaux techniques (15%) et stabilité des rendements (15%). "
+            "Plus le score est élevé, plus le titre est risqué."
+        ).font.size = Pt(9)
+        risk_intro.runs[0].font.italic = True
+        risk_intro.runs[0].font.color.rgb = RGBColor(80, 80, 80)
+        doc.add_paragraph()
+
+        # ── Collecter les données de risque de toutes les sociétés ─────────────
+        risk_recap_data = []
+        for sym, cdata in all_company_data.items():
+            rs = cdata.get('risk_score', 0) or 0
+            rl = cdata.get('risk_level', 'N/D') or 'N/D'
+            rd = cdata.get('risk_details', {}) or {}
+            if isinstance(rd, str):
+                try: rd = json.loads(rd)
+                except: rd = {}
+            risk_recap_data.append({
+                'symbol':   sym,
+                'name':     cdata.get('company_name', sym),
+                'sector':   cdata.get('sector', 'N/D') or 'N/D',
+                'score':    float(rs),
+                'level':    rl,
+                'details':  rd,
+                'cur_price':cdata.get('current_price'),
+                'reco':     cdata.get('recommendation', 'N/A'),
+            })
+
+        # Trier par score décroissant (plus risqué en premier)
+        risk_recap_data.sort(key=lambda x: x['score'], reverse=True)
+
+        # ── 1. SYNTHÈSE STATISTIQUE ────────────────────────────────────────────
+        doc.add_heading("📊 1. Vue d'ensemble des niveaux de risque", level=2)
+
+        n_total   = len(risk_recap_data)
+        n_faible  = sum(1 for r in risk_recap_data if r['level'] == 'Faible')
+        n_moyen   = sum(1 for r in risk_recap_data if r['level'] == 'Moyen')
+        n_eleve   = sum(1 for r in risk_recap_data if r['level'] == 'Élevé')
+        n_t_eleve = sum(1 for r in risk_recap_data if r['level'] == 'Très élevé')
+        scores_v  = [r['score'] for r in risk_recap_data if r['score'] > 0]
+        score_moy = sum(scores_v) / len(scores_v) if scores_v else 0
+        score_med = sorted(scores_v)[len(scores_v)//2] if scores_v else 0
+        score_max = max(scores_v) if scores_v else 0
+        score_min = min(scores_v) if scores_v else 0
+
+        # Tableau statistiques
+        tbl_stat = doc.add_table(rows=2, cols=6)
+        tbl_stat.style = 'Table Grid'
+        stat_hdrs = ['Faible', 'Moyen', 'Élevé', 'Très élevé', 'Score moyen', 'Score médian']
+        stat_vals = [
+            f"{n_faible} société(s) ({n_faible/n_total*100:.0f}%)",
+            f"{n_moyen} société(s) ({n_moyen/n_total*100:.0f}%)",
+            f"{n_eleve} société(s) ({n_eleve/n_total*100:.0f}%)",
+            f"{n_t_eleve} société(s) ({n_t_eleve/n_total*100:.0f}%)",
+            f"{score_moy:.1f}/100",
+            f"{score_med:.1f}/100",
+        ]
+        stat_bgs  = ['C6EFCE', 'FFEB9C', 'FFC7CE', 'FF0000', 'DEEAF1', 'DEEAF1']
+        stat_txts = [
+            RGBColor(0,100,0), RGBColor(130,90,0), RGBColor(180,0,0),
+            RGBColor(255,255,255), RGBColor(0,0,0), RGBColor(0,0,0)
+        ]
+        # En-têtes
+        hdr_s = tbl_stat.rows[0].cells
+        for ci, ht in enumerate(stat_hdrs):
+            hdr_s[ci].text = ht
+            rh = hdr_s[ci].paragraphs[0].runs[0] if hdr_s[ci].paragraphs[0].runs else hdr_s[ci].paragraphs[0].add_run(ht)
+            rh.bold = True; rh.font.size = Pt(8.5); rh.font.color.rgb = RGBColor(255,255,255)
+            shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), '1F4E79'); shd.set(qn('w:val'), 'clear')
+            hdr_s[ci]._element.get_or_add_tcPr().append(shd)
+        # Valeurs
+        val_s = tbl_stat.rows[1].cells
+        for ci, (sv, bg, tc) in enumerate(zip(stat_vals, stat_bgs, stat_txts)):
+            val_s[ci].text = sv
+            rv = val_s[ci].paragraphs[0].runs[0] if val_s[ci].paragraphs[0].runs else val_s[ci].paragraphs[0].add_run(sv)
+            rv.bold = True; rv.font.size = Pt(9.5); rv.font.color.rgb = tc
+            shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), bg); shd.set(qn('w:val'), 'clear')
+            val_s[ci]._element.get_or_add_tcPr().append(shd)
+        try:
+            for ci, col in enumerate(tbl_stat.columns):
+                for cell in col.cells:
+                    cell.width = Cm(2.9)
+        except: pass
+        doc.add_paragraph()
+
+        # Commentaire narratif global
+        if score_moy < 25:
+            mrk_risk_txt = (f"✅ Le marché BRVM présente globalement un profil de risque FAIBLE "
+                           f"(score moyen {score_moy:.1f}/100). La majorité des titres ont des volatilités "
+                           f"maîtrisées et une bonne convergence des signaux techniques.")
+            mrk_risk_col = RGBColor(0, 100, 0)
+        elif score_moy < 50:
+            mrk_risk_txt = (f"⚠️ Le marché BRVM présente un profil de risque MODÉRÉ "
+                           f"(score moyen {score_moy:.1f}/100). Certains titres montrent des signaux "
+                           f"de volatilité ou de liquidité préoccupants. Sélectivité recommandée.")
+            mrk_risk_col = RGBColor(130, 90, 0)
+        else:
+            mrk_risk_txt = (f"❌ Le marché BRVM présente un profil de risque ÉLEVÉ "
+                           f"(score moyen {score_moy:.1f}/100). Vigilance accrue conseillée — "
+                           f"privilégier les titres à faible score de risque et forte liquidité.")
+            mrk_risk_col = RGBColor(180, 0, 0)
+        comm_rk = doc.add_paragraph()
+        comm_rk_r = comm_rk.add_run(mrk_risk_txt)
+        comm_rk_r.font.size = Pt(9); comm_rk_r.font.italic = True
+        comm_rk_r.font.color.rgb = mrk_risk_col
+        doc.add_paragraph()
+
+        # ── 2. TOP 5 PLUS RISQUÉES ─────────────────────────────────────────────
+        doc.add_heading("🔴 2. Top 5 — Sociétés les plus risquées", level=2)
+        top5_risk = risk_recap_data[:5]
+
+        note_r5 = doc.add_paragraph()
+        note_r5.add_run(
+            "Les 5 sociétés avec le score de risque le plus élevé. "
+            "Un score élevé indique une combinaison de forte volatilité, faible liquidité, "
+            "bêta élevé ou signaux techniques contradictoires."
+        ).font.size = Pt(8.5)
+        note_r5.runs[0].font.italic = True
+        doc.add_paragraph()
+
+        tbl_top5r = doc.add_table(rows=1, cols=7)
+        tbl_top5r.style = 'Table Grid'
+        hdrs_t5r = ['Rang', 'Symbole', 'Société', 'Secteur', 'Score', 'Niveau', 'Point critique']
+        hdr_t5r  = tbl_top5r.rows[0].cells
+        for ci, ht in enumerate(hdrs_t5r):
+            hdr_t5r[ci].text = ht
+            rh = hdr_t5r[ci].paragraphs[0].runs[0] if hdr_t5r[ci].paragraphs[0].runs else hdr_t5r[ci].paragraphs[0].add_run(ht)
+            rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+            shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), '843C0C'); shd.set(qn('w:val'), 'clear')
+            hdr_t5r[ci]._element.get_or_add_tcPr().append(shd)
+
+        for rang, r in enumerate(top5_risk, 1):
+            # Identifier le critère qui contribue le plus au risque
+            rd = r['details']
+            crit_max = "N/D"
+            for kw, label in [
+                ('Élevée', '📊 Volatilité élevée'),
+                ('Très faible', '💧 Liquidité très faible'),
+                ('Très agressif', '📐 Bêta très agressif'),
+                ('Agressif', '📐 Bêta agressif'),
+                ('Très divergent', '🔀 Signaux très divergents'),
+                ('Instable', '📉 Rendements instables'),
+                ('Faible', '💧 Liquidité faible'),
+            ]:
+                for det_val in rd.values():
+                    if kw.lower() in str(det_val).lower():
+                        crit_max = label; break
+                if crit_max != "N/D": break
+
+            bg_lv = 'FFC7CE' if r['level'] in ('Élevé','Très élevé') else 'FFEB9C'
+            tr_r = tbl_top5r.add_row().cells
+            data_r = [
+                f"#{rang}", r['symbol'],
+                r['name'][:28]+('…' if len(r['name'])>28 else ''),
+                r['sector'][:18],
+                f"{r['score']:.1f}/100",
+                r['level'], crit_max
+            ]
+            for ci, val in enumerate(data_r):
+                tr_r[ci].text = val
+                rc = tr_r[ci].paragraphs[0].runs[0] if tr_r[ci].paragraphs[0].runs else tr_r[ci].paragraphs[0].add_run(val)
+                rc.font.size = Pt(8)
+                if ci == 4: rc.bold = True; rc.font.color.rgb = RGBColor(180,0,0)
+                if ci == 0: rc.bold = True
+                bg = bg_lv if ci in (4, 5) else 'FFFFFF'
+                shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), bg); shd.set(qn('w:val'), 'clear')
+                tr_r[ci]._element.get_or_add_tcPr().append(shd)
+        try:
+            widths_r = [Cm(1.0), Cm(1.5), Cm(4.0), Cm(3.0), Cm(1.8), Cm(2.0), Cm(4.2)]
+            for ci, col in enumerate(tbl_top5r.columns):
+                for cell in col.cells: cell.width = widths_r[ci]
+        except: pass
+
+        # Commentaires bullet pour les top 5
+        doc.add_paragraph()
+        for rang, r in enumerate(top5_risk, 1):
+            rd   = r['details']
+            vol  = rd.get('volatilite', 'N/D')
+            beta = rd.get('beta', 'N/D')
+            liq  = rd.get('liquidite', 'N/D')
+            div  = rd.get('divergence', 'N/D')
+            sta  = rd.get('stabilite', 'N/D')
+            p = doc.add_paragraph(style='List Bullet')
+            r1 = p.add_run(f"#{rang} {r['symbol']} ({r['score']:.1f}/100 — {r['level']}) : ")
+            r1.bold = True; r1.font.size = Pt(9); r1.font.color.rgb = RGBColor(180,0,0)
+            r2 = p.add_run(
+                f"Volatilité={vol.split('(')[1].split(')')[0] if '(' in vol else vol} | "
+                f"Bêta={beta.split('(')[1].split(')')[0] if '(' in beta else beta} | "
+                f"Liquidité={liq.split('(')[1].split(')')[0] if '(' in liq else liq} | "
+                f"Divergence signaux={div.split('—')[1].strip() if '—' in div else div} | "
+                f"Stabilité={sta.split('(')[1].split(')')[0] if '(' in sta else sta}"
+            )
+            r2.font.size = Pt(8.5)
+        doc.add_paragraph()
+
+        # ── 3. TOP 5 MOINS RISQUÉES ────────────────────────────────────────────
+        doc.add_heading("🟢 3. Top 5 — Sociétés les moins risquées", level=2)
+        top5_safe = risk_recap_data[-5:][::-1]   # 5 derniers (score le plus bas), du plus faible au 5ème
+
+        note_s5 = doc.add_paragraph()
+        note_s5.add_run(
+            "Les 5 sociétés avec le score de risque le plus bas. "
+            "Un score faible reflète une volatilité modérée, une bonne liquidité, "
+            "un bêta défensif et des signaux techniques convergents."
+        ).font.size = Pt(8.5)
+        note_s5.runs[0].font.italic = True
+        doc.add_paragraph()
+
+        tbl_top5s = doc.add_table(rows=1, cols=7)
+        tbl_top5s.style = 'Table Grid'
+        hdr_t5s = tbl_top5s.rows[0].cells
+        for ci, ht in enumerate(hdrs_t5r):
+            hdr_t5s[ci].text = ht
+            rh = hdr_t5s[ci].paragraphs[0].runs[0] if hdr_t5s[ci].paragraphs[0].runs else hdr_t5s[ci].paragraphs[0].add_run(ht)
+            rh.bold = True; rh.font.size = Pt(8); rh.font.color.rgb = RGBColor(255,255,255)
+            shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), '375623'); shd.set(qn('w:val'), 'clear')
+            hdr_t5s[ci]._element.get_or_add_tcPr().append(shd)
+
+        for rang, r in enumerate(top5_safe, 1):
+            rd = r['details']
+            atout = "N/D"
+            for kw, label in [
+                ('Faible', '📊 Volatilité faible'),
+                ('Défensif', '📐 Bêta défensif'),
+                ('Excellente', '💧 Excellente liquidité'),
+                ('Convergent', '🔀 Signaux convergents'),
+                ('Très stable', '📉 Rendements très stables'),
+                ('Stable', '📉 Rendements stables'),
+            ]:
+                for det_val in rd.values():
+                    if kw.lower() in str(det_val).lower():
+                        atout = label; break
+                if atout != "N/D": break
+
+            tr_s = tbl_top5s.add_row().cells
+            data_s = [
+                f"#{rang}", r['symbol'],
+                r['name'][:28]+('…' if len(r['name'])>28 else ''),
+                r['sector'][:18],
+                f"{r['score']:.1f}/100",
+                r['level'], atout
+            ]
+            for ci, val in enumerate(data_s):
+                tr_s[ci].text = val
+                rc = tr_s[ci].paragraphs[0].runs[0] if tr_s[ci].paragraphs[0].runs else tr_s[ci].paragraphs[0].add_run(val)
+                rc.font.size = Pt(8)
+                if ci == 4: rc.bold = True; rc.font.color.rgb = RGBColor(0,120,0)
+                if ci == 0: rc.bold = True
+                bg = 'C6EFCE' if ci in (4, 5) else 'FFFFFF'
+                shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), bg); shd.set(qn('w:val'), 'clear')
+                tr_s[ci]._element.get_or_add_tcPr().append(shd)
+        try:
+            for ci, col in enumerate(tbl_top5s.columns):
+                for cell in col.cells: cell.width = widths_r[ci]
+        except: pass
+        doc.add_paragraph()
+
+        # ── 4. TABLEAU COMPLET — toutes les sociétés ───────────────────────────
+        doc.add_heading("📋 4. Tableau complet — Toutes les sociétés classées par risque", level=2)
+        note_all_r = doc.add_paragraph()
+        note_all_r.add_run(
+            "Toutes les sociétés triées par score de risque décroissant, "
+            "avec le détail des 5 critères. Fond 🔴 = Élevé/Très élevé | 🟡 = Moyen | 🟢 = Faible."
+        ).font.size = Pt(8.5)
+        note_all_r.runs[0].font.italic = True
+        doc.add_paragraph()
+
+        # Tableau 9 colonnes : Symb | Société | Secteur | Score | Niveau | Volatilité | Bêta | Liquidité | Div.+Stab.
+        tbl_all_r = doc.add_table(rows=1, cols=9)
+        tbl_all_r.style = 'Table Grid'
+        hdrs_ar = ['Sym.', 'Société', 'Secteur', 'Score', 'Niveau',
+                   'Volatilité', 'Bêta', 'Liquidité', 'Divergence / Stabilité']
+        hdr_ar = tbl_all_r.rows[0].cells
+        for ci, ht in enumerate(hdrs_ar):
+            hdr_ar[ci].text = ht
+            rh = hdr_ar[ci].paragraphs[0].runs[0] if hdr_ar[ci].paragraphs[0].runs else hdr_ar[ci].paragraphs[0].add_run(ht)
+            rh.bold = True; rh.font.size = Pt(7.5); rh.font.color.rgb = RGBColor(255,255,255)
+            shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), '243F60'); shd.set(qn('w:val'), 'clear')
+            hdr_ar[ci]._element.get_or_add_tcPr().append(shd)
+
+        for r in risk_recap_data:
+            rd  = r['details']
+            lv  = r['level']
+            if   lv == 'Faible':     row_bg, txt_col = 'C6EFCE', RGBColor(0,100,0)
+            elif lv == 'Moyen':      row_bg, txt_col = 'FFEB9C', RGBColor(130,90,0)
+            elif lv == 'Élevé':      row_bg, txt_col = 'FFC7CE', RGBColor(180,0,0)
+            else:                    row_bg, txt_col = 'FF7070', RGBColor(120,0,0)
+
+            # Extraire valeurs courtes de chaque critère
+            def _short(raw, n=20):
+                s = str(raw)
+                # Prendre juste la valeur avant " —" ou entre parenthèses
+                if '(' in s and ')' in s:
+                    inner = s[s.index('(')+1:s.index(')')]
+                    return inner[:n]
+                if ' —' in s: return s.split(' —')[0][:n]
+                return s[:n]
+
+            vol_s  = _short(rd.get('volatilite','N/D'))
+            bet_s  = _short(rd.get('beta','N/D'))
+            liq_s  = _short(rd.get('liquidite','N/D'))
+            div_s  = _short(rd.get('divergence','N/D'), 25)
+            sta_s  = _short(rd.get('stabilite','N/D'))
+
+            tr_ar = tbl_all_r.add_row().cells
+            vals_ar = [
+                r['symbol'],
+                r['name'][:22]+('…' if len(r['name'])>22 else ''),
+                r['sector'][:16],
+                f"{r['score']:.1f}",
+                lv,
+                vol_s, bet_s, liq_s,
+                f"{div_s} / {sta_s}"
+            ]
+            for ci, val in enumerate(vals_ar):
+                tr_ar[ci].text = val
+                rc = tr_ar[ci].paragraphs[0].runs[0] if tr_ar[ci].paragraphs[0].runs else tr_ar[ci].paragraphs[0].add_run(val)
+                rc.font.size = Pt(7.5)
+                if ci == 3: rc.bold = True; rc.font.color.rgb = txt_col
+                if ci == 4: rc.bold = True; rc.font.color.rgb = txt_col
+                bg = row_bg if ci in (3,4) else 'FFFFFF'
+                shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), bg); shd.set(qn('w:val'), 'clear')
+                tr_ar[ci]._element.get_or_add_tcPr().append(shd)
+
+        try:
+            widths_ar = [Cm(1.3), Cm(3.5), Cm(2.5), Cm(1.3), Cm(1.8),
+                         Cm(2.0), Cm(2.0), Cm(2.0), Cm(3.1)]
+            for ci, col in enumerate(tbl_all_r.columns):
+                for cell in col.cells: cell.width = widths_ar[ci]
+        except: pass
+        doc.add_paragraph()
+
+        doc.add_page_break()
+
+        # ══════════════════════════════════════════════════════════════════════
         # SYNTHÈSE RÉCAPITULATIVE DES PRÉDICTIONS IA
         # ══════════════════════════════════════════════════════════════════════
         doc.add_heading('🔮 SYNTHÈSE RÉCAPITULATIVE DES PRÉDICTIONS IA (J+1 → J+10)', level=1)
