@@ -2,7 +2,7 @@ name: BRVM Analysis Suite — Multi-AI
 
 on:
   schedule:
-    - cron: '0 20 * * 1-5'   # Lundi-Vendredi à 20h00 UTC
+    - cron: '0 4 * * *'
   workflow_dispatch:          # Lancement manuel possible
 
 jobs:
