@@ -1321,13 +1321,21 @@ RÈGLES IMPÉRATIVES :
             if df is None or df.empty:
                 return "- Données insuffisantes pour cette zone."
 
-            pos = [r for _, r in df.iterrows()
-                   if 'positif' in str(r.get('impact_brvm','')).lower()
-                   or 'positif' in str(r.get('sentiment','')).lower()]
-            neg = [r for _, r in df.iterrows()
-                   if 'negatif' in str(r.get('impact_brvm','')).lower()
-                   or 'negatif' in str(r.get('sentiment','')).lower()]
-            neu = [r for _, r in df.iterrows() if r not in pos and r not in neg]
+            pos_idx, neg_idx = [], []
+            pos, neg = [], []
+            for idx, r in df.iterrows():
+                is_pos = 'positif' in str(r.get('impact_brvm','')).lower() \
+                         or 'positif' in str(r.get('sentiment','')).lower()
+                is_neg = 'negatif' in str(r.get('impact_brvm','')).lower() \
+                         or 'negatif' in str(r.get('sentiment','')).lower()
+                if is_pos:
+                    pos_idx.append(idx)
+                    pos.append(r)
+                if is_neg:
+                    neg_idx.append(idx)
+                    neg.append(r)
+            excluded_idx = set(pos_idx) | set(neg_idx)
+            neu = [r for idx, r in df.iterrows() if idx not in excluded_idx]
 
             lines = []
 
@@ -8350,8 +8358,10 @@ RAPPELS IMPÉRATIFS:
 
 
 if __name__ == "__main__":
+    import sys
     try:
         report_generator = BRVMReportGenerator()
         report_generator.generate_all_reports([])
     except Exception as e:
         logging.critical(f"❌ Erreur: {e}", exc_info=True)
+        sys.exit(1)
