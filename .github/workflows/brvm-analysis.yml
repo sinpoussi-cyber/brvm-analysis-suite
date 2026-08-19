@@ -8,7 +8,7 @@ on:
 jobs:
   brvm-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90       # Abaissé : plus besoin des 180 min
 
     steps:
       # ──────────────────────────────────────────────────────────────────────
@@ -22,42 +22,24 @@ jobs:
           cache: 'pip'
 
       - name: 📦 Installation dépendances
+        timeout-minutes: 20
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🌐 Installation Chrome / Chromedriver
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y wget unzip
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
-
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
-          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
-
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0/linux64/chromedriver-linux64.zip" \
-               -O chromedriver.zip || \
-          ( wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}" -O ver.txt && \
-            wget -q "https://chromedriver.storage.googleapis.com/$(cat ver.txt)/chromedriver_linux64.zip" -O chromedriver.zip )
-
-          unzip -q chromedriver.zip
-          if [ -d "chromedriver-linux64" ]; then
-            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
-          else
-            sudo mv chromedriver /usr/local/bin/
-          fi
-          sudo chmod +x /usr/local/bin/chromedriver
-          rm -rf chromedriver-linux64 chromedriver.zip ver.txt google-chrome-stable_current_amd64.deb
-
-          echo "✅ Chrome      : $(google-chrome --version)"
-          echo "✅ Chromedriver: $(chromedriver --version)"
+      # ──────────────────────────────────────────────────────────────────────
+      # ⚠️ L'ancienne étape « Installation Chrome / Chromedriver » a été SUPPRIMÉE.
+      # Aucun script du dépôt n'utilise Selenium/Chrome : la collecte se fait en
+      # requests + BeautifulSoup + pdfplumber. Cette étape restait bloquée sur
+      # « sudo apt-get update -qq » et faisait expirer le job au bout de 3 h.
+      # ──────────────────────────────────────────────────────────────────────
 
       # ──────────────────────────────────────────────────────────────────────
       # ÉTAPE 0 — Collecte actualités macro
       # Non bloquante : une erreur ici n'interrompt pas le pipeline
       # ──────────────────────────────────────────────────────────────────────
       - name: 🌍 ÉTAPE 0 — Collecte Macro (RSS + IA)
+        timeout-minutes: 15
         env:
           DB_NAME:           ${{ secrets.DB_NAME }}
           DB_USER:           ${{ secrets.DB_USER }}
@@ -77,6 +59,7 @@ jobs:
       # ÉTAPE 1 — Collecte données de marché BRVM
       # ──────────────────────────────────────────────────────────────────────
       - name: 📊 ÉTAPE 1 — Collecte Données BRVM
+        timeout-minutes: 20
         env:
           DB_NAME:     ${{ secrets.DB_NAME }}
           DB_USER:     ${{ secrets.DB_USER }}
@@ -92,6 +75,7 @@ jobs:
       # ÉTAPE 2 — Analyse technique
       # ──────────────────────────────────────────────────────────────────────
       - name: 📈 ÉTAPE 2 — Analyse Technique
+        timeout-minutes: 15
         env:
           DB_NAME:     ${{ secrets.DB_NAME }}
           DB_USER:     ${{ secrets.DB_USER }}
@@ -107,6 +91,7 @@ jobs:
       # ÉTAPE 3 — Prédictions ML (GRU / LSTM / BiGRU)
       # ──────────────────────────────────────────────────────────────────────
       - name: 🔮 ÉTAPE 3 — Prédictions ML
+        timeout-minutes: 20
         env:
           DB_NAME:     ${{ secrets.DB_NAME }}
           DB_USER:     ${{ secrets.DB_USER }}
@@ -123,6 +108,7 @@ jobs:
       # Rotation : DeepSeek → Gemini → Mistral → Claude
       # ──────────────────────────────────────────────────────────────────────
       - name: 📄 ÉTAPE 4 — Analyse Fondamentale Multi-AI
+        timeout-minutes: 30
         env:
           DB_NAME:           ${{ secrets.DB_NAME }}
           DB_USER:           ${{ secrets.DB_USER }}
@@ -144,6 +130,7 @@ jobs:
       # Analyse macro (3 types x 5 zones) + graphiques + prédictions
       # ──────────────────────────────────────────────────────────────────────
       - name: 📝 ÉTAPE 5 — Génération Rapport Word Multi-AI
+        timeout-minutes: 20
         env:
           DB_NAME:                  ${{ secrets.DB_NAME }}
           DB_USER:                  ${{ secrets.DB_USER }}
