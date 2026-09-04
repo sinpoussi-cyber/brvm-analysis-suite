@@ -325,22 +325,33 @@ class BRVMAnalyzer:
         return all_reports
 
     def _extract_text_from_pdf(self, pdf_url):
-        """Extrait le texte d'un PDF — utilise pypdf (successeur de PyPDF2)"""
+        """
+        Extrait le texte d'un PDF — utilise pypdf (successeur de PyPDF2).
+
+        Retourne un tuple (texte_ou_None, pdf_bytes_ou_None) :
+        - texte_ou_None : texte extrait (None si vide/illisible/erreur)
+        - pdf_bytes_ou_None : contenu brut du PDF déjà téléchargé, pour permettre
+          un fallback vision (lecture directe du PDF scanné) sans re-télécharger.
+        """
+        pdf_bytes = None
         try:
-            logging.info(f"      📥 Téléchargement PDF: {pdf_url[:80]}...")
+            # ✅ FIX: on logue l'URL complète (plus de troncature à 80 caractères) —
+            # les URLs tronquées empêchaient de retrouver/retélécharger les PDF en échec.
+            logging.info(f"      📥 Téléchargement PDF: {pdf_url}")
             response = self.session.get(pdf_url, timeout=30, verify=False)
             
             if response.status_code != 200:
-                logging.warning(f"      ⚠️ HTTP {response.status_code} pour le PDF")
-                return None
+                logging.warning(f"      ⚠️ HTTP {response.status_code} pour le PDF — {pdf_url}")
+                return None, None
             
             content_type = response.headers.get('Content-Type', '')
             if 'html' in content_type.lower():
-                logging.warning(f"      ⚠️ Le serveur a renvoyé du HTML au lieu d'un PDF (redirection login?)")
-                return None
+                logging.warning(f"      ⚠️ Le serveur a renvoyé du HTML au lieu d'un PDF (redirection login?) — {pdf_url}")
+                return None, None
             
-            pdf_file = io.BytesIO(response.content)
-            logging.info(f"      📦 PDF téléchargé: {len(response.content)/1024:.0f} Ko")
+            pdf_bytes = response.content
+            pdf_file = io.BytesIO(pdf_bytes)
+            logging.info(f"      📦 PDF téléchargé: {len(pdf_bytes)/1024:.0f} Ko")
             
             text = ""
             # ✅ Fix: utiliser pypdf (pas PyPDF2), sans context manager (API de base)
@@ -371,11 +382,11 @@ class BRVMAnalyzer:
                     logging.info(f"      ✅ Fallback pdfplumber réussi")
                 except Exception as e2:
                     logging.error(f"      ❌ Fallback pdfplumber aussi échoué: {e2}")
-                    return None
+                    return None, pdf_bytes
             
             if not text.strip():
-                logging.warning(f"      ⚠️ PDF extrait mais vide (PDF scanné/image?)")
-                return None
+                logging.warning(f"      ⚠️ PDF extrait mais vide (PDF scanné/image?) — {pdf_url}")
+                return None, pdf_bytes
             
             # Nettoyage
             text = re.sub(r'\s+', ' ', text).strip()
@@ -386,11 +397,11 @@ class BRVMAnalyzer:
                 text = text[:50000] + "... [TRONQUÉ]"
             
             logging.info(f"      ✓ Texte extrait: {len(text)} caractères")
-            return text
+            return text, pdf_bytes
             
         except Exception as e:
-            logging.error(f"      ❌ Erreur extraction PDF: {e}")
-            return None
+            logging.error(f"      ❌ Erreur extraction PDF: {e} — {pdf_url}")
+            return None, pdf_bytes
 
     def _analyze_with_deepseek(self, text_content, symbol, report_title):
         """Analyse avec DeepSeek API"""
@@ -596,6 +607,86 @@ IMPORTANT:
             logging.error(f"      ❌ Mistral exception: {e}")
             return None
 
+    def _analyze_scanned_pdf_with_gemini_vision(self, pdf_bytes, symbol, report_title):
+        """
+        Fallback pour les PDF scannés/image dont pypdf/pdfplumber n'extraient aucun texte
+        (cause de la quasi-totalité des '⚠️ PDF vide ou illisible' observés en pratique).
+
+        Au lieu de dépendre d'un texte pré-extrait, on envoie le PDF brut à Gemini,
+        qui sait lire nativement les pages d'un document (texte, tableaux, mise en page) —
+        pas besoin de pdf2image/poppler ni d'un moteur OCR séparé.
+        """
+        if not GEMINI_API_KEY or not pdf_bytes:
+            return None
+
+        import base64
+        pdf_b64 = base64.b64encode(pdf_bytes).decode('utf-8')
+
+        prompt = f"""Tu es un analyste financier expert spécialisé dans la BRVM (Bourse Régionale des Valeurs Mobilières). Ce document est un PDF scanné/image (états financiers ou rapport d'activité) de la société {symbol} ({report_title}) : lis directement les pages (texte, tableaux) et analyse ce rapport.
+
+CONSIGNES:
+Fournis une analyse structurée en français couvrant:
+
+1. CHIFFRE D'AFFAIRES ET ÉVOLUTION
+- Montant du chiffre d'affaires
+- Évolution par rapport à l'année précédente
+- Analyse des tendances
+
+2. RÉSULTAT NET ET RENTABILITÉ
+- Résultat net de l'exercice
+- Marge nette
+- Évolution de la rentabilité
+
+3. POLITIQUE DE DIVIDENDE
+- Dividende par action proposé
+- Taux de distribution
+- Évolution dans le temps
+
+4. PERSPECTIVES ET RECOMMANDATIONS
+- Principaux risques identifiés
+- Opportunités de développement
+- Recommandation finale (ACHAT, CONSERVER, VENTE) avec justification
+
+IMPORTANT:
+- Sois précis avec les chiffres lus dans le document
+- Mentionne les dates et périodes concernées
+- Si une information manque ou une page est illisible, indique-le clairement
+- Rédige en français professionnel et concis (max 800 mots)"""
+
+        url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+
+        data = {
+            "contents": [{
+                "parts": [
+                    {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}},
+                    {"text": prompt}
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 2000
+            }
+        }
+
+        try:
+            response = requests.post(url, json=data, timeout=180)
+
+            if response.status_code == 200:
+                result = response.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    analysis = result['candidates'][0]['content']['parts'][0]['text']
+                    self.request_count['gemini'] += 1
+                    return analysis
+            else:
+                logging.warning(f"      ⚠️ Gemini Vision erreur {response.status_code}")
+                if hasattr(response, 'text'):
+                    logging.warning(f"      {response.text[:200]}")
+            return None
+
+        except Exception as e:
+            logging.error(f"      ❌ Gemini Vision exception: {e}")
+            return None
+
     def _analyze_pdf_with_multi_ai(self, company_id, symbol, report):
         """Analyse un rapport avec rotation automatique des API"""
         
@@ -608,46 +699,57 @@ IMPORTANT:
         
         logging.info(f"    📄 Nouvelle analyse: {report['titre'][:80]}...")
         
-        # Extraire le texte du PDF
-        text_content = self._extract_text_from_pdf(url)
+        # Extraire le texte du PDF (récupère aussi les octets bruts pour le fallback vision)
+        text_content, pdf_bytes = self._extract_text_from_pdf(url)
         
-        if not text_content or len(text_content) < 100:
-            logging.warning(f"    ⚠️  PDF vide ou illisible pour {symbol} — {report['titre'][:60]}")
-            return False
-        
-        logging.info(f"    📝 {len(text_content)} caractères extraits, envoi à l'IA...")
-        
-        # ROTATION DES API: DeepSeek → Gemini → Mistral
         analysis = None
         provider_used = None
         
-        # Tentative 1: DeepSeek
-        if DEEPSEEK_API_KEY:
-            logging.info("      🤖 Tentative DeepSeek...")
-            analysis = self._analyze_with_deepseek(text_content, symbol, report['titre'])
+        if not text_content or len(text_content) < 100:
+            logging.warning(f"    ⚠️  PDF vide ou illisible (texte) pour {symbol} — {report['titre'][:60]} — {url}")
+
+            # ✅ FIX: avant d'abandonner, on tente une lecture directe du PDF par
+            # Gemini (vision/document natif) — couvre le cas très fréquent des PDF
+            # scannés/image où pypdf et pdfplumber ne trouvent aucun texte.
+            logging.info("      🖼️  Tentative fallback vision (Gemini, lecture directe du PDF scanné)...")
+            analysis = self._analyze_scanned_pdf_with_gemini_vision(pdf_bytes, symbol, report['titre'])
             if analysis:
-                provider_used = "deepseek"
-                logging.info("      ✅ DeepSeek: Succès!")
+                provider_used = "gemini-vision"
+                logging.info("      ✅ Gemini Vision: Succès sur PDF scanné!")
+            else:
+                logging.warning(f"    ⚠️  Fallback vision aussi en échec pour {symbol} — {report['titre'][:60]}")
+                return False
+        else:
+            logging.info(f"    📝 {len(text_content)} caractères extraits, envoi à l'IA...")
+
+            # ROTATION DES API: DeepSeek → Gemini → Mistral
+            # Tentative 1: DeepSeek
+            if DEEPSEEK_API_KEY:
+                logging.info("      🤖 Tentative DeepSeek...")
+                analysis = self._analyze_with_deepseek(text_content, symbol, report['titre'])
+                if analysis:
+                    provider_used = "deepseek"
+                    logging.info("      ✅ DeepSeek: Succès!")
+            
+            # Tentative 2: Gemini
+            if not analysis and GEMINI_API_KEY:
+                logging.info("      🤖 Tentative Gemini...")
+                analysis = self._analyze_with_gemini(text_content, symbol, report['titre'])
+                if analysis:
+                    provider_used = "gemini"
+                    logging.info("      ✅ Gemini: Succès!")
+            
+            # Tentative 3: Mistral
+            if not analysis and MISTRAL_API_KEY:
+                logging.info("      🤖 Tentative Mistral...")
+                analysis = self._analyze_with_mistral(text_content, symbol, report['titre'])
+                if analysis:
+                    provider_used = "mistral"
+                    logging.info("      ✅ Mistral: Succès!")
         
-        # Tentative 2: Gemini
-        if not analysis and GEMINI_API_KEY:
-            logging.info("      🤖 Tentative Gemini...")
-            analysis = self._analyze_with_gemini(text_content, symbol, report['titre'])
-            if analysis:
-                provider_used = "gemini"
-                logging.info("      ✅ Gemini: Succès!")
-        
-        # Tentative 3: Mistral
-        if not analysis and MISTRAL_API_KEY:
-            logging.info("      🤖 Tentative Mistral...")
-            analysis = self._analyze_with_mistral(text_content, symbol, report['titre'])
-            if analysis:
-                provider_used = "mistral"
-                logging.info("      ✅ Mistral: Succès!")
-        
-        # Si aucune API n'a fonctionné
+        # Si aucune API n'a fonctionné (texte ou vision)
         if not analysis:
-            logging.error(f"    ❌ Échec des 3 API pour {symbol} — {report['titre'][:60]}")
+            logging.error(f"    ❌ Échec de toutes les API (dont vision) pour {symbol} — {report['titre'][:60]}")
             fallback_text = f"Analyse automatique indisponible. Rapport: {report['titre']}"
             self._save_to_db(company_id, report, fallback_text, "fallback")
             return False
