@@ -747,7 +747,7 @@ Réponds UNIQUEMENT en JSON valide :
             return None
         key = self.gemini_keys[self._gemini_idx % len(self.gemini_keys)]
         self._gemini_idx += 1
-        url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+        url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={key}"
         data = {"contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600}}
         resp = requests.post(url, json=data, timeout=30)
