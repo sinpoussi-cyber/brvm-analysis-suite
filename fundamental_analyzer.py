@@ -34,8 +34,13 @@ DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+# ⚠️ gemini-1.5-flash a été retiré par Google (404 sur generateContent) — la
+# génération suivante (2.0) est elle-même en cours de retrait mi-2026.
+# gemini-3.5-flash est le modèle flash stable actuel sans date de retrait
+# annoncée (vérifié sept. 2026). GEMINI_API_URL est dérivée de GEMINI_MODEL
+# pour ne plus jamais avoir à mettre à jour deux constantes en même temps.
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
 MISTRAL_MODEL = "mistral-large-latest"
