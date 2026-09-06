@@ -3,6 +3,7 @@
 # ==============================================================================
 
 import re
+import math
 import time
 import logging
 import os
@@ -110,42 +111,78 @@ def clean_and_convert_numeric(value):
         return None
 
 
-def clean_capitalisation(raw_value):
+def clean_capitalisation(raw_value, reference=None):
     """
-    Nettoie et valide la capitalisation boursière BRVM.
+    Nettoie la capitalisation boursière BRVM et neutralise un éventuel artefact
+    d'extraction de type « facteur 10 » (chiffre parasite / décalage de virgule).
 
-    Le PDF BRVM affiche parfois des espaces mal placés qui, une fois
-    supprimés, donnent un nombre 10x trop grand (ex: '153 849...' au
-    lieu de '15 384...').
+    ⚠️ IMPORTANT — indépendance vis-à-vis du NIVEAU du marché.
+    L'ancienne version validait contre une fourchette de valeurs ABSOLUES
+    (10 000–20 000 Mds). C'est précisément ce qui a cassé : la vraie
+    capitalisation a dépassé 20 000 Mds (≈ 21 155 Mds), donc le plafond la
+    divisait par 10. Une fourchette absolue REDEVIENDRAIT fausse si le marché
+    montait à 30 000 Mds ou redescendait sous 10 000 Mds.
 
-    Règle de validation : la capitalisation BRVM Actions est comprise
-    entre 10 000 et 20 000 milliards FCFA (1e13 à 2e13 FCFA).
-    Si la valeur dépasse 2e13 → on divise par 10 jusqu'à rentrer dans la plage.
+    Ici, on ne juge donc PAS la valeur dans l'absolu :
+      1. Si une référence est fournie (dernière capitalisation connue en base),
+         on raisonne en RELATIF. Une capitalisation ne peut pas être multipliée
+         ou divisée par ~10 d'une séance à l'autre : une dérive normale reste
+         dans une bande ×0,2 à ×5. Hors de cette bande, si le rapport est proche
+         d'une puissance de 10 (×10, ×100, ÷10…), c'est un artefact de parsing →
+         on recale par cette puissance de 10. Sinon on CONSERVE la valeur et on
+         se contente d'alerter (jamais de mutilation silencieuse).
+         → Ce test fonctionne à l'identique que le marché vaille 5 000, 10 000,
+           30 000 ou 100 000 Mds.
+      2. Sans référence (tout premier enregistrement), on n'applique qu'une
+         enveloppe de bon sens VOLONTAIREMENT très large (1 000 à 1 000 000 Mds),
+         choisie pour ne jamais rejeter un niveau de marché plausible.
     """
     val = clean_and_convert_numeric(raw_value)
-    if val is None:
+    if val is None or val <= 0:
         return None
 
-    CAP_MAX_FCFA = 2e13   # 20 000 milliards FCFA — plafond réaliste BRVM
-    CAP_MIN_FCFA = 5e12   # 5 000 milliards FCFA  — plancher réaliste BRVM
-
     original = val
+
+    # ── Cas nominal : garde-fou RELATIF basé sur la dernière valeur connue ──
+    if reference and reference > 0:
+        ratio = val / reference
+        # Dérive de séance plausible (même un mouvement violent reste < ×5) :
+        if 0.2 <= ratio <= 5:
+            return val
+        # Sinon : est-ce un net facteur 10^k (artefact d'extraction) ?
+        k = round(math.log10(ratio))          # ex. ratio≈10 → k=1 ; ratio≈0.1 → k=-1
+        if k != 0 and abs(k) <= 4:
+            corrected = val / (10 ** k)
+            if 0.2 <= (corrected / reference) <= 5:
+                logging.warning(
+                    f"⚠️  Capitalisation recalée (artefact ×10^{k}) : "
+                    f"{original:.3e} → {corrected:.3e} FCFA [réf. {reference:.3e}]"
+                )
+                return corrected
+        # Ni dérive plausible, ni facteur 10 net → on garde, on alerte.
+        logging.warning(
+            f"⚠️  Capitalisation atypique conservée : {val:.3e} FCFA "
+            f"(réf. {reference:.3e}, ratio {ratio:.2f}) — à vérifier dans le BOC"
+        )
+        return val
+
+    # ── Démarrage à froid : enveloppe très large, indépendante du niveau réel ──
+    CAP_PLANCHER = 1e12   #     1 000 Mds FCFA — sous tout niveau BRVM réaliste
+    CAP_PLAFOND  = 1e15   # 1 000 000 Mds FCFA — au-dessus de tout niveau réaliste
     iterations = 0
-    while val > CAP_MAX_FCFA and iterations < 3:
-        val = val / 10
+    while val > CAP_PLAFOND and iterations < 4:   # uniquement si ABSURDEMENT grand
+        val /= 10
         iterations += 1
-
-    if iterations > 0:
+    if iterations:
         logging.warning(
-            f"⚠️  Capitalisation corrigée : {original:.3e} → {val:.3e} FCFA "
-            f"(÷10 appliqué {iterations} fois)"
+            f"⚠️  Capitalisation manifestement trop grande, recalée : "
+            f"{original:.3e} → {val:.3e} FCFA"
         )
-
-    if val < CAP_MIN_FCFA:
+    if val < CAP_PLANCHER:
         logging.warning(
-            f"⚠️  Capitalisation suspecte (trop faible) : {val:.3e} FCFA — vérifier le PDF"
+            f"⚠️  Capitalisation anormalement faible : {val:.3e} FCFA — "
+            f"valeur conservée, à vérifier dans le BOC"
         )
-
     return val
 
 
@@ -187,6 +224,44 @@ def extract_data_from_pdf(pdf_url):
         return []
 
 
+# ── Motifs numériques « colonne unique » ─────────────────────────────────────
+# But : capturer EXACTEMENT un nombre, sans mordre sur la colonne voisine
+# (« Evol. Jour », « Variation », etc.). Le point commun des bugs corrigés était
+# un motif glouton [\d\s,\.]+ qui avalait le(s) chiffre(s) de tête de la colonne
+# suivante. Ces deux motifs s'arrêtent au bon endroit :
+#   - un groupe de tête de 1 à 3 chiffres, puis des triplets «\s\d{3}» (format FR)
+#     → un « 0 » ou « 12 » isolé de la colonne voisine n'est PAS un triplet.
+_NUM_INDICE = r"\d{1,3}(?:\s\d{3})*(?:,\d+)?"        # ex. 548,60 / 1 048,60
+_NUM_ENTIER = r"\d{1,3}(?:\s\d{3})+(?:,\d+)?|\d{4,}(?:,\d+)?"  # ex. 21 154 750 023 272 / 1 523 004
+
+
+def get_last_capitalisation(conn, before_date=None):
+    """
+    Dernière capitalisation VALIDE connue en base, servant de référence de
+    magnitude à clean_capitalisation(). Renvoie None si aucune (démarrage à froid).
+    """
+    try:
+        with conn.cursor() as cur:
+            if before_date is not None:
+                cur.execute(
+                    "SELECT capitalisation_globale FROM new_market_indicators "
+                    "WHERE capitalisation_globale IS NOT NULL AND extraction_date < %s "
+                    "ORDER BY extraction_date DESC LIMIT 1;",
+                    (before_date,),
+                )
+            else:
+                cur.execute(
+                    "SELECT capitalisation_globale FROM new_market_indicators "
+                    "WHERE capitalisation_globale IS NOT NULL "
+                    "ORDER BY extraction_date DESC LIMIT 1;"
+                )
+            row = cur.fetchone()
+            return float(row[0]) if row and row[0] is not None else None
+    except Exception as e:
+        logging.warning(f"⚠️  Référence capitalisation indisponible : {e}")
+        return None
+
+
 def extract_market_indicators(pdf_text: str) -> dict:
     """
     ✅ VERSION CORRIGÉE - Extraction des 6 indicateurs avec regex robustes
@@ -194,7 +269,7 @@ def extract_market_indicators(pdf_text: str) -> dict:
     indicators = {}
     
     # 🔧 FIX 1: BRVM COMPOSITE (fonctionne déjà bien)
-    match = re.search(r"BRVM\s+COMPOSITE\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    match = re.search(rf"BRVM\s+COMPOSITE\s+({_NUM_INDICE})", pdf_text, re.IGNORECASE)
     if match:
         raw = match.group(1).strip()
         indicators["brvm_composite"] = re.sub(r'\s+', '', raw).replace(',', '.')
@@ -204,7 +279,7 @@ def extract_market_indicators(pdf_text: str) -> dict:
         logging.warning("   ⚠️ BRVM Composite NON trouvé")
     
     # 🔧 FIX 2: BRVM 30 (fonctionne déjà bien)
-    match = re.search(r"BRVM\s+30\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    match = re.search(rf"BRVM\s+30\s+({_NUM_INDICE})", pdf_text, re.IGNORECASE)
     if match:
         raw = match.group(1).strip()
         indicators["brvm_30"] = re.sub(r'\s+', '', raw).replace(',', '.')
@@ -214,7 +289,7 @@ def extract_market_indicators(pdf_text: str) -> dict:
         logging.warning("   ⚠️ BRVM 30 NON trouvé")
     
     # 🔧 FIX 3: BRVM PRESTIGE (CORRECTION MAJEURE - avec espace OU tiret)
-    match = re.search(r"BRVM[\s\-]+PRESTIGE\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    match = re.search(rf"BRVM[\s\-]+PRESTIGE\s+({_NUM_INDICE})", pdf_text, re.IGNORECASE)
     if match:
         raw = match.group(1).strip()
         indicators["brvm_prestige"] = re.sub(r'\s+', '', raw).replace(',', '.')
@@ -226,7 +301,12 @@ def extract_market_indicators(pdf_text: str) -> dict:
     # 🔧 FIX 4: CAPITALISATION GLOBALE (CORRECTION MAJEURE)
     # Recherche dans tableau "Actions" -> ligne "Capitalisation boursière"
     match = re.search(
-        r"Capitalisation\s+boursière\s+\(FCFA\)\s*\(Actions\s*[&\+]?\s*Droits\)\s+([\d\s]+)",
+        # Capture UNIQUEMENT la colonne "Niveau" : entier au format français
+        # (groupes de 3 séparés par des espaces) OU long bloc de chiffres.
+        # ⚠️ L'ancien motif [\d\s]+ mordait sur le "0" de la colonne "Evol. Jour"
+        # ("0,45 %"), ajoutant un chiffre parasite → nombre 10x trop grand.
+        rf"Capitalisation\s+boursière\s+\(FCFA\)\s*\(Actions\s*[&\+]?\s*Droits\)\s+"
+        rf"({_NUM_ENTIER})",
         pdf_text,
         re.IGNORECASE | re.DOTALL
     )
@@ -239,7 +319,8 @@ def extract_market_indicators(pdf_text: str) -> dict:
     else:
         # Alternative: chercher juste après "Actions"
         match_alt = re.search(
-            r"Actions\s+Niveau\s+Evol\.\s+Jour\s+Capitalisation\s+boursière[^\d]+([\d\s]+)",
+            rf"Actions\s+Niveau\s+Evol\.\s+Jour\s+Capitalisation\s+boursière[^\d]+"
+            rf"({_NUM_ENTIER})",
             pdf_text,
             re.IGNORECASE | re.DOTALL
         )
@@ -253,7 +334,7 @@ def extract_market_indicators(pdf_text: str) -> dict:
             logging.warning("   ⚠️ Capitalisation Globale NON trouvée")
     
     # 🔧 FIX 5: VOLUME MOYEN ANNUEL (fonctionne déjà bien)
-    match = re.search(r"Volume\s+moyen\s+annuel\s+par\s+séance\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    match = re.search(rf"Volume\s+moyen\s+annuel\s+par\s+séance\s+({_NUM_ENTIER})", pdf_text, re.IGNORECASE)
     if match:
         raw = match.group(1).strip()
         indicators["volume_moyen_annuel"] = re.sub(r'\s+', '', raw).replace(',', '.')
@@ -263,7 +344,7 @@ def extract_market_indicators(pdf_text: str) -> dict:
         logging.warning("   ⚠️ Volume Moyen Annuel NON trouvé")
     
     # 🔧 FIX 6: VALEUR MOYENNE ANNUELLE (fonctionne déjà bien)
-    match = re.search(r"Valeur\s+moyenne\s+annuelle\s+par\s+séance\s+([\d\s,\.]+)", pdf_text, re.IGNORECASE)
+    match = re.search(rf"Valeur\s+moyenne\s+annuelle\s+par\s+séance\s+({_NUM_ENTIER})", pdf_text, re.IGNORECASE)
     if match:
         raw = match.group(1).strip()
         indicators["valeur_moyenne_annuelle"] = re.sub(r'\s+', '', raw).replace(',', '.')
@@ -310,7 +391,10 @@ def insert_market_indicators_to_db(conn, indicators, trade_date):
             brvm_composite = clean_and_convert_numeric(indicators.get("brvm_composite"))
             brvm_30 = clean_and_convert_numeric(indicators.get("brvm_30"))
             brvm_prestige = clean_and_convert_numeric(indicators.get("brvm_prestige"))
-            capitalisation_globale = clean_capitalisation(indicators.get("capitalisation_globale"))
+            reference_cap = get_last_capitalisation(conn, before_date=trade_date)
+            capitalisation_globale = clean_capitalisation(
+                indicators.get("capitalisation_globale"), reference=reference_cap
+            )
             volume_moyen_annuel = clean_and_convert_numeric(indicators.get("volume_moyen_annuel"))
             valeur_moyenne_annuelle = clean_and_convert_numeric(indicators.get("valeur_moyenne_annuelle"))
             
