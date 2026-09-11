@@ -75,8 +75,12 @@ def fetch_actuals(client: Client, company_id, start, end):
     )
 
 
-def fetch_recent(client: Client, company_id, n=100):
-    """Les n dernières cotations (price non nul), triées par date croissante."""
+def fetch_recent(client: Client, company_id, n=300):
+    """Les n dernières cotations (price non nul), triées par date croissante.
+
+    Si la société est cotée depuis moins de n jours, LIMIT renvoie simplement
+    tout l'historique disponible — le repli est donc automatique.
+    """
     cols = "trade_date,price,volume,value,company_capitalization"
     rows = (
         client.table("historical_data")
