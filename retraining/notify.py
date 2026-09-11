@@ -91,7 +91,7 @@ def build_html(results, period_label, replaced):
 def send_email(subject, html):
     user = os.environ["GMAIL_USER"]
     pw = os.environ["GMAIL_APP_PASSWORD"]
-    to = os.environ.get("MAIL_TO", user)
+    to = os.environ.get("MAIL_TO") or user   # repli sur l'expéditeur si MAIL_TO vide/absent
     recipients = [x.strip() for x in to.split(",") if x.strip()]
 
     msg = MIMEMultipart("alternative")
