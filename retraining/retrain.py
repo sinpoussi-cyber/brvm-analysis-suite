@@ -29,6 +29,21 @@ EPOCHS = 25
 BATCH = 16
 
 
+def _load_scaler(path):
+    """Charge le scaler quel que soit son format d'enregistrement.
+
+    Les scalers scikit-learn sont le plus souvent sauvegardés avec joblib
+    (parfois compressé) ; joblib.load lit aussi bien un fichier joblib qu'un
+    pickle classique. On l'essaie donc en premier, avec repli sur pickle.load.
+    """
+    try:
+        import joblib
+        return joblib.load(path)
+    except Exception:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
 def _build_matrix(recent_rows, n_features):
     df = pd.DataFrame(recent_rows)
     for c in FEATURES:
@@ -53,8 +68,7 @@ def warm_start_finetune(model_path, scaler_path, recent_rows):
     """
     try:
         model = keras.models.load_model(model_path)
-        with open(scaler_path, "rb") as f:
-            scaler = pickle.load(f)
+        scaler = _load_scaler(scaler_path)
 
         look_back = int(model.input_shape[1])
         n_features = int(model.input_shape[2])
