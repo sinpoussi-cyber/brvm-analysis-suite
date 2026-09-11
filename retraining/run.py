@@ -4,7 +4,8 @@
  1. Repère les titres depuis modeles/<TICKER>/model_GRU.keras
  2. Mappe ticker -> company_id via la table companies (auto-détection)
  3. Pour chaque titre : évalue la qualité sur le mois civil précédent
- 4. Si "defaillant" : warm-start fine-tuning sur les 100 dernières cotations
+ 4. Si "defaillant" : warm-start fine-tuning sur les 300 dernières cotations
+    (ou tout l'historique disponible si le titre est coté depuis moins longtemps)
  5. Historise les évaluations dans model_evaluations
  6. Envoie le mail de récapitulatif
 
@@ -89,7 +90,7 @@ def main():
         if verdict == "defaillant":
             model_path = os.path.join(MODELS_DIR, ticker, MODEL_FILE)
             scaler_path = os.path.join(MODELS_DIR, ticker, SCALER_FILE)
-            recent = db.fetch_recent(client, cid, n=100)
+            recent = db.fetch_recent(client, cid, n=300)
             retrain_info = rt.warm_start_finetune(model_path, scaler_path, recent)
             if retrain_info.get("status") == "retrained":
                 replaced.append(ticker)
