@@ -1,0 +1,46 @@
+name: Monthly model retrain & eval
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'      # 03:00 UTC, le 1er de chaque mois
+  workflow_dispatch:          # déclenchement manuel possible
+
+permissions:
+  contents: write             # nécessaire pour committer les modèles rafraîchis
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer les dépendances
+        run: pip install -r retraining/requirements.txt
+
+      - name: Évaluer, réestimer les défaillants, envoyer le mail
+        run: python retraining/run.py
+        env:
+          MODELS_DIR:         modeles
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO:            ${{ secrets.MAIL_TO }}
+
+      - name: Committer les modèles rafraîchis
+        run: |
+          git config user.name  "brvm-retrainer[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git add modeles/
+          if git diff --cached --quiet; then
+            echo "Aucun modèle défaillant ce mois-ci : rien à committer."
+          else
+            git commit -m "Rafraîchissement mensuel des modèles défaillants ($(date +%Y-%m))"
+            git push
+          fi
