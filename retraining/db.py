@@ -112,5 +112,14 @@ def fetch_last_eval(client: Client, ticker):
 
 
 def insert_evaluations(client: Client, rows):
+    """Upsert des évaluations.
+
+    La contrainte unique (ticker, eval_date) empêche les doublons ; en cas de
+    ré-exécution le même jour, on met à jour la ligne existante au lieu d'échouer.
+    """
     if rows:
-        client.table("model_evaluations").insert(rows).execute()
+        (
+            client.table("model_evaluations")
+            .upsert(rows, on_conflict="ticker,eval_date")
+            .execute()
+        )
