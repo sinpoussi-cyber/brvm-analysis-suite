@@ -23,8 +23,44 @@ def _badge(verdict):
             f'{labels.get(verdict, verdict)}</span>')
 
 
-def build_html(results, period_label, replaced):
-    """results : liste de dicts (voir run.build_result). replaced : liste de tickers."""
+def _new_titles_html(new_titles):
+    """Section « Nouveaux titres » : entraînement initial (cold_start.py)."""
+    if not new_titles:
+        return ""
+    labels = {"trained": ("#1a7f37", "MODÈLE CRÉÉ"),
+              "waiting": ("#9a6700", "EN ATTENTE"),
+              "error":   ("#cf222e", "ERREUR")}
+    rows = []
+    for t in new_titles:
+        c, lab = labels.get(t["status"], ("#57606a", t["status"]))
+        badge = (f'<span style="background:{c};color:#fff;padding:2px 8px;'
+                 f'border-radius:10px;font-size:12px;font-weight:600;">{lab}</span>')
+        detail = (f"GRU look_back=20, {t.get('epochs')} époques — "
+                  f"<code>modeles/{t['ticker']}/</code>"
+                  if t["status"] == "trained" else t.get("reason", "—"))
+        rows.append(f"""
+        <tr>
+          <td style="font-weight:600">{t['ticker']}</td><td>{badge}</td>
+          <td>{t.get('n_obs', '—')}</td>
+          <td>{_fmt(t.get('mape'), '%', 2)}</td><td>{_fmt(t.get('r2'), '', 3)}</td>
+          <td style="font-size:12px">{detail}</td>
+        </tr>""")
+    return f"""
+    <h3>Nouveaux titres — entraînement initial</h3>
+    <p style="color:#57606a;font-size:13px">Sociétés cotées sans modèle. Un premier modèle est entraîné
+    dès 120 cotations (split 80/20 : MAPE et R² mesurés sur les 20 % les plus récents).
+    Il est ensuite utilisé automatiquement par prediction_analyzer.py et évalué ici dès le mois suivant.</p>
+    <table cellpadding="6" style="border-collapse:collapse;width:100%;font-size:13px">
+      <tr style="background:#f6f8fa;text-align:left">
+        <th>Titre</th><th>Statut</th><th>Cotations</th><th>MAPE test</th><th>R² test</th><th>Détail</th>
+      </tr>
+      {''.join(rows)}
+    </table>"""
+
+
+def build_html(results, period_label, replaced, new_titles=None):
+    """results : liste de dicts (voir run.build_result). replaced : liste de tickers.
+    new_titles : liste de dicts renvoyés par cold_start.train_new_model."""
     n = len(results)
     n_ok = sum(1 for r in results if r["verdict"] == "ok")
     n_def = sum(1 for r in results if r["verdict"] == "defaillant")
@@ -82,6 +118,7 @@ def build_html(results, period_label, replaced):
       </tr>
       {''.join(rows_html)}
     </table>
+    {_new_titles_html(new_titles)}
 
     <p style="color:#8c959f;font-size:12px;margin-top:20px">
       Généré automatiquement par le workflow monthly-retrain de brvm-analysis-suite.</p>
