@@ -1546,6 +1546,7 @@ RÈGLES IMPÉRATIVES :
         "AGL":             "SDSC",
         "AIR LIQUIDE CI":  "SIVC",
         "BERNABE CI":      "BNBC",
+        "BRIDGE BANK GROUP CI": "BBGC",  # admission sept. 2026
         "BICI CI":         "BICC",
         "BIIC":            "BICB",
         "BOA BF":          "BOABF",
@@ -1624,6 +1625,12 @@ RÈGLES IMPÉRATIVES :
         "SICOR":                    "SICC",
         "SGB CI":                   "SGBC",
         "SGBCI":                    "SGBC",
+        "BRIDGE BANK":                          "BBGC",
+        "BRIDGE BANK CI":                       "BBGC",
+        "BRIDGE BANK GROUP":                    "BBGC",
+        "BRIDGE BANK GROUP COTE D\'IVOIRE":   "BBGC",
+        "BRIDGE BANK GROUP CÔTE D\'IVOIRE":   "BBGC",
+        "BBGCI":                                "BBGC",
     }
 
     def _normalize_societe_name(self, raw_name: str) -> str:
@@ -4037,7 +4044,7 @@ RAPPELS IMPÉRATIFS:
             p_empty = doc.add_paragraph()
             p_empty.add_run("✅ Aucune action à éviter ce jour.").italic = True
             p_empty.add_run(
-                " L'ensemble des 47 sociétés analysées présentent des signaux neutres ou positifs. "
+                f" L'ensemble des {len(all_company_data)} sociétés analysées présentent des signaux neutres ou positifs. "
                 "Aucun signal de vente fort n'a été détecté par l'analyse Multi-AI."
             )
         
@@ -4794,10 +4801,10 @@ RAPPELS IMPÉRATIFS:
 
         doc.add_page_break()
 
-        # ========== CLASSEMENT 47 SOCIÉTÉS PAR SCORE COMPOSITE ==========
+        # ========== CLASSEMENT DES SOCIÉTÉS PAR SCORE COMPOSITE ==========
         doc.add_heading('🏆 CLASSEMENT DES SOCIÉTÉS — SCORE COMPOSITE /100', level=1)
         doc.add_paragraph(
-            "Les 47 sociétés sont classées par score composite (Technique 30% + Fondamental 40% "
+            f"Les {len(all_company_data)} sociétés sont classées par score composite (Technique 30% + Fondamental 40% "
             "+ Risque 20% + Liquidité 10%). Ce tableau est l'outil de référence pour une décision rapide."
         )
         doc.add_paragraph()
@@ -5360,7 +5367,7 @@ RAPPELS IMPÉRATIFS:
         doc.add_heading('🔮 SYNTHÈSE RÉCAPITULATIVE DES PRÉDICTIONS IA (J+1 → J+10)', level=1)
         pred_intro = doc.add_paragraph()
         pred_intro.add_run(
-            "Cette section synthétise les prédictions des modèles GRU/LSTM/BiGRU pour les 47 sociétés. "
+            f"Cette section synthétise les prédictions des modèles GRU/LSTM/BiGRU pour les {len(all_company_data)} sociétés. "
             "La variation J+10 est calculée entre le cours actuel et le cours prédit à 10 jours ouvrables. "
             "Le niveau de confiance agrégé reflète la proportion de jours avec confiance Élevée ou Moyenne "
             "dans la séquence de prédiction. Les prédictions sont données à titre indicatif — "
