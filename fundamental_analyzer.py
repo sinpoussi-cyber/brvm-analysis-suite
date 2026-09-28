@@ -58,6 +58,7 @@ class BRVMAnalyzer:
             'BOAM': 'bank-africa-ml',
             'BOAN': 'bank-africa-ng',
             'BOAS': 'bank-africa-sn',
+            'BBGC': 'bbgci',  # Bridge Bank Group CI — admission sept. 2026
             'BNBC': 'bernabe-ci',
             'BICC': 'bici-ci',
             'BICB': 'biic',
