@@ -45,6 +45,12 @@ def load_company_map(client: Client, model_tickers):
     return ticker_to_id, id_to_ticker
 
 
+def list_companies(client: Client):
+    """Toutes les sociétés cotées : {symbol: id}."""
+    rows = client.table("companies").select("id,symbol").execute().data or []
+    return {str(r["symbol"]).strip(): r["id"] for r in rows if r.get("symbol")}
+
+
 def fetch_predictions(client: Client, company_id, start, end):
     """Prédictions dont prediction_date est dans [start, end]."""
     return (
