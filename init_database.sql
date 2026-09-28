@@ -38,6 +38,7 @@ INSERT INTO companies (symbol, name, sector) VALUES
 ('ORGT', 'ORAGROUP TOGO', 'Banque'),
 ('SAFC', 'SAFCA CI', 'Banque'),
 ('SOGC', 'SOGB CI', 'Banque'),
+('BBGC', 'BRIDGE BANK GROUP COTE D''IVOIRE', 'Services Financiers'),  -- admission sept. 2026
 
 -- Télécommunications
 ('SNTS', 'SONATEL SN', 'Télécommunications'),
