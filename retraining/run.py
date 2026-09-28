@@ -7,7 +7,9 @@
  4. Si "defaillant" : warm-start fine-tuning sur les 300 dernières cotations
     (ou tout l'historique disponible si le titre est coté depuis moins longtemps)
  5. Historise les évaluations dans model_evaluations
- 6. Envoie le mail de récapitulatif
+ 6. Entraînement initial des titres sans modèle (nouvelles cotations, ex. BBGC)
+    dès qu'ils ont assez d'historique — voir cold_start.py
+ 7. Envoie le mail de récapitulatif
 
 Le commit des .keras modifiés est fait par le workflow GitHub Actions.
 """
@@ -19,6 +21,7 @@ import db
 import evaluate as ev
 import retrain as rt
 import notify
+import cold_start as cs
 
 
 MODELS_DIR = os.environ.get("MODELS_DIR", "modeles")
@@ -75,8 +78,8 @@ def main():
     client = db.get_client()
     models = discover_models()
     if not models:
-        print(f"Aucun modèle trouvé dans {MODELS_DIR}/", file=sys.stderr)
-        return 1
+        print(f"Aucun modèle trouvé dans {MODELS_DIR}/ — seuls les nouveaux titres seront traités",
+              file=sys.stderr)
     tickers = list(models.keys())
 
     ticker_to_id, _ = db.load_company_map(client, tickers)
@@ -131,15 +134,31 @@ def main():
 
     db.insert_evaluations(client, eval_rows)
 
-    html = notify.build_html(results, period_label, replaced)
-    subject = f"[BRVM] Réestimation mensuelle — {len(replaced)} modèle(s) remplacé(s) — {period_label}"
+    # ── Nouveaux titres : sociétés cotées sans dossier modeles/<TICKER>/ ──
+    new_titles = []
+    all_companies = db.list_companies(client)
+    for ticker, cid in sorted(all_companies.items()):
+        if ticker in models or os.path.isdir(os.path.join(MODELS_DIR, ticker)):
+            continue
+        rows = db.fetch_recent(client, cid, n=5000)   # tout l'historique
+        info = cs.train_new_model(ticker, rows, MODELS_DIR)
+        info["ticker"] = ticker
+        new_titles.append(info)
+        print(f"[{ticker}] nouveau titre -> {info}")
+    created = [t["ticker"] for t in new_titles if t["status"] == "trained"]
+
+    html = notify.build_html(results, period_label, replaced, new_titles)
+    subject = (f"[BRVM] Réestimation mensuelle — {len(replaced)} modèle(s) remplacé(s)"
+               + (f", {len(created)} créé(s)" if created else "")
+               + f" — {period_label}")
     try:
         notify.send_email(subject, html)
         print("Mail de récapitulatif envoyé.")
     except Exception as exc:  # noqa: BLE001
         print(f"Échec envoi mail : {exc}", file=sys.stderr)
 
-    print(f"Terminé : {len(results)} titres, {len(replaced)} remplacés.")
+    print(f"Terminé : {len(results)} titres, {len(replaced)} remplacés, "
+          f"{len(created)} créés, {len(new_titles) - len(created)} nouveaux titres en attente/erreur.")
     return 0
 
 
