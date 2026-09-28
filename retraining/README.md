@@ -6,7 +6,22 @@ Pipeline GitHub Actions interne à `brvm-analysis-suite`. Chaque 1er du mois il 
 2. réestime en **warm-start** (fine-tuning sur les 100 dernières cotations) **uniquement** les modèles jugés défaillants ;
 3. historise chaque évaluation dans `model_evaluations` ;
 4. envoie un mail de récapitulatif détaillé ;
-5. committe dans `modeles/` **seulement** les `model_GRU.keras` réellement modifiés.
+5. committe dans `modeles/` **seulement** les `model_GRU.keras` réellement modifiés ;
+6. **entraîne un premier modèle pour les titres nouvellement cotés** (présents dans
+   `companies` mais sans dossier `modeles/<TICKER>/`, ex. BBGC) dès qu'ils ont
+   120 cotations — voir ci-dessous.
+
+## Nouveaux titres (`cold_start.py`)
+
+- Architecture standard du dépôt : GRU(64) → Dropout(0.2) → GRU(32) → Dropout(0.2) → Dense(1),
+  look_back 20, univarié, MinMaxScaler.
+- Évaluation sur split chronologique 80/20 (MAPE, R² sur les 20 % les plus récents),
+  puis modèle final réentraîné sur tout l'historique.
+- Écrit `modeles/<TICKER>/model_GRU.keras`, `scaler.pkl` et `params.json`.
+  `prediction_analyzer.py` lit `params.json` automatiquement : **aucune saisie manuelle
+  dans `MODELS_PARAMS`**.
+- Avant 120 cotations : le titre apparaît « EN ATTENTE (n/120) » dans le mail.
+  Seuil ajustable via `MIN_HISTORY`.
 
 ## Arborescence à committer
 
@@ -17,6 +32,7 @@ brvm-analysis-suite/
     ├── run.py            # orchestrateur
     ├── evaluate.py       # métriques + verdict
     ├── retrain.py        # warm-start fine-tuning
+    ├── cold_start.py     # 1er entraînement des titres nouvellement cotés
     ├── notify.py         # mail HTML (Gmail/SMTP)
     ├── db.py             # accès Supabase
     ├── requirements.txt
