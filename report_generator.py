@@ -1631,6 +1631,14 @@ RÈGLES IMPÉRATIVES :
         "BRIDGE BANK GROUP COTE D\'IVOIRE":   "BBGC",
         "BRIDGE BANK GROUP CÔTE D\'IVOIRE":   "BBGC",
         "BBGCI":                                "BBGC",
+        "SOCIETE GENERALE CI":                  "SGBC",
+        "SOCIETE GENERALE COTE D\'IVOIRE":     "SGBC",
+        "CROWN SIEM CI":                        "SEMC",
+        "EVIOSYS PACKAGING SIEM CI":            "SEMC",
+        "EVIOSYS PACKAGING":                    "SEMC",
+        "EVIOSYS":                              "SEMC",
+        "UNILEVER CI":                          "UNLC",
+        "UNILEVER":                             "UNLC",
     }
 
     def _normalize_societe_name(self, raw_name: str) -> str:
