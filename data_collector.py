@@ -445,6 +445,38 @@ def insert_market_indicators_to_db(conn, indicators, trade_date):
         conn.rollback()
 
 
+# Une société avec moins de NOUVELLE_COTATION_MAX_JOURS séances en base est
+# considérée comme nouvellement cotée (ex. BBGC, 1re cotation le 24/09/2026).
+NOUVELLE_COTATION_MAX_JOURS = 60
+
+
+def nouvelles_cotations_manquantes(conn, company_ids, trade_date):
+    """
+    Symboles récemment cotés (peu d'historique) absents de historical_data pour
+    trade_date. Permet de rattraper un BOC déjà traité AVANT l'ajout de la société
+    dans `companies` — sans cela, date_exists_in_db() ferait ignorer ce BOC pour
+    toujours et les premières séances de la nouvelle valeur seraient perdues.
+    Les sociétés anciennes absentes (suspension, etc.) ne déclenchent PAS de retraitement.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT c.symbol
+                FROM companies c
+                LEFT JOIN historical_data h ON h.company_id = c.id
+                GROUP BY c.id, c.symbol
+                HAVING COUNT(h.id) < %s
+                   AND COUNT(*) FILTER (WHERE h.trade_date = %s) = 0
+                   -- une fois la 1re séance connue, on ne remonte pas avant elle
+                   AND (MIN(h.trade_date) IS NULL OR MIN(h.trade_date) <= %s);
+            """, (NOUVELLE_COTATION_MAX_JOURS, trade_date, trade_date))
+            return {row[0] for row in cur.fetchall() if row[0] in company_ids}
+    except Exception as e:
+        logging.error(f"❌ Erreur recherche nouvelles cotations: {e}")
+        conn.rollback()
+        return set()
+
+
 def run_data_collection():
     """Fonction principale de collecte"""
     logging.info("=" * 60)
@@ -480,8 +512,33 @@ def run_data_collection():
             logging.info(f"\n📅 Traitement du BOC du {trade_date.strftime('%d/%m/%Y')}")
             
             if date_exists_in_db(conn, trade_date):
-                logging.info("   ✓ Date déjà présente dans DB")
+                manquants = nouvelles_cotations_manquantes(conn, company_ids, trade_date)
+                if not manquants:
+                    logging.info("   ✓ Date déjà présente dans DB")
+                    total_skipped += 1
+                    continue
+
+                # Rattrapage : BOC déjà traité, mais une nouvelle valeur y manque
+                logging.info(f"   🆕 Date déjà en base — rattrapage de : {', '.join(sorted(manquants))}")
+                rows = extract_data_from_pdf(boc_url)
+                rattrapes = 0
+                for rec in rows:
+                    symbol = rec.get("Symbole", "").strip()
+                    if symbol not in manquants:
+                        continue
+                    try:
+                        price = clean_and_convert_numeric(rec.get("Cours"))
+                        volume = int(clean_and_convert_numeric(rec.get("Volume")) or 0)
+                        value = clean_and_convert_numeric(rec.get("Valeur"))
+                        if insert_into_db(conn, company_ids, symbol, trade_date, price, volume, value):
+                            rattrapes += 1
+                    except Exception as e:
+                        logging.error(f"   ❌ Erreur rattrapage {symbol}: {e}")
+                if rattrapes == 0:
+                    logging.info(f"   ℹ️ Aucune ligne pour {', '.join(sorted(manquants))} dans ce BOC (pas encore cotée ce jour-là)")
+                total_db_inserts += rattrapes
                 total_skipped += 1
+                time.sleep(0.5)
                 continue
             
             logging.info("   ℹ️ Extraction des données du PDF...")
