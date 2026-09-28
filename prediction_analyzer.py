@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: PREDICTION ANALYZER V17.0 — BRVM 47 ACTIONS
+# MODULE: PREDICTION ANALYZER V17.1 — BRVM (47 modèles fixes + params.json dynamiques)
 # ------------------------------------------------------------------------------
 # NOUVEAUTÉS V17.0 :
 #
@@ -311,6 +311,42 @@ MODELS_PARAMS = {
                "mape_ok": True,  "r2_ok": True,  "source": "base"},
 }
 
+
+
+# ==============================================================================
+# PARAMÈTRES DYNAMIQUES — titres nouvellement cotés (ex. BBGC)
+# ==============================================================================
+# Les modèles créés par retraining/cold_start.py ne figurent pas dans le
+# dictionnaire ci-dessus : leurs paramètres sont écrits dans
+# modeles/<TICKER>/params.json (même structure). On les charge ici, sans
+# jamais écraser une entrée déjà définie en dur.
+_PARAMS_REQUIS = {"best_model", "look_back", "log_transform",
+                  "mape_test", "r2_test", "mape_ok", "r2_ok", "source"}
+
+
+def _charger_params_dynamiques() -> list:
+    ajoutes = []
+    if not os.path.isdir(MODELS_DIR):
+        return ajoutes
+    for sym in sorted(os.listdir(MODELS_DIR)):
+        chemin = os.path.join(MODELS_DIR, sym, "params.json")
+        if sym in MODELS_PARAMS or not os.path.isfile(chemin):
+            continue
+        try:
+            with open(chemin, encoding="utf-8") as f:
+                p = json.load(f)
+            manquants = _PARAMS_REQUIS - p.keys()
+            if manquants:
+                logging.warning(f"⚠️  {sym} : params.json incomplet ({', '.join(sorted(manquants))}) — ignoré")
+                continue
+            MODELS_PARAMS[sym] = p
+            ajoutes.append(sym)
+        except Exception as e:
+            logging.warning(f"⚠️  {sym} : params.json illisible — {e}")
+    return ajoutes
+
+
+_PARAMS_DYNAMIQUES = _charger_params_dynamiques()
 
 # ==============================================================================
 # RÉSOLUTION DES CHEMINS (keras + scaler) SELON "source"
@@ -846,13 +882,15 @@ def process_company_prediction(conn, company_id: int, symbol: str) -> bool:
 
 def run_prediction_analysis():
     logging.info("=" * 70)
-    logging.info("🔮 PREDICTIONS V17.0 — BRVM 47 ACTIONS")
+    logging.info("🔮 PREDICTIONS V17.1 — BRVM")
     logging.info("=" * 70)
     logging.info(f"📁 Modèles      : {MODELS_DIR}")
     logging.info(f"📊 Historique   : {HISTORIQUE_JOURS} jours par action")
     logging.info(f"📈 Prédictions  : {NB_JOURS_PREDICTION} jours ouvrables")
     logging.info(f"📐 Limite BRVM  : ±{BRVM_DAILY_LIMIT*100:.1f}%/jour (borne journalière)")
     logging.info(f"🗓️  Jours fériés : {len(JOURS_FERIES)} dates exclues (2026)")
+    if _PARAMS_DYNAMIQUES:
+        logging.info(f"🆕 Modèles ajoutés via params.json : {', '.join(_PARAMS_DYNAMIQUES)}")
     logging.info("=" * 70)
 
     conn = connect_to_db()
